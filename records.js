@@ -314,14 +314,14 @@
       const subexperiments = plan.subexperiments?.length
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-import-plan-source="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看 / 编辑方案</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx" data-subexperiment-id="${esc(item.id)}">导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf" data-subexperiment-id="${esc(item.id)}">导出 PDF</button></div></li>`;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-import-plan-source="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导入方案文件</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看执行方案</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导出实验方案</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中导入、生成并导出方案。</span>' : `${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}">查看 / 编辑方案正文</button>` : ''}<button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx">↓ 导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf">↓ 导出 PDF</button>`}</div></div>
+        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中导入、生成并导出方案。</span>' : `${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button>` : ''}<button class="text-button" data-preview-plan="${esc(plan.id)}">查看执行方案</button><button class="text-button" data-export-plan="${esc(plan.id)}">导出实验方案</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
@@ -336,11 +336,14 @@
     $('plansBody').querySelectorAll('[data-import-plan-source]').forEach(button => {
       button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource, button.dataset.subexperimentId || '');
     });
+    $('plansBody').querySelectorAll('[data-preview-plan]').forEach(button => {
+      button.onclick = () => openPlanExecutionPreview(button.dataset.previewPlan, button.dataset.subexperimentId || '');
+    });
     $('plansBody').querySelectorAll('[data-edit-plan-content]').forEach(button => {
       button.onclick = () => openPlanContentEditor(button.dataset.editPlanContent, null, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-export-plan]').forEach(button => {
-      button.onclick = () => exportPlan(button.dataset.exportPlan, button.dataset.exportFormat, button.dataset.subexperimentId || '');
+      button.onclick = () => openPlanExportDialog(button.dataset.exportPlan, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
       button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
@@ -567,7 +570,8 @@
           await loadAgents();
           closeModal();
           renderPlansView();
-          toast('实验方案已保存为 Markdown，并已更新项目记忆');
+          await openPlanExecutionPreview(planId, subexperimentId);
+          toast('实验方案已保存；现在显示 A4 实验执行单预览');
         } catch (error) {
           toast(`保存方案失败：${error.message}`);
         } finally {
@@ -578,19 +582,115 @@
     });
   }
 
-  function exportPlan(planId, format, subexperimentId = '') {
-    if (!R.active || !['docx', 'pdf'].includes(format)) return;
-    const plan = R.plans.find(item => item.id === planId);
-    const label = format === 'docx' ? 'Word' : 'PDF';
-    const link = document.createElement('a');
+  function inlineExecutionHtml(value) {
+    return esc(value)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`(.+?)`/g, '<code>$1</code>')
+      .replace(/_(.+?)_/g, '<em>$1</em>');
+  }
+
+  function executionPlanHtml(content) {
+    const blocks = [];
+    let list = null;
+    const flushList = () => {
+      if (!list) return;
+      blocks.push(`<${list.type} class="execution-list">${list.items.map(item => `<li>${inlineExecutionHtml(item)}</li>`).join('')}</${list.type}>`);
+      list = null;
+    };
+    editablePlanContent(content).split(/\r?\n/).forEach(raw => {
+      const line = raw.trim();
+      if (!line || line.startsWith('<!--')) { flushList(); return; }
+      if (line === '---' || line === '***') { flushList(); blocks.push('<hr />'); return; }
+      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        flushList();
+        const level = Math.min(heading[1].length + 1, 4);
+        blocks.push(`<h${level}>${inlineExecutionHtml(heading[2])}</h${level}>`);
+        return;
+      }
+      const bullet = line.match(/^[-*]\s+(.+)$/);
+      const numbered = line.match(/^\d+[.)]\s+(.+)$/);
+      if (bullet || numbered) {
+        const type = bullet ? 'ul' : 'ol';
+        if (!list || list.type !== type) { flushList(); list = { type, items: [] }; }
+        list.items.push((bullet || numbered)[1]);
+        return;
+      }
+      flushList();
+      if (line.startsWith('> ')) { blocks.push(`<aside>${inlineExecutionHtml(line.slice(2))}</aside>`); return; }
+      blocks.push(`<p>${inlineExecutionHtml(line)}</p>`);
+    });
+    flushList();
+    return blocks.join('') || '<div class="execution-empty">尚未生成实验执行方案。请先导入资料并使用 AI 生成，或编辑方案正文后保存。</div>';
+  }
+
+  function planScopeDetails(plan, subexperimentId = '') {
     const subexperiment = plan?.subexperiments?.find(item => item.id === subexperimentId);
-    const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
-    link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}${scopeQuery}`;
-    link.download = `${plan?.name || '实验方案'}-${plan?.version || ''}${subexperiment ? `-${subexperiment.name}` : ''}.${format}`;
+    return {
+      subexperiment,
+      title: subexperiment ? `${plan.name} · ${subexperiment.name}` : `${plan?.name || '实验方案'} · ${plan?.version || ''}`,
+      query: subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : ''
+    };
+  }
+
+  async function openPlanExecutionPreview(planId, subexperimentId = '') {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan || !R.active) { toast('未找到实验方案'); return; }
+    const scope = planScopeDetails(plan, subexperimentId);
+    let response;
+    try {
+      response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scope.query}`);
+    } catch (error) {
+      toast(`读取实验执行方案失败：${error.message}`);
+      return;
+    }
+    openModal(`<div class="modal-header execution-preview-header"><div><p class="eyebrow">A4 实验执行单</p><h2>${esc(scope.title)}</h2><p>这是按 Word 执行单版式排版的预览；项目中仍仅保存可追溯的 Markdown 源文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="execution-preview-toolbar"><span>预览缩放</span><button class="text-button" id="executionZoomOut">−</button><b id="executionZoomValue">72%</b><button class="text-button" id="executionZoomIn">+</button><button class="text-button" id="executionZoomReset">适合窗口</button></div>
+      <div class="execution-preview-scroller"><article id="executionA4Page" class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验执行方案</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验执行方案</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(response.content || '')}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article></div>
+      <div class="modal-footer"><button id="executionEditButton" type="button" class="secondary-button">编辑方案正文</button><button id="executionExportButton" type="button" class="primary-button">导出实验方案</button></div>`, () => {
+      let zoom = 72;
+      const applyZoom = () => {
+        $('executionA4Page').style.zoom = `${zoom}%`;
+        $('executionZoomValue').textContent = `${zoom}%`;
+      };
+      applyZoom();
+      $('executionZoomOut').onclick = () => { zoom = Math.max(45, zoom - 8); applyZoom(); };
+      $('executionZoomIn').onclick = () => { zoom = Math.min(120, zoom + 8); applyZoom(); };
+      $('executionZoomReset').onclick = () => { zoom = 72; applyZoom(); };
+      $('executionEditButton').onclick = () => { closeModal(); openPlanContentEditor(planId, null, subexperimentId); };
+      $('executionExportButton').onclick = () => { closeModal(); openPlanExportDialog(planId, subexperimentId); };
+    });
+  }
+
+  function downloadPlanExport(planId, format, subexperimentId = '', includeRecordSheet = false) {
+    if (!R.active || !['docx', 'pdf', 'md'].includes(format)) return;
+    const plan = R.plans.find(item => item.id === planId);
+    const scope = planScopeDetails(plan, subexperimentId);
+    const query = new URLSearchParams();
+    if (subexperimentId) query.set('subexperimentId', subexperimentId);
+    if (includeRecordSheet) query.set('includeRecordSheet', 'true');
+    const link = document.createElement('a');
+    link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}?${query.toString()}`;
+    link.download = `${scope.title}-实验执行方案.${format}`;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    toast(`正在导出 ${label} 实验方案；项目内仍仅保存 Markdown`);
+    toast(`正在导出实验执行方案（${format.toUpperCase()}）${includeRecordSheet ? '，并附实验记录表' : ''}`);
+  }
+
+  function openPlanExportDialog(planId, subexperimentId = '') {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan || !R.active) { toast('未找到可导出的实验方案'); return; }
+    const scope = planScopeDetails(plan, subexperimentId);
+    openModal(`<div class="modal-header"><div><h2>导出实验方案</h2><p>用于实验执行、打印或归档；这不会更新项目记忆。项目记忆 MD 请使用右上角的独立导出按钮。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="planExportForm"><div class="modal-body"><div class="form-field full"><span>导出格式</span><div class="export-format-options"><label><input type="radio" name="planExportFormat" value="docx" checked /> Word（可继续编辑）</label><label><input type="radio" name="planExportFormat" value="pdf" /> PDF（打印版）</label><label><input type="radio" name="planExportFormat" value="md" /> 原生 Markdown</label></div></div><label class="export-record-sheet-option"><input id="includePlanRecordSheet" type="checkbox" /><span><b>附带实验记录表</b><small>增加可打印填写的执行时间、关键参数、现象、原始数据与偏差处理表。</small></span></label><p class="import-tip">导出对象：<b>${esc(scope.title)}</b>。导出文件不会写入项目文件夹，项目内仍以 Markdown 为唯一持久格式。</p></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button type="submit" class="primary-button">开始导出</button></div></form>`, () => {
+      $('planExportForm').addEventListener('submit', event => {
+        event.preventDefault();
+        const format = document.querySelector('input[name="planExportFormat"]:checked')?.value || 'docx';
+        downloadPlanExport(planId, format, subexperimentId, $('includePlanRecordSheet').checked);
+        closeModal();
+      });
+    });
   }
 
   function openSubexperimentDialog(planId) {

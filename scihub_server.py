@@ -1290,13 +1290,103 @@ def markdown_line_text(line: str) -> str:
     return text.strip()
 
 
-def export_plan_docx(project: dict, plan_id: str, subexperiment_id: str = "") -> bytes:
+def experiment_record_sheet_markdown() -> str:
+    """导出时可附带的实验记录表；仅生成到下载文件，不写回项目 Markdown。"""
+    return (
+        "\n\n---\n\n## 实验记录表\n\n"
+        "> 用于执行本方案时同步记录关键参数、现象和原始数据。\n\n"
+        "| 项目 | 记录 |\n| --- | --- |\n"
+        "| 实验日期 |  |\n| 执行人 |  |\n| 样品 / 批次 |  |\n| 仪器 / 设备 |  |\n\n"
+        "### 步骤与数据记录\n\n"
+        "| 步骤 | 执行时间 | 关键参数、现象与原始数据 | 签名 |\n"
+        "| --- | --- | --- | --- |\n"
+        + "\n".join("|  |  |  |  |" for _ in range(8))
+        + "\n\n### 偏差与处理\n\n| 发现时间 | 偏差或异常 | 处理措施 | 复核人 |\n| --- | --- | --- | --- |\n|  |  |  |  |\n"
+    )
+
+
+def export_plan_markdown(project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False) -> bytes:
+    """导出供人阅读或复用的原生 Markdown，不修改项目中的源文件。"""
+    _, content = plan_markdown_content(project, plan_id, subexperiment_id)
+    if include_record_sheet:
+        content = content.rstrip() + experiment_record_sheet_markdown()
+    return (content.rstrip() + "\n").encode("utf-8")
+
+
+def append_docx_record_sheet(document, set_font, pt, cm) -> None:
+    """为可打印的实验执行方案附加一页手写记录表。"""
+    document.add_page_break()
+    heading = document.add_heading("实验记录表", level=1)
+    heading.paragraph_format.space_after = pt(5)
+    note = document.add_paragraph("用于执行本方案时同步记录关键参数、现象和原始数据。")
+    note.paragraph_format.space_after = pt(10)
+
+    metadata = document.add_table(rows=4, cols=2)
+    metadata.style = "Table Grid"
+    metadata.autofit = False
+    for row, (label, value) in zip(metadata.rows, (("实验日期", ""), ("执行人", ""), ("样品 / 批次", ""), ("仪器 / 设备", ""))):
+        row.cells[0].width = cm(3.2)
+        row.cells[1].width = cm(13.8)
+        row.cells[0].text = label
+        row.cells[1].text = value
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = pt(2)
+                for run in paragraph.runs:
+                    set_font(run, 10.5)
+        for run in row.cells[0].paragraphs[0].runs:
+            run.bold = True
+
+    document.add_paragraph()
+    document.add_heading("步骤与数据记录", level=2)
+    table = document.add_table(rows=9, cols=4)
+    table.style = "Table Grid"
+    table.autofit = False
+    headers = ("步骤", "执行时间", "关键参数、现象与原始数据", "签名")
+    widths = (cm(1.6), cm(2.8), cm(10.2), cm(2.4))
+    for index, cell in enumerate(table.rows[0].cells):
+        cell.width = widths[index]
+        cell.text = headers[index]
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
+                run.bold = True
+                set_font(run, 9.5)
+    for row in table.rows[1:]:
+        for index, cell in enumerate(row.cells):
+            cell.width = widths[index]
+            cell.text = "\n"
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = pt(2)
+                for run in paragraph.runs:
+                    set_font(run, 9.5)
+
+    document.add_paragraph()
+    document.add_heading("偏差与处理", level=2)
+    deviations = document.add_table(rows=3, cols=4)
+    deviations.style = "Table Grid"
+    deviations.autofit = False
+    headers = ("发现时间", "偏差或异常", "处理措施", "复核人")
+    widths = (cm(3.0), cm(6.0), cm(6.0), cm(2.0))
+    for row_index, row in enumerate(deviations.rows):
+        for index, cell in enumerate(row.cells):
+            cell.width = widths[index]
+            cell.text = headers[index] if row_index == 0 else "\n"
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = pt(2)
+                for run in paragraph.runs:
+                    set_font(run, 9.5)
+                    run.bold = row_index == 0
+
+
+def export_plan_docx(
+    project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False
+) -> bytes:
     """在内存中把 Markdown 方案导出 Word；项目目录仍只保存 Markdown。"""
     try:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml.ns import qn
-        from docx.shared import Inches, Pt, RGBColor
+        from docx.shared import Cm, Inches, Pt, RGBColor
     except ImportError as error:
         raise ApiError("Word 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
@@ -1304,15 +1394,17 @@ def export_plan_docx(project: dict, plan_id: str, subexperiment_id: str = "") ->
     title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     document = Document()
     section = document.sections[0]
-    section.top_margin = section.bottom_margin = Inches(1)
-    section.left_margin = section.right_margin = Inches(1)
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+    section.top_margin = section.bottom_margin = Cm(2)
+    section.left_margin = section.right_margin = Cm(2)
 
-    def set_font(style, size: float, color: Optional[str] = None) -> None:
-        style.font.name = "Calibri"
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
-        style.font.size = Pt(size)
+    def set_font(target, size: float, color: Optional[str] = None) -> None:
+        target.font.name = "Calibri"
+        target._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        target.font.size = Pt(size)
         if color:
-            style.font.color.rgb = RGBColor.from_string(color)
+            target.font.color.rgb = RGBColor.from_string(color)
 
     normal = document.styles["Normal"]
     set_font(normal, 11)
@@ -1357,22 +1449,79 @@ def export_plan_docx(project: dict, plan_id: str, subexperiment_id: str = "") ->
             paragraph.runs[0].italic = True
         elif not re.fullmatch(r"[-*_]{3,}", line):
             document.add_paragraph(markdown_line_text(line))
+    if include_record_sheet:
+        append_docx_record_sheet(document, set_font, Pt, Cm)
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
 
 
-def export_plan_pdf(project: dict, plan_id: str, subexperiment_id: str = "") -> bytes:
+def append_pdf_record_sheet(story: list, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle) -> None:
+    """在 PDF 下载文件尾部生成适合打印填写的实验记录页。"""
+    story.extend([
+        PageBreak(),
+        Paragraph("实验记录表", h1),
+        Paragraph("用于执行本方案时同步记录关键参数、现象和原始数据。", body),
+    ])
+    metadata = Table(
+        [["实验日期", ""], ["执行人", ""], ["样品 / 批次", ""], ["仪器 / 设备", ""]],
+        colWidths=[3.3 * cm, 13.7 * cm],
+    )
+    metadata.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F0")),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("FONTNAME", (0, 0), (0, -1), font_name),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.extend([metadata, Spacer(1, 14), Paragraph("步骤与数据记录", h2)])
+    headers = ["步骤", "执行时间", "关键参数、现象与原始数据", "签名"]
+    rows = [headers] + [["", "", "\n", ""] for _ in range(8)]
+    records = Table(rows, colWidths=[1.5 * cm, 2.7 * cm, 10.4 * cm, 2.4 * cm], repeatRows=1)
+    records.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF5")),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (1, -1), "CENTER"),
+        ("ALIGN", (3, 0), (3, -1), "CENTER"),
+    ]))
+    story.extend([records, Spacer(1, 14), Paragraph("偏差与处理", h2)])
+    deviations = Table(
+        [["发现时间", "偏差或异常", "处理措施", "复核人"], ["", "\n", "\n", ""], ["", "\n", "\n", ""]],
+        colWidths=[3.0 * cm, 6.0 * cm, 6.0 * cm, 2.0 * cm],
+    )
+    deviations.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF5")),
+        ("FONTNAME", (0, 0), (-1, -1), font_name),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(deviations)
+
+
+def export_plan_pdf(
+    project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False
+) -> bytes:
     """在内存中把 Markdown 方案导出 PDF；不在项目中留下 PDF 副本。"""
     try:
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER
-        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-        from reportlab.lib.units import inch
+        from reportlab.lib.units import cm
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+        from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
     except ImportError as error:
         raise ApiError("PDF 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
@@ -1409,7 +1558,7 @@ def export_plan_pdf(project: dict, plan_id: str, subexperiment_id: str = "") -> 
     )
     buffer = io.BytesIO()
     document = SimpleDocTemplate(
-        buffer, pagesize=letter, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch,
+        buffer, pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm, bottomMargin=2 * cm,
         title=title_text, author="SciHub",
     )
     story = [Paragraph(xml_escape(title_text), title_style)]
@@ -1436,6 +1585,8 @@ def export_plan_pdf(project: dict, plan_id: str, subexperiment_id: str = "") -> 
             story.append(Spacer(1, 6))
         else:
             story.append(Paragraph(text, body))
+    if include_record_sheet:
+        append_pdf_record_sheet(story, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle)
     document.build(story)
     return buffer.getvalue()
 
@@ -1809,11 +1960,13 @@ class SciHubHandler(BaseHTTPRequestHandler):
         if method == "GET" and len(segments) == 7 and segments[5] == "export":
             export_format = segments[6].lower()
             plan = read_plan(project, segments[4])
-            subexperiment_id = one_line(self._query().get("subexperimentId"))
+            query = self._query()
+            subexperiment_id = one_line(query.get("subexperimentId"))
+            include_record_sheet = one_line(query.get("includeRecordSheet")).lower() in {"1", "true", "yes", "on"}
             _, subexperiment, _ = plan_content_target(project, segments[4], subexperiment_id)
             filename_base = f"{plan['name']}-{plan['version']}" + (f"-{subexperiment['name']}" if subexperiment else "")
             if export_format == "docx":
-                data = export_plan_docx(project, segments[4], subexperiment_id)
+                data = export_plan_docx(project, segments[4], subexperiment_id, include_record_sheet)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
@@ -1822,7 +1975,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 )
                 return
             if export_format == "pdf":
-                data = export_plan_pdf(project, segments[4], subexperiment_id)
+                data = export_plan_pdf(project, segments[4], subexperiment_id, include_record_sheet)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
@@ -1830,7 +1983,16 @@ class SciHubHandler(BaseHTTPRequestHandler):
                     {"Content-Disposition": "attachment; filename=\"scihub-plan.pdf\"; filename*=UTF-8''" + urllib.parse.quote(filename_base + ".pdf")},
                 )
                 return
-            raise ApiError("仅支持导出 Word 或 PDF。")
+            if export_format == "md":
+                data = export_plan_markdown(project, segments[4], subexperiment_id, include_record_sheet)
+                self._send_bytes(
+                    HTTPStatus.OK,
+                    data,
+                    "text/markdown; charset=utf-8",
+                    {"Content-Disposition": "attachment; filename=\"scihub-execution-plan.md\"; filename*=UTF-8''" + urllib.parse.quote(filename_base + "-实验执行方案.md")},
+                )
+                return
+            raise ApiError("仅支持导出 Word、PDF 或原生 Markdown。")
         if method == "GET" and len(segments) == 6 and segments[5] == "compare":
             self._send_json(HTTPStatus.OK, plan_comparison(project, segments[4]))
             return
