@@ -1,36 +1,27 @@
 @echo off
-chcp 65001 >nul
-title SciHub 科研知识工作台
+setlocal EnableExtensions
 cd /d "%~dp0"
 
-echo ============================================
-echo   SciHub 科研知识工作台 - 本地服务
-echo ============================================
-echo.
+rem ASCII-only launcher: avoids cmd.exe code-page issues with Chinese text.
+set "SCIHUB_PYTHON="
+if exist "D:\LeStoreDownload\Anaconda\python.exe" set "SCIHUB_PYTHON=D:\LeStoreDownload\Anaconda\python.exe"
 
-where python >nul 2>nul
-if %errorlevel%==0 (
-  set "PY=python"
-) else (
-  where py >nul 2>nul
-  if %errorlevel%==0 (
-    set "PY=py"
-  ) else (
-    echo [错误] 未检测到 Python。请先安装 Python 3，并在安装时勾选 "Add to PATH"。
-    echo 下载地址：https://www.python.org/downloads/
-    echo.
-    pause
-    exit /b 1
-  )
+if not defined SCIHUB_PYTHON (
+  where python.exe >nul 2>nul
+  if not errorlevel 1 set "SCIHUB_PYTHON=python.exe"
 )
 
-echo 正在启动本地服务，浏览器将自动打开工作台。
-echo 数据会保存到本文件夹下的「科研项目」目录，均为 .md 文件。
-echo 关闭此窗口即停止服务。
-echo.
+if not defined SCIHUB_PYTHON (
+  echo ERROR: Python 3 was not found.
+  echo Install Python or update the Anaconda path in this launcher.
+  pause
+  exit /b 1
+)
 
-%PY% scihub_server.py
+echo Starting SciHub local service...
+echo Keep this window open while using SciHub.
+"%SCIHUB_PYTHON%" "%~dp0scihub_server.py"
 
 echo.
-echo 服务已停止。
+echo SciHub service stopped.
 pause
