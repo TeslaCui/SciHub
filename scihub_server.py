@@ -370,6 +370,7 @@ def update_agents(project: dict) -> None:
 LEGACY_PLANS_FOLDER = "实验方案"
 PLAN_FILE_NAME = "方案.md"
 SUBEXPERIMENT_FILE_NAME = "README.md"
+SUBEXPERIMENT_PLAN_FILE_NAME = "实验方案.md"
 LOGS_FOLDER = "实验日志"
 PLAN_IMPORTS_FOLDER = "导入资料"
 SCIHUB_MEMORY_FOLDER = "scihub-memory"
@@ -443,7 +444,7 @@ def read_folder_subexperiments(plan_dir: Path, plan_id: str) -> list[dict]:
             "name": meta_value(doc["meta"], "name", child.name),
             "description": meta_value(doc["meta"], "description"),
             "folder": child.name,
-            "entries": list_workspace_entries(child, {SUBEXPERIMENT_FILE_NAME, LOGS_FOLDER}),
+            "entries": list_workspace_entries(child, {SUBEXPERIMENT_FILE_NAME, SUBEXPERIMENT_PLAN_FILE_NAME, LOGS_FOLDER}),
         })
     return subexperiments
 
@@ -610,6 +611,49 @@ def plan_workspace_dir(project: dict, plan_id: str, subexperiment_id: str = "") 
     return directory
 
 
+def plan_content_target(project: dict, plan_id: str, subexperiment_id: str = "") -> tuple[dict, Optional[dict], Path]:
+    """返回指定方案正文的安全存储位置。
+
+    根方案没有子实验时保存到 ``Vx/方案.md``；一旦创建子实验，方案正文必须
+    保存到对应子实验目录的 ``实验方案.md``，避免不同子实验的资料混在一起。
+    """
+    plan = read_plan(project, plan_id)
+    subexperiment_id = one_line(subexperiment_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        if subexperiment_id:
+            raise ApiError("旧版单文件方案不支持子实验方案。")
+        return plan, None, legacy_plans_dir(project) / f"{plan_id}.md"
+
+    plan_dir = project["dir"] / plan["folder"]
+    if subexperiment_id:
+        subexperiment = next((item for item in plan["subexperiments"] if item["id"] == subexperiment_id), None)
+        if not subexperiment:
+            raise ApiError("未找到所选子实验。")
+        return plan, subexperiment, plan_dir / subexperiment["folder"] / SUBEXPERIMENT_PLAN_FILE_NAME
+    return plan, None, plan_dir / PLAN_FILE_NAME
+
+
+def subexperiment_plan_document(
+    plan: dict, subexperiment: dict, plan_content: str, existing_meta: Optional[dict] = None, existing_content: str = ""
+) -> str:
+    """为子实验创建独立的方案 Markdown，或保留原有元数据后更新正文。"""
+    meta = dict(existing_meta or {})
+    meta.update({
+        "kind": "experiment_subexperiment_plan",
+        "plan_id": plan["id"],
+        "subexperiment_id": subexperiment["id"],
+        "name": subexperiment["name"],
+        "updated_at": now_iso(),
+    })
+    if not meta.get("created_at"):
+        meta["created_at"] = now_iso()
+    heading = f"# {subexperiment['name']} · 实验方案\n\n"
+    content = existing_content or heading
+    if not re.search(r"(?m)^# [^\r\n]*", content):
+        content = heading + content.lstrip()
+    return front_matter(meta) + replace_plan_content(content, plan_content).rstrip() + "\n"
+
+
 def write_plan_entry(project: dict, plan_id: str, payload: dict) -> dict:
     entry_kind = one_line(payload.get("kind"))
     if entry_kind not in {"file", "folder"}:
@@ -724,13 +768,18 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     return read_plan(project, plan_id)
 
 
-def update_plan_content(project: dict, plan_id: str, plan_content: str) -> dict:
+def update_plan_content(project: dict, plan_id: str, plan_content: str, subexperiment_id: str = "") -> dict:
     """保存 AI 生成或用户审核后的方案正文；持久化内容始终为 Markdown。"""
-    plan = read_plan(project, plan_id)
+    plan, subexperiment, path = plan_content_target(project, plan_id, subexperiment_id)
     if plan["storage"] != "folder" or not plan["folder"]:
         raise ApiError("旧版单文件方案暂不支持写入方案正文；请新建 V1/V2 文件夹方案。")
-    path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
     doc = read_markdown_document(path)
+    if subexperiment:
+        write_markdown(
+            path,
+            subexperiment_plan_document(plan, subexperiment, plan_content, doc["meta"], doc["content"]),
+        )
+        return read_plan(project, plan_id)
     meta = dict(doc["meta"])
     meta["updated_at"] = now_iso()
     write_markdown(
@@ -784,13 +833,9 @@ def delete_plan(project: dict, plan_id: str, confirmation: str) -> None:
     target.rmdir()
 
 
-def plan_markdown_content(project: dict, plan_id: str) -> tuple[dict, str]:
+def plan_markdown_content(project: dict, plan_id: str, subexperiment_id: str = "") -> tuple[dict, str]:
     """读取方案正文；不返回 front matter，避免将内部元数据用于版本对比。"""
-    plan = read_plan(project, plan_id)
-    if plan["storage"] == "folder" and plan["folder"]:
-        path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
-    else:
-        path = legacy_plans_dir(project) / f"{plan_id}.md"
+    plan, _, path = plan_content_target(project, plan_id, subexperiment_id)
     return plan, read_markdown_document(path)["content"].strip()
 
 
@@ -1211,11 +1256,14 @@ def source_document_markdown(document: dict) -> str:
 
 
 def import_plan_source_document(project: dict, plan_id: str, payload: dict) -> dict:
-    plan = read_plan(project, plan_id)
+    subexperiment_id = one_line(payload.get("subexperimentId"))
+    plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
     if plan["storage"] != "folder" or not plan["folder"]:
         raise ApiError("旧版单文件方案不能导入资料；请新建 V1/V2 文件夹方案。")
+    if plan["subexperiments"] and not subexperiment:
+        raise ApiError("该方案包含子实验，请在对应子实验中导入方案文件。")
     document = extract_imported_document(payload, {".docx", ".pdf", ".md", ".markdown", ".txt"})
-    directory = project["dir"] / plan["folder"] / PLAN_IMPORTS_FOLDER
+    directory = plan_workspace_dir(project, plan_id, subexperiment_id) / PLAN_IMPORTS_FOLDER
     base = safe_folder_name(Path(document["filename"]).stem or "导入资料", "导入资料文件名")
     path = directory / f"{base}.md"
     index = 2
@@ -1230,6 +1278,7 @@ def import_plan_source_document(project: dict, plan_id: str, payload: dict) -> d
         "images": document["images"],
         "storedPath": path.relative_to(project["dir"]).as_posix(),
         "sourceFile": document["filename"],
+        "subexperimentId": subexperiment["id"] if subexperiment else "",
     }
 
 
@@ -1241,7 +1290,7 @@ def markdown_line_text(line: str) -> str:
     return text.strip()
 
 
-def export_plan_docx(project: dict, plan_id: str) -> bytes:
+def export_plan_docx(project: dict, plan_id: str, subexperiment_id: str = "") -> bytes:
     """在内存中把 Markdown 方案导出 Word；项目目录仍只保存 Markdown。"""
     try:
         from docx import Document
@@ -1250,7 +1299,9 @@ def export_plan_docx(project: dict, plan_id: str) -> bytes:
         from docx.shared import Inches, Pt, RGBColor
     except ImportError as error:
         raise ApiError("Word 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
-    plan, content = plan_markdown_content(project, plan_id)
+    plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
+    _, content = plan_markdown_content(project, plan_id, subexperiment_id)
+    title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     document = Document()
     section = document.sections[0]
     section.top_margin = section.bottom_margin = Inches(1)
@@ -1275,7 +1326,7 @@ def export_plan_docx(project: dict, plan_id: str) -> bytes:
 
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_run = title.add_run(f"{plan['name']} · {plan['version']}")
+    title_run = title.add_run(title_text)
     title_run.bold = True
     title_run.font.name = "Calibri"
     title_run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
@@ -1311,7 +1362,7 @@ def export_plan_docx(project: dict, plan_id: str) -> bytes:
     return buffer.getvalue()
 
 
-def export_plan_pdf(project: dict, plan_id: str) -> bytes:
+def export_plan_pdf(project: dict, plan_id: str, subexperiment_id: str = "") -> bytes:
     """在内存中把 Markdown 方案导出 PDF；不在项目中留下 PDF 副本。"""
     try:
         from reportlab.lib import colors
@@ -1324,7 +1375,9 @@ def export_plan_pdf(project: dict, plan_id: str) -> bytes:
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
     except ImportError as error:
         raise ApiError("PDF 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
-    plan, content = plan_markdown_content(project, plan_id)
+    plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
+    _, content = plan_markdown_content(project, plan_id, subexperiment_id)
+    title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     font_name = "STSong-Light"
     try:
         pdfmetrics.registerFont(UnicodeCIDFont(font_name))
@@ -1357,9 +1410,9 @@ def export_plan_pdf(project: dict, plan_id: str) -> bytes:
     buffer = io.BytesIO()
     document = SimpleDocTemplate(
         buffer, pagesize=letter, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch,
-        title=f"{plan['name']} {plan['version']}", author="SciHub",
+        title=title_text, author="SciHub",
     )
-    story = [Paragraph(xml_escape(f"{plan['name']} · {plan['version']}"), title_style)]
+    story = [Paragraph(xml_escape(title_text), title_style)]
     if plan.get("description"):
         story.append(Paragraph(xml_escape(plan["description"]), subtitle_style))
     for raw_line in content.splitlines():
@@ -1736,12 +1789,15 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, plan_deletion_preview(project, segments[4]))
             return
         if method == "GET" and len(segments) == 6 and segments[5] == "content":
-            plan, content = plan_markdown_content(project, segments[4])
+            subexperiment_id = one_line(self._query().get("subexperimentId"))
+            plan, content = plan_markdown_content(project, segments[4], subexperiment_id)
             self._send_json(HTTPStatus.OK, {"plan": plan, "content": content})
             return
         if method == "PUT" and len(segments) == 6 and segments[5] == "content":
             payload = self._read_json()
-            plan = update_plan_content(project, segments[4], str(payload.get("planContent", "")))
+            plan = update_plan_content(
+                project, segments[4], str(payload.get("planContent", "")), one_line(payload.get("subexperimentId"))
+            )
             update_agents(project)
             self._send_json(HTTPStatus.OK, {"plan": plan})
             return
@@ -1753,9 +1809,11 @@ class SciHubHandler(BaseHTTPRequestHandler):
         if method == "GET" and len(segments) == 7 and segments[5] == "export":
             export_format = segments[6].lower()
             plan = read_plan(project, segments[4])
-            filename_base = f"{plan['name']}-{plan['version']}"
+            subexperiment_id = one_line(self._query().get("subexperimentId"))
+            _, subexperiment, _ = plan_content_target(project, segments[4], subexperiment_id)
+            filename_base = f"{plan['name']}-{plan['version']}" + (f"-{subexperiment['name']}" if subexperiment else "")
             if export_format == "docx":
-                data = export_plan_docx(project, segments[4])
+                data = export_plan_docx(project, segments[4], subexperiment_id)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
@@ -1764,7 +1822,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 )
                 return
             if export_format == "pdf":
-                data = export_plan_pdf(project, segments[4])
+                data = export_plan_pdf(project, segments[4], subexperiment_id)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,

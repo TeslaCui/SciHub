@@ -310,17 +310,18 @@
     }
     const cards = R.plans.map(plan => {
       const relatedLogs = R.logs.filter(log => log.planId === plan.id);
+      const hasSubexperiments = (plan.subexperiments?.length || 0) > 0;
       const subexperiments = plan.subexperiments?.length
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件夹</button></div></li>`;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-import-plan-source="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看 / 编辑方案</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx" data-subexperiment-id="${esc(item.id)}">导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf" data-subexperiment-id="${esc(item.id)}">导出 PDF</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}">查看 / 编辑方案正文</button>` : ''}<button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx">↓ 导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf">↓ 导出 PDF</button></div></div>
+        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中导入、生成并导出方案。</span>' : `${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}">查看 / 编辑方案正文</button>` : ''}<button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx">↓ 导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf">↓ 导出 PDF</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
@@ -329,20 +330,17 @@
     $('plansBody').querySelectorAll('[data-start-log]').forEach(button => {
       button.onclick = () => startPlanLog(button.dataset.startLog, button.dataset.startSubexperiment || '');
     });
-    $('plansBody').querySelectorAll('[data-add-entry]').forEach(button => {
-      button.onclick = () => openPlanEntryDialog(button.dataset.entryPlan, button.dataset.entrySubexperiment || '', button.dataset.addEntry);
-    });
     $('plansBody').querySelectorAll('[data-add-subexperiment]').forEach(button => {
       button.onclick = () => openSubexperimentDialog(button.dataset.addSubexperiment);
     });
     $('plansBody').querySelectorAll('[data-import-plan-source]').forEach(button => {
-      button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource);
+      button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-edit-plan-content]').forEach(button => {
-      button.onclick = () => openPlanContentEditor(button.dataset.editPlanContent);
+      button.onclick = () => openPlanContentEditor(button.dataset.editPlanContent, null, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-export-plan]').forEach(button => {
-      button.onclick = () => exportPlan(button.dataset.exportPlan, button.dataset.exportFormat);
+      button.onclick = () => exportPlan(button.dataset.exportPlan, button.dataset.exportFormat, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
       button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
@@ -486,17 +484,19 @@
     ];
   }
 
-  function openPlanSourceImportDialog(planId) {
+  function openPlanSourceImportDialog(planId, subexperimentId = '') {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到可导入资料的实验方案'); return; }
-    openModal(`<div class="modal-header"><div><h2>导入方案文件</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。系统只会把转换后的 Markdown 保存到 <b>${esc(plan.folder)}/导入资料/</b>，不会保留原始二进制文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+    const subexperiment = plan.subexperiments?.find(item => item.id === subexperimentId);
+    const importFolder = subexperiment ? `${plan.folder}/${subexperiment.folder}/导入资料/` : `${plan.folder}/导入资料/`;
+    openModal(`<div class="modal-header"><div><h2>导入方案文件</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。系统只会把转换后的 Markdown 保存到 <b>${esc(importFolder)}</b>，不会保留原始二进制文件。</p></div><button class="close-button" data-close-modal>×</button></div>
       <div class="modal-body"><div class="form-field full"><label>选择方案资料</label><input id="planSourceFile" type="file" accept=".docx,.pdf,.md,.markdown,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" /></div><p class="import-tip">Word 中的图片、PDF 页面中的嵌入图片会以文件/页码信息记录在转换后的 Markdown 中；扫描版 PDF 需要先 OCR。</p></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="planSourceImportConfirm" type="button" class="primary-button">导入并生成方案</button></div>`, () => {
-      $('planSourceImportConfirm').onclick = () => importPlanSourceDocument(planId);
+      $('planSourceImportConfirm').onclick = () => importPlanSourceDocument(planId, subexperimentId);
     });
   }
 
-  async function importPlanSourceDocument(planId) {
+  async function importPlanSourceDocument(planId, subexperimentId = '') {
     const file = $('planSourceFile')?.files?.[0];
     if (!file) { toast('请选择要导入的方案文件'); return; }
     if (file.size > 15 * 1024 * 1024) { toast('文件超过 15 MB，暂不能导入'); return; }
@@ -506,12 +506,12 @@
     try {
       const imported = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/import`, {
         method: 'POST',
-        body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
+        body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file), subexperimentId })
       });
       R.plans = (await api(`${slugPath(R.active.slug)}/plans`)).plans || R.plans;
       await loadAgents();
       closeModal();
-      await openPlanContentEditor(planId, imported);
+      await openPlanContentEditor(planId, imported, subexperimentId);
     } catch (error) {
       toast(`方案文件导入失败：${error.message}`);
     } finally {
@@ -520,13 +520,14 @@
     }
   }
 
-  async function openPlanContentEditor(planId, imported = null) {
+  async function openPlanContentEditor(planId, imported = null, subexperimentId = '') {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
+    const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
     let existing = '';
     if (!imported) {
       try {
-        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content`);
+        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scopeQuery}`);
         existing = editablePlanContent(response.content || '');
       } catch (error) {
         toast(`读取方案正文失败：${error.message}`);
@@ -560,7 +561,7 @@
         button.textContent = '保存中…';
         try {
           const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content`, {
-            method: 'PUT', body: JSON.stringify({ planContent: content })
+            method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId })
           });
           R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
           await loadAgents();
@@ -577,13 +578,15 @@
     });
   }
 
-  function exportPlan(planId, format) {
+  function exportPlan(planId, format, subexperimentId = '') {
     if (!R.active || !['docx', 'pdf'].includes(format)) return;
     const plan = R.plans.find(item => item.id === planId);
     const label = format === 'docx' ? 'Word' : 'PDF';
     const link = document.createElement('a');
-    link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}`;
-    link.download = `${plan?.name || '实验方案'}-${plan?.version || ''}.${format}`;
+    const subexperiment = plan?.subexperiments?.find(item => item.id === subexperimentId);
+    const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
+    link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}${scopeQuery}`;
+    link.download = `${plan?.name || '实验方案'}-${plan?.version || ''}${subexperiment ? `-${subexperiment.name}` : ''}.${format}`;
     document.body.appendChild(link);
     link.click();
     link.remove();
