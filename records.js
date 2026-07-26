@@ -252,6 +252,32 @@
     });
   }
 
+  function updateTopbarActions(view = currentView()) {
+    const exportButton = $('exportProjectButton');
+    if (exportButton) exportButton.hidden = view === 'home' || !R.active;
+  }
+
+  function renderHomeView() {
+    updateTopbarActions('home');
+    const body = $('homeBody');
+    if (!body) return;
+    if (!R.projects.length) {
+      body.innerHTML = `<div class="empty-state home-empty"><span>⌂</span><strong>还没有研究项目</strong><p>先创建一个项目；之后它的实验方案、实验日志和对话记录都会保存在独立的项目文件夹中。</p><button class="primary-button" id="homeEmptyCreate">+ 新建项目</button></div>`;
+      $('homeEmptyCreate').onclick = openProjectDialog;
+      return;
+    }
+    body.innerHTML = `<div class="home-project-grid">${R.projects.map(project => `
+      <article class="home-project-card">
+        <div><p class="eyebrow">研究项目</p><h2>${esc(project.name)}</h2></div>
+        <p>${esc(project.description || '尚未填写项目说明。')}</p>
+        <div class="home-project-meta"><span>${project.logCount || 0} 条实验日志</span><span>${project.conversationCount || 0} 段对话</span></div>
+        <div class="home-project-footer"><span>项目/${esc(project.slug)}/</span><button class="primary-button" data-enter-project="${esc(project.slug)}">进入项目</button></div>
+      </article>`).join('')}</div>`;
+    body.querySelectorAll('[data-enter-project]').forEach(button => {
+      button.onclick = () => selectProject(button.dataset.enterProject);
+    });
+  }
+
   function requireProject(titleEl, bodyEl) {
     if (R.active) return true;
     $(titleEl).textContent = '选择一个研究项目';
@@ -281,8 +307,9 @@
           return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件夹</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty">尚未设置子实验；可先将日志关联到整个方案。</li>';
+      const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
-        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span></div>
+        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
         <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions"><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 新增关联子实验</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}">+ 新增 Markdown 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}">+ 新增子文件夹</button></div></div>
         <div class="plan-subexperiments"><div class="plan-section-label">子实验</div><ul>${subexperiments}</ul></div>
@@ -299,12 +326,93 @@
     $('plansBody').querySelectorAll('[data-add-subexperiment]').forEach(button => {
       button.onclick = () => openSubexperimentDialog(button.dataset.addSubexperiment);
     });
+    $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
+      button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
+    });
+    $('plansBody').querySelectorAll('[data-delete-plan]').forEach(button => {
+      button.onclick = () => openPlanDeleteDialog(button.dataset.deletePlan);
+    });
   }
 
   function startPlanLog(planId, subexperimentId = '') {
     R.date = TODAY;
     window.switchView('logs');
     loadLog(TODAY, { planId, subexperimentId });
+  }
+
+  function openEditPlanDialog(planId) {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan) { toast('未找到实验方案'); return; }
+    if (plan.storage === 'legacy') { toast('旧版单文件方案暂不支持在界面编辑'); return; }
+    openModal(`<div class="modal-header"><div><h2>编辑实验方案</h2><p>可修改方案名称和说明；版本目录 <b>${esc(plan.folder)}</b> 保持不变，以免移动已有的子实验和日志文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="editPlanForm"><div class="modal-body"><div class="form-grid">
+        <label class="form-field"><span>方案名称</span><input id="editPlanName" required maxlength="120" value="${esc(plan.name)}" /></label>
+        <label class="form-field"><span>版本目录</span><input value="${esc(plan.folder)}" disabled /><small class="field-note">目录名不在编辑时变更，保证现有文件路径稳定。</small></label>
+        <label class="form-field full"><span>方案说明</span><textarea id="editPlanDescription" maxlength="4000" placeholder="方案目的、变量范围、判定标准等。">${esc(plan.description || '')}</textarea></label>
+      </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存修改</button></div></form>`, () => {
+      $('editPlanForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('editPlanForm').querySelector('[type=submit]');
+        button.disabled = true;
+        button.textContent = '保存中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: $('editPlanName').value.trim(),
+              description: $('editPlanDescription').value.trim()
+            })
+          });
+          R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+          closeModal();
+          renderPlansView();
+          toast('实验方案已更新');
+        } catch (error) {
+          toast(`保存方案失败：${error.message}`);
+        } finally {
+          const current = $('editPlanForm')?.querySelector('[type=submit]');
+          if (current) { current.disabled = false; current.textContent = '保存修改'; }
+        }
+      });
+    });
+  }
+
+  async function openPlanDeleteDialog(planId) {
+    if (!R.active) { toast('请先选择项目'); return; }
+    try {
+      const preview = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/delete-preview`);
+      const items = preview.items || [];
+      const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
+      openModal(`<div class="modal-header"><div><h2>删除实验方案</h2><p>该操作会删除整个方案版本目录及其中的子实验、关联日志和附加文件，无法撤销。</p></div><button class="close-button" data-close-modal>×</button></div>
+        <form id="deletePlanForm"><div class="modal-body"><div class="delete-warning"><b>待删除目录：项目/${esc(preview.folder)}/</b><br>以下 ${items.length} 项会被逐项删除。请核对清单后，输入版本目录名以确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入 <b>${esc(preview.folder)}</b> 以确认删除</span><input id="deletePlanConfirmation" required autocomplete="off" placeholder="${esc(preview.folder)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除方案</button></div></form>`, () => {
+        $('deletePlanConfirmation').focus();
+        $('deletePlanForm').addEventListener('submit', async event => {
+          event.preventDefault();
+          const confirmation = $('deletePlanConfirmation').value.trim();
+          if (confirmation !== preview.folder) { toast('请输入完整且正确的版本目录名'); return; }
+          const button = $('deletePlanForm').querySelector('[type=submit]');
+          button.disabled = true;
+          button.textContent = '删除中…';
+          try {
+            await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}`, {
+              method: 'DELETE',
+              body: JSON.stringify({ confirmation })
+            });
+            closeModal();
+            await refreshProjects(true);
+            await loadProject(R.active.slug);
+            renderPlansView();
+            toast('实验方案目录及清单中的关联内容已删除');
+          } catch (error) {
+            toast(`删除方案失败：${error.message}`);
+            const current = $('deletePlanForm')?.querySelector('[type=submit]');
+            if (current) { current.disabled = false; current.textContent = '删除方案'; }
+          }
+        });
+      });
+    } catch (error) {
+      toast(`无法读取删除清单：${error.message}`);
+    }
   }
 
   function openPlanEntryDialog(planId, subexperimentId, kind) {
@@ -920,14 +1028,17 @@
   // ------------------------------------------------------------------ 派发 --
   function renderActiveView() {
     const v = currentView();
-    if (v === 'plans') renderPlansView();
+    if (v === 'home') renderHomeView();
+    else if (v === 'plans') renderPlansView();
     else if (v === 'logs') renderLogsView();
     else if (v === 'records') renderRecordsView();
     else if (v === 'memory') renderMemoryView();
   }
 
   function onViewActivated(view) {
-    if (view === 'plans') renderPlansView();
+    updateTopbarActions(view);
+    if (view === 'home') renderHomeView();
+    else if (view === 'plans') renderPlansView();
     else if (view === 'logs') renderLogsView();
     else if (view === 'records') renderRecordsView();
     else if (view === 'memory') renderMemoryView();
@@ -938,19 +1049,21 @@
     $('apiSettingsButton')?.addEventListener('click', openApiDialog);
     $('exportProjectButton')?.addEventListener('click', exportProject);
     $('newPlanButton')?.addEventListener('click', openPlanDialog);
+    $('homeNewProjectButton')?.addEventListener('click', openProjectDialog);
     $('viewAgentsButton')?.addEventListener('click', showAgents);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
     $('recordImportButton')?.addEventListener('click', openRecordImport);
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && ['logs'].includes(currentView())) { e.preventDefault(); saveLog(true); }
     });
-    refreshProjects(false).then(() => { if (window.SciHubApp) window.SciHubApp.renderAll(); });
+    refreshProjects(false).then(() => { renderActiveView(); if (window.SciHubApp) window.SciHubApp.renderAll(); });
   });
 
   // 暴露给 app.js
   window.SciHubRecords = {
     get projects() { return R.projects; },
     renderProjectSidebar,
+    renderHomeView,
     selectProject,
     openProjectDialog,
     onViewActivated

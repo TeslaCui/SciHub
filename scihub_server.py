@@ -605,6 +605,88 @@ def add_subexperiment(project: dict, plan_id: str, payload: dict) -> dict:
     return read_plan(project, plan_id)
 
 
+def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
+    """更新由 SciHub 创建的方案说明，同时保留用户在方案文件中的其他内容。"""
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        raise ApiError("旧版单文件方案暂不支持在界面编辑；请新建文件夹方案后继续维护。")
+    name = one_line(payload.get("name"))
+    if not name:
+        raise ApiError("请填写实验方案名称。")
+    description = str(payload.get("description", "")).strip()
+    path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
+    doc = read_markdown_document(path)
+    meta = dict(doc["meta"])
+    meta.update({
+        "name": name,
+        "description": description,
+        "updated_at": now_iso(),
+    })
+    content = doc["content"]
+    heading = f"# {name} · {plan['version']}"
+    if re.search(r"(?m)^# [^\r\n]*", content):
+        content = re.sub(r"(?m)^# [^\r\n]*", heading, content, count=1)
+    else:
+        content = heading + "\n\n" + content.lstrip()
+    description_section = "## 方案说明\n\n" + (description or "尚未填写。")
+    if re.search(r"(?ms)^## 方案说明\r?\n.*?(?=^## |\Z)", content):
+        content = re.sub(
+            r"(?ms)^## 方案说明\r?\n.*?(?=^## |\Z)",
+            description_section + "\n\n",
+            content,
+            count=1,
+        )
+    else:
+        remaining = content.split("\n", 1)[1] if "\n" in content else ""
+        content = heading + "\n\n" + description_section + "\n\n" + remaining.lstrip()
+    write_markdown(path, front_matter(meta) + content.rstrip() + "\n")
+    return read_plan(project, plan_id)
+
+
+def plan_deletion_paths(project: dict, plan_id: str) -> tuple[dict, Path, list[Path], list[Path]]:
+    """列出待删除的已知方案目录内容；任何链接或异常类型均拒绝删除。"""
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        raise ApiError("旧版单文件方案不会由本功能删除，请手动核对后处理。")
+    project_root = project["dir"].resolve()
+    target = (project_root / plan["folder"]).resolve()
+    if target.parent != project_root or not target.is_dir() or target.is_symlink():
+        raise ApiError("方案目录无效，已拒绝删除。")
+    files: list[Path] = []
+    directories: list[Path] = []
+    for item in sorted(target.rglob("*"), key=lambda path: path.relative_to(target).as_posix().casefold()):
+        if item.is_symlink():
+            raise ApiError("方案目录包含链接文件，为避免误删已拒绝删除。")
+        if item.is_file():
+            files.append(item)
+        elif item.is_dir():
+            directories.append(item)
+        else:
+            raise ApiError("方案目录包含无法安全识别的条目，已拒绝删除。")
+    return plan, target, files, directories
+
+
+def plan_deletion_preview(project: dict, plan_id: str) -> dict:
+    plan, target, files, directories = plan_deletion_paths(project, plan_id)
+    root = project["dir"].resolve()
+    items = [{"path": target.relative_to(root).as_posix() + "/", "kind": "folder"}]
+    items.extend({"path": path.relative_to(root).as_posix() + "/", "kind": "folder"} for path in directories)
+    items.extend({"path": path.relative_to(root).as_posix(), "kind": "file"} for path in files)
+    return {"plan": plan, "folder": plan["folder"], "items": items}
+
+
+def delete_plan(project: dict, plan_id: str, confirmation: str) -> None:
+    """逐项删除已在确认清单中展示的方案目录；不使用递归删除命令。"""
+    plan, target, files, directories = plan_deletion_paths(project, plan_id)
+    if confirmation != plan["folder"]:
+        raise ApiError("请准确输入方案版本目录名称以确认删除。")
+    for path in files:
+        path.unlink()
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        path.rmdir()
+    target.rmdir()
+
+
 def resolve_plan_association(project: dict, payload: dict) -> dict:
     plan_id = one_line(payload.get("planId"))
     if not plan_id:
@@ -1054,6 +1136,30 @@ class SciHubHandler(BaseHTTPRequestHandler):
         except Exception as error:  # noqa: BLE001
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
 
+    def do_PUT(self):
+        try:
+            segments = self._segments()
+            if segments[:2] == ["api", "projects"]:
+                self._handle_projects(segments)
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "找不到该接口。")
+        except ApiError as error:
+            self._send_error(error.status, str(error))
+        except Exception as error:  # noqa: BLE001
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
+
+    def do_DELETE(self):
+        try:
+            segments = self._segments()
+            if segments[:2] == ["api", "projects"]:
+                self._handle_projects(segments)
+                return
+            self._send_error(HTTPStatus.NOT_FOUND, "找不到该接口。")
+        except ApiError as error:
+            self._send_error(error.status, str(error))
+        except Exception as error:  # noqa: BLE001
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(error))
+
     # --- 静态文件 --- #
     def _handle_static(self):
         segments = self._segments()
@@ -1174,8 +1280,22 @@ class SciHubHandler(BaseHTTPRequestHandler):
             update_agents(project)
             self._send_json(HTTPStatus.CREATED, {"plan": plan})
             return
+        if method == "GET" and len(segments) == 6 and segments[5] == "delete-preview":
+            self._send_json(HTTPStatus.OK, plan_deletion_preview(project, segments[4]))
+            return
         if method == "GET" and len(segments) == 5:
             self._send_json(HTTPStatus.OK, {"plan": read_plan(project, segments[4])})
+            return
+        if method == "PUT" and len(segments) == 5:
+            plan = update_plan(project, segments[4], self._read_json())
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"plan": plan})
+            return
+        if method == "DELETE" and len(segments) == 5:
+            payload = self._read_json()
+            delete_plan(project, segments[4], one_line(payload.get("confirmation")))
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"deleted": True})
             return
         if method == "POST" and len(segments) == 6 and segments[5] == "entries":
             plan = write_plan_entry(project, segments[4], self._read_json())

@@ -36,6 +36,6 @@
     document.getElementById('addProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
     document.getElementById('topNewProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
     document.getElementById('menuButton')?.addEventListener('click', () => document.querySelector('.sidebar')?.classList.toggle('open'));
-    switchView('logs');
+    switchView('home');
   });
 })();
