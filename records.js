@@ -244,6 +244,9 @@
         <span>${esc(p.name)}</span>
         <b>${p.logCount}·${p.conversationCount}</b>
       </button>`).join('');
+    list.querySelectorAll('[data-project-select]').forEach(button => {
+      button.addEventListener('click', () => selectProject(button.dataset.projectSelect));
+    });
   }
 
   function requireProject(titleEl, bodyEl) {
