@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import io
 import json
 import mimetypes
@@ -512,6 +513,7 @@ def write_plan(project: dict, payload: dict) -> dict:
     plan_id = "plan-" + datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
     now = now_iso()
     description = str(payload.get("description", "")).strip()
+    plan_content = str(payload.get("planContent", "")).strip()
     subexperiments = normalise_subexperiments(payload.get("subexperiments"))
     meta = {
         "kind": "experiment_plan",
@@ -522,7 +524,10 @@ def write_plan(project: dict, payload: dict) -> dict:
         "created_at": now,
         "updated_at": now,
     }
-    sections = [f"# {name} · {version}", f"## 方案说明\n\n{description or '尚未填写。'}", "## 子实验"]
+    sections = [f"# {name} · {version}", f"## 方案说明\n\n{description or '尚未填写。'}"]
+    if plan_content:
+        sections.append("## 实验方案\n\n" + plan_content)
+    sections.append("## 子实验")
     if subexperiments:
         sections.extend(f"- [{item['name']}]({item['folder']}/{SUBEXPERIMENT_FILE_NAME})" for item in subexperiments)
     else:
@@ -685,6 +690,50 @@ def delete_plan(project: dict, plan_id: str, confirmation: str) -> None:
     for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         path.rmdir()
     target.rmdir()
+
+
+def plan_markdown_content(project: dict, plan_id: str) -> tuple[dict, str]:
+    """读取方案正文；不返回 front matter，避免将内部元数据用于版本对比。"""
+    plan = read_plan(project, plan_id)
+    if plan["storage"] == "folder" and plan["folder"]:
+        path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
+    else:
+        path = legacy_plans_dir(project) / f"{plan_id}.md"
+    return plan, read_markdown_document(path)["content"].strip()
+
+
+def previous_plan(project: dict, plan_id: str) -> Optional[dict]:
+    """按创建时间找当前方案之前的版本，而不是按最近编辑时间。"""
+    plans = sorted(list_plans(project), key=lambda item: item.get("createdAt", ""))
+    for index, plan in enumerate(plans):
+        if plan["id"] == plan_id:
+            return plans[index - 1] if index else None
+    return None
+
+
+def plan_comparison(project: dict, plan_id: str) -> dict:
+    current, current_content = plan_markdown_content(project, plan_id)
+    previous = previous_plan(project, plan_id)
+    if not previous:
+        return {"current": current, "previous": None, "lines": []}
+    previous_plan_data, previous_content = plan_markdown_content(project, previous["id"])
+    lines = []
+    matcher = difflib.SequenceMatcher(
+        a=previous_content.splitlines(), b=current_content.splitlines(), autojunk=False
+    )
+    old_lines = previous_content.splitlines()
+    new_lines = current_content.splitlines()
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            lines.extend({"kind": "same", "text": line} for line in old_lines[old_start:old_end])
+        elif tag == "delete":
+            lines.extend({"kind": "removed", "text": line} for line in old_lines[old_start:old_end])
+        elif tag == "insert":
+            lines.extend({"kind": "added", "text": line} for line in new_lines[new_start:new_end])
+        else:
+            lines.extend({"kind": "removed", "text": line} for line in old_lines[old_start:old_end])
+            lines.extend({"kind": "added", "text": line} for line in new_lines[new_start:new_end])
+    return {"current": current, "previous": previous_plan_data, "lines": lines}
 
 
 def resolve_plan_association(project: dict, payload: dict) -> dict:
@@ -1282,6 +1331,13 @@ class SciHubHandler(BaseHTTPRequestHandler):
             return
         if method == "GET" and len(segments) == 6 and segments[5] == "delete-preview":
             self._send_json(HTTPStatus.OK, plan_deletion_preview(project, segments[4]))
+            return
+        if method == "GET" and len(segments) == 6 and segments[5] == "content":
+            plan, content = plan_markdown_content(project, segments[4])
+            self._send_json(HTTPStatus.OK, {"plan": plan, "content": content})
+            return
+        if method == "GET" and len(segments) == 6 and segments[5] == "compare":
+            self._send_json(HTTPStatus.OK, plan_comparison(project, segments[4]))
             return
         if method == "GET" and len(segments) == 5:
             self._send_json(HTTPStatus.OK, {"plan": read_plan(project, segments[4])})

@@ -309,7 +309,7 @@
         : '<li class="plan-subexperiment-empty">尚未设置子实验；可先将日志关联到整个方案。</li>';
       const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
-        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
+        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
         <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions"><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 新增关联子实验</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}">+ 新增 Markdown 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}">+ 新增子文件夹</button></div></div>
         <div class="plan-subexperiments"><div class="plan-section-label">子实验</div><ul>${subexperiments}</ul></div>
@@ -331,6 +331,9 @@
     });
     $('plansBody').querySelectorAll('[data-delete-plan]').forEach(button => {
       button.onclick = () => openPlanDeleteDialog(button.dataset.deletePlan);
+    });
+    $('plansBody').querySelectorAll('[data-compare-plan]').forEach(button => {
+      button.onclick = () => openPlanDiffDialog(button.dataset.comparePlan);
     });
   }
 
@@ -486,13 +489,48 @@
 
   function openPlanDialog() {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
-    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。日志关联后，可清楚区分方案 V1、V2 及各自子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
+    const previous = [...R.plans].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
+    const previousPanel = previous
+      ? `<div class="form-field full"><div class="plan-source-panel"><b>上一次方案文件</b><br>${esc(previous.relativePath || `${previous.version}/方案.md`)} · ${esc(previous.name)}<br><button type="button" class="text-button" id="loadPreviousPlan">载入作为新方案草稿</button><small>仅复制内容到当前输入框，不会修改旧方案文件。</small></div></div>`
+      : `<div class="form-field full"><div class="plan-source-panel"><b>上一次方案文件</b><br>这是项目中的第一个方案；创建下一版后即可进行版本差异对比。</div></div>`;
+    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。可载入上一次方案作为草稿，并用已配置的 API 模型一键润色生成新方案。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="planForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field"><span>方案名称</span><input id="planName" required placeholder="例如：蛋白纯化条件筛选" /></label>
         <label class="form-field"><span>方案版本</span><input id="planVersion" required placeholder="例如：V1" /></label>
         <label class="form-field full"><span>方案说明（可选）</span><textarea id="planDescription" placeholder="记录方案目的、变量范围、判定标准等。"></textarea></label>
+        ${previousPanel}
+        <label class="form-field full"><span>实验方案草稿 / 生成结果（可选）</span><textarea id="planContent" style="min-height:210px" placeholder="可直接输入方案草稿，或先载入上一次方案文件。点击“AI 一键润色生成方案”后，结果会保留在这里并随新方案保存为 Markdown。"></textarea><div class="plan-ai-actions"><small>AI 仅修正错别字、表达和结构，不应虚构实验数据、条件或结论。</small><button type="button" class="secondary-button" id="polishPlanButton">✦ AI 一键润色生成方案</button></div></label>
         <label class="form-field full"><span>子实验（可选）</span><textarea id="planSubexperiments" placeholder="每行一个；可用“名称 | 说明”格式。&#10;例如：不同 pH 条件 | pH 6.5、7.0、7.5 的对照实验&#10;例如：重复验证 | 对 V1 最优条件进行三次重复"></textarea><small class="field-note">创建后子实验会成为日志的可选关联项。</small></label>
       </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建方案</button></div></form>`, () => {
+      $('loadPreviousPlan')?.addEventListener('click', async () => {
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(previous.id)}/content`);
+          $('planContent').value = response.content || '';
+          toast('已载入上一次方案文件作为草稿');
+        } catch (error) {
+          toast(`载入上一次方案失败：${error.message}`);
+        }
+      });
+      $('polishPlanButton').addEventListener('click', async () => {
+        const source = $('planContent').value.trim();
+        if (!source) { toast('请先输入方案草稿，或载入上一次方案文件'); return; }
+        const button = $('polishPlanButton');
+        button.disabled = true;
+        button.textContent = 'AI 生成中…';
+        try {
+          const result = await askModel([
+            { role: 'system', content: '你是严谨的科研实验方案编辑。只修正错别字、语法、表达和结构，使方案清晰、专业、可执行。不得虚构或补充未提供的实验事实、数据、试剂、参数、条件、现象或结论；信息缺失时保留为待补充项。输出中文 Markdown 正文，不要 YAML front matter，也不要重复输出一级标题。' },
+            { role: 'user', content: `请润色并整理以下实验方案草稿，保留原意：\n\n${source}` }
+          ]);
+          $('planContent').value = result.trim();
+          toast('AI 已生成润色后的实验方案；确认后可创建新版本');
+        } catch (error) {
+          toast(`AI 生成失败：${error.message}`);
+        } finally {
+          button.disabled = false;
+          button.textContent = '✦ AI 一键润色生成方案';
+        }
+      });
       $('planForm').addEventListener('submit', async event => {
         event.preventDefault();
         const button = $('planForm').querySelector('[type=submit]');
@@ -509,6 +547,7 @@
               name: $('planName').value.trim(),
               version: $('planVersion').value.trim(),
               description: $('planDescription').value.trim(),
+              planContent: $('planContent').value.trim(),
               subexperiments
             })
           });
@@ -524,6 +563,27 @@
         }
       });
     });
+  }
+
+  async function openPlanDiffDialog(planId) {
+    if (!R.active) { toast('请先选择项目'); return; }
+    try {
+      const comparison = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/compare`);
+      if (!comparison.previous) {
+        toast('这是当前项目最早创建的方案，尚无上一次方案可对比');
+        return;
+      }
+      const diffLines = (comparison.lines || []).map(line => {
+        const symbol = line.kind === 'removed' ? '−' : line.kind === 'added' ? '+' : ' ';
+        const text = line.text ? esc(line.text) : '&nbsp;';
+        return `<div class="plan-diff-line ${esc(line.kind)}"><i>${symbol}</i><span>${text}</span></div>`;
+      }).join('') || '<div class="plan-diff-line same"><i>•</i><span>两个方案正文相同。</span></div>';
+      openModal(`<div class="modal-header"><div><h2>方案版本改动</h2><p>对比 <b>${esc(comparison.previous.version)} · ${esc(comparison.previous.name)}</b> 与 <b>${esc(comparison.current.version)} · ${esc(comparison.current.name)}</b> 的方案正文。</p></div><button class="close-button" data-close-modal>×</button></div>
+        <div class="modal-body"><div class="plan-diff-legend"><span class="old">灰色划线：上一次方案中删除或替换的内容</span><span class="new">绿色高亮：当前方案新增或替换的内容</span></div><div class="plan-diff">${diffLines}</div></div>
+        <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>关闭</button></div>`);
+    } catch (error) {
+      toast(`读取方案差异失败：${error.message}`);
+    }
   }
 
   // ---------------------------------------------------------- 视图：日志 --
