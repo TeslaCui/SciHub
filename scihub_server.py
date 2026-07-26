@@ -5,7 +5,8 @@
 - 每次保存都会实时更新该项目的 AGENTS.md（自动区块），供 AI 作为项目记忆使用。
 - `/api/proxy` 只把用户显式发送的对话转发给你自己配置的 HTTPS 模型接口。
 
-只依赖 Python 3 标准库，无需安装任何第三方包。
+PDF 导入与 Word/PDF 导出使用本地 Python 包 pypdf、python-docx、reportlab；
+这些包只在本机读取和生成文档，不会上传项目资料。
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape as xml_escape
 
 ROOT = Path(__file__).resolve().parent
 PROJECTS_ROOT = ROOT / "科研项目"
@@ -369,6 +371,7 @@ LEGACY_PLANS_FOLDER = "实验方案"
 PLAN_FILE_NAME = "方案.md"
 SUBEXPERIMENT_FILE_NAME = "README.md"
 LOGS_FOLDER = "实验日志"
+PLAN_IMPORTS_FOLDER = "导入资料"
 RESERVED_PLAN_FOLDERS = {"实验日志", "对话记录", "实验方案", "__pycache__"}
 INVALID_FOLDER_CHARS = re.compile(r'[\\/:*?"<>|]+')
 
@@ -567,7 +570,11 @@ def write_plan(project: dict, payload: dict) -> dict:
     }
     sections = [f"# {name} · {version}", f"## 方案说明\n\n{description or '尚未填写。'}"]
     if plan_content:
-        sections.append("## 实验方案\n\n" + plan_content)
+        sections.append(
+            "## 实验方案\n\n<!-- PLAN-CONTENT:START -->\n"
+            + plan_content
+            + "\n<!-- PLAN-CONTENT:END -->"
+        )
     sections.append("## 子实验")
     if subexperiments:
         sections.extend(f"- [{item['name']}]({item['folder']}/{SUBEXPERIMENT_FILE_NAME})" for item in subexperiments)
@@ -651,6 +658,28 @@ def add_subexperiment(project: dict, plan_id: str, payload: dict) -> dict:
     return read_plan(project, plan_id)
 
 
+def replace_plan_content(content: str, plan_content: str) -> str:
+    """只替换 SciHub 管理的方案正文区，不影响子实验目录和用户其他笔记。"""
+    section = (
+        "## 实验方案\n\n<!-- PLAN-CONTENT:START -->\n"
+        + (plan_content.strip() or "尚未填写实验方案正文。")
+        + "\n<!-- PLAN-CONTENT:END -->"
+    )
+    marker_pattern = re.compile(
+        r"(?s)## 实验方案\r?\n\r?\n<!-- PLAN-CONTENT:START -->.*?<!-- PLAN-CONTENT:END -->"
+    )
+    if marker_pattern.search(content):
+        return marker_pattern.sub(section, content, count=1)
+    # 兼容旧版本创建的方案：正文区位于“子实验”标题之前。
+    old_section = re.compile(r"(?ms)^## 实验方案\r?\n.*?(?=^## 子实验\r?$|\Z)")
+    if old_section.search(content):
+        return old_section.sub(section + "\n\n", content, count=1)
+    subexperiment_heading = re.search(r"(?m)^## 子实验\r?$", content)
+    if subexperiment_heading:
+        return content[:subexperiment_heading.start()].rstrip() + "\n\n" + section + "\n\n" + content[subexperiment_heading.start():]
+    return content.rstrip() + "\n\n" + section + "\n"
+
+
 def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     """更新由 SciHub 创建的方案说明，同时保留用户在方案文件中的其他内容。"""
     plan = read_plan(project, plan_id)
@@ -660,6 +689,8 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     if not name:
         raise ApiError("请填写实验方案名称。")
     description = str(payload.get("description", "")).strip()
+    has_plan_content = "planContent" in payload
+    plan_content = str(payload.get("planContent", "")).strip()
     path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
     doc = read_markdown_document(path)
     meta = dict(doc["meta"])
@@ -685,7 +716,25 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     else:
         remaining = content.split("\n", 1)[1] if "\n" in content else ""
         content = heading + "\n\n" + description_section + "\n\n" + remaining.lstrip()
+    if has_plan_content:
+        content = replace_plan_content(content, plan_content)
     write_markdown(path, front_matter(meta) + content.rstrip() + "\n")
+    return read_plan(project, plan_id)
+
+
+def update_plan_content(project: dict, plan_id: str, plan_content: str) -> dict:
+    """保存 AI 生成或用户审核后的方案正文；持久化内容始终为 Markdown。"""
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        raise ApiError("旧版单文件方案暂不支持写入方案正文；请新建 V1/V2 文件夹方案。")
+    path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
+    doc = read_markdown_document(path)
+    meta = dict(doc["meta"])
+    meta["updated_at"] = now_iso()
+    write_markdown(
+        path,
+        front_matter(meta) + replace_plan_content(doc["content"], plan_content).rstrip() + "\n",
+    )
     return read_plan(project, plan_id)
 
 
@@ -1002,11 +1051,12 @@ def export_project_markdown(project: dict) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
-def import_docx_document(payload: dict) -> dict:
-    """提取 DOCX 文本和内嵌图片元数据；不把二进制图片写入项目目录。"""
+def decode_import_payload(payload: dict, allowed_extensions: set[str]) -> tuple[str, bytes, str]:
     filename = one_line(payload.get("filename"))
-    if Path(filename).suffix.lower() != ".docx":
-        raise ApiError("仅支持导入 .docx 文档。")
+    suffix = Path(filename).suffix.lower()
+    if not filename or suffix not in allowed_extensions:
+        supported = "、".join(sorted(allowed_extensions))
+        raise ApiError(f"仅支持导入 {supported} 文档。")
     encoded = payload.get("contentBase64")
     if not isinstance(encoded, str) or not encoded:
         raise ApiError("文档内容无效。")
@@ -1016,6 +1066,22 @@ def import_docx_document(payload: dict) -> dict:
         raise ApiError("文档编码无效。")
     if len(content) > 15 * 1024 * 1024:
         raise ApiError("文档超过 15 MB，暂不能导入。")
+    return filename, content, suffix
+
+
+def decode_text_document(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "utf-16", "gb18030"):
+        try:
+            text = content.decode(encoding)
+            if text.strip():
+                return text.strip()
+        except UnicodeDecodeError:
+            continue
+    raise ApiError("无法识别文本文件编码；请另存为 UTF-8 后重试。")
+
+
+def extract_docx_source(content: bytes) -> tuple[str, list[str]]:
+    """以标准库读取 DOCX 文本和媒体清单；只提取信息，不保存二进制原件。"""
     try:
         with zipfile.ZipFile(io.BytesIO(content)) as archive:
             xml = archive.read("word/document.xml")
@@ -1030,17 +1096,275 @@ def import_docx_document(payload: dict) -> dict:
                 if text:
                     paragraphs.append(text)
             images = []
-            for member in sorted(name for name in archive.namelist() if name.startswith("word/media/") and not name.endswith("/")):
+            media_members = sorted(
+                name for name in archive.namelist()
+                if name.startswith("word/media/") and not name.endswith("/")
+            )
+            for member in media_members:
                 data = archive.read(member)
-                name = Path(member).name
-                mime = mimetypes.guess_type(name)[0] or "未知类型"
-                images.append(f"{name} · {mime} · {len(data):,} 字节")
+                media_name = Path(member).name
+                mime = mimetypes.guess_type(media_name)[0] or "未知类型"
+                images.append(f"{media_name} · {mime} · {len(data):,} 字节")
     except (KeyError, zipfile.BadZipFile, ElementTree.ParseError):
         raise ApiError("无法读取 Word 文档，请确认文件是有效的 .docx。")
     source = "\n\n".join(paragraphs)
     if not source:
         raise ApiError("Word 文档中没有可导入的文本内容。")
-    return {"source": source, "images": images}
+    return source, images
+
+
+def extract_pdf_source(content: bytes) -> tuple[str, list[str]]:
+    """从 PDF 提取可选择文本；扫描件没有文字层时会给出明确提示。"""
+    try:
+        from pypdf import PdfReader
+    except ImportError as error:
+        raise ApiError("PDF 导入组件未安装，请先执行启动脚本中的依赖安装。") from error
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        if reader.is_encrypted and reader.decrypt("") == 0:
+            raise ApiError("PDF 已加密，暂不能导入；请先解除密码保护。")
+        pages = []
+        image_info = []
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = (page.extract_text() or "").strip()
+            if page_text:
+                pages.append(f"## 第 {page_number} 页\n\n{page_text}")
+            try:
+                image_count = len(page.images)
+            except (AttributeError, TypeError):
+                image_count = 0
+            if image_count:
+                image_info.append(f"第 {page_number} 页含 {image_count} 个嵌入图像")
+    except ApiError:
+        raise
+    except Exception as error:  # noqa: BLE001
+        raise ApiError(f"无法读取 PDF：{error}") from error
+    source = "\n\n".join(pages)
+    if not source:
+        raise ApiError("PDF 未包含可提取文字；若是扫描件，请先 OCR 后再导入。")
+    return source, image_info
+
+
+def extract_imported_document(payload: dict, allowed_extensions: set[str]) -> dict:
+    filename, content, suffix = decode_import_payload(payload, allowed_extensions)
+    if suffix == ".docx":
+        source, images = extract_docx_source(content)
+    elif suffix == ".pdf":
+        source, images = extract_pdf_source(content)
+    else:
+        source, images = decode_text_document(content), []
+    return {
+        "filename": Path(filename).name,
+        "extension": suffix.removeprefix("."),
+        "source": source,
+        "images": images,
+    }
+
+
+def import_docx_document(payload: dict) -> dict:
+    """兼容实验日志的既有 DOCX 导入接口。"""
+    document = extract_imported_document(payload, {".docx"})
+    return {"source": document["source"], "images": document["images"]}
+
+
+def source_document_markdown(document: dict) -> str:
+    """将外部文件转换为项目内唯一持久化格式：Markdown。"""
+    meta = {
+        "kind": "imported_plan_source",
+        "source_filename": document["filename"],
+        "source_format": document["extension"],
+        "imported_at": now_iso(),
+    }
+    title = Path(document["filename"]).stem or "导入资料"
+    sections = [
+        f"# 导入资料：{title}",
+        f"> 原始文件：`{document['filename']}`（{document['extension'].upper()}）",
+        "## 转换内容",
+        document["source"].strip(),
+    ]
+    if document["images"]:
+        sections.extend([
+            "## 文档图片与媒体信息",
+            "\n".join(f"- {item}" for item in document["images"]),
+        ])
+    return front_matter(meta) + "\n\n".join(sections).rstrip() + "\n"
+
+
+def import_plan_source_document(project: dict, plan_id: str, payload: dict) -> dict:
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        raise ApiError("旧版单文件方案不能导入资料；请新建 V1/V2 文件夹方案。")
+    document = extract_imported_document(payload, {".docx", ".pdf", ".md", ".markdown", ".txt"})
+    directory = project["dir"] / plan["folder"] / PLAN_IMPORTS_FOLDER
+    base = safe_folder_name(Path(document["filename"]).stem or "导入资料", "导入资料文件名")
+    path = directory / f"{base}.md"
+    index = 2
+    while path.exists():
+        path = directory / f"{base}-{index}.md"
+        index += 1
+    markdown = source_document_markdown(document)
+    write_markdown(path, markdown)
+    return {
+        "source": document["source"],
+        "markdown": markdown,
+        "images": document["images"],
+        "storedPath": path.relative_to(project["dir"]).as_posix(),
+        "sourceFile": document["filename"],
+    }
+
+
+def markdown_line_text(line: str) -> str:
+    """导出时保留 Markdown 正文语义，去掉不适合 Word/PDF 的轻量标记。"""
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", line)
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    text = text.replace("**", "").replace("__", "").replace("`", "")
+    return text.strip()
+
+
+def export_plan_docx(project: dict, plan_id: str) -> bytes:
+    """在内存中把 Markdown 方案导出 Word；项目目录仍只保存 Markdown。"""
+    try:
+        from docx import Document
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml.ns import qn
+        from docx.shared import Inches, Pt, RGBColor
+    except ImportError as error:
+        raise ApiError("Word 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
+    plan, content = plan_markdown_content(project, plan_id)
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = section.bottom_margin = Inches(1)
+    section.left_margin = section.right_margin = Inches(1)
+
+    def set_font(style, size: float, color: Optional[str] = None) -> None:
+        style.font.name = "Calibri"
+        style._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+        style.font.size = Pt(size)
+        if color:
+            style.font.color.rgb = RGBColor.from_string(color)
+
+    normal = document.styles["Normal"]
+    set_font(normal, 11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.25
+    for style_name, size, color in (("Heading 1", 16, "2E74B5"), ("Heading 2", 13, "2E74B5"), ("Heading 3", 12, "1F4D78")):
+        style = document.styles[style_name]
+        set_font(style, size, color)
+        style.paragraph_format.space_before = Pt(14 if style_name == "Heading 1" else 10)
+        style.paragraph_format.space_after = Pt(6)
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_run = title.add_run(f"{plan['name']} · {plan['version']}")
+    title_run.bold = True
+    title_run.font.name = "Calibri"
+    title_run._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    title_run.font.size = Pt(18)
+    title.paragraph_format.space_after = Pt(12)
+    if plan.get("description"):
+        description = document.add_paragraph(plan["description"])
+        description.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        description.paragraph_format.space_after = Pt(16)
+
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.startswith("<!--"):
+            continue
+        if line.startswith("# "):
+            continue
+        if line.startswith("### "):
+            document.add_paragraph(markdown_line_text(line[4:]), style="Heading 3")
+        elif line.startswith("## "):
+            document.add_paragraph(markdown_line_text(line[3:]), style="Heading 1")
+        elif line.startswith("- ") or line.startswith("* "):
+            document.add_paragraph(markdown_line_text(line[2:]), style="List Bullet")
+        elif re.match(r"^\d+[.)]\s+", line):
+            document.add_paragraph(markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line)), style="List Number")
+        elif line.startswith("> "):
+            paragraph = document.add_paragraph(markdown_line_text(line[2:]))
+            paragraph.paragraph_format.left_indent = Inches(0.25)
+            paragraph.runs[0].italic = True
+        elif not re.fullmatch(r"[-*_]{3,}", line):
+            document.add_paragraph(markdown_line_text(line))
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def export_plan_pdf(project: dict, plan_id: str) -> bytes:
+    """在内存中把 Markdown 方案导出 PDF；不在项目中留下 PDF 副本。"""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    except ImportError as error:
+        raise ApiError("PDF 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
+    plan, content = plan_markdown_content(project, plan_id)
+    font_name = "STSong-Light"
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+    except (KeyError, ValueError):
+        pass
+    styles = getSampleStyleSheet()
+    body = ParagraphStyle(
+        "SciHubBody", parent=styles["BodyText"], fontName=font_name,
+        fontSize=10.5, leading=17, spaceAfter=6,
+    )
+    title_style = ParagraphStyle(
+        "SciHubTitle", parent=body, fontSize=18, leading=26, alignment=TA_CENTER,
+        textColor=colors.HexColor("#173E2A"), spaceAfter=8,
+    )
+    subtitle_style = ParagraphStyle(
+        "SciHubSubtitle", parent=body, alignment=TA_CENTER, textColor=colors.HexColor("#607067"), spaceAfter=16,
+    )
+    h1 = ParagraphStyle(
+        "SciHubH1", parent=body, fontSize=15, leading=22, textColor=colors.HexColor("#2E74B5"),
+        spaceBefore=14, spaceAfter=7,
+    )
+    h2 = ParagraphStyle(
+        "SciHubH2", parent=body, fontSize=12.5, leading=19, textColor=colors.HexColor("#1F4D78"),
+        spaceBefore=10, spaceAfter=5,
+    )
+    callout = ParagraphStyle(
+        "SciHubCallout", parent=body, leftIndent=18, textColor=colors.HexColor("#526159"),
+        backColor=colors.HexColor("#F4F7F2"), borderPadding=7,
+    )
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=letter, leftMargin=inch, rightMargin=inch, topMargin=inch, bottomMargin=inch,
+        title=f"{plan['name']} {plan['version']}", author="SciHub",
+    )
+    story = [Paragraph(xml_escape(f"{plan['name']} · {plan['version']}"), title_style)]
+    if plan.get("description"):
+        story.append(Paragraph(xml_escape(plan["description"]), subtitle_style))
+    for raw_line in content.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.startswith("<!--"):
+            continue
+        if line.startswith("# "):
+            continue
+        text = xml_escape(markdown_line_text(line))
+        if line.startswith("### "):
+            story.append(Paragraph(xml_escape(markdown_line_text(line[4:])), h2))
+        elif line.startswith("## "):
+            story.append(Paragraph(xml_escape(markdown_line_text(line[3:])), h1))
+        elif line.startswith("- ") or line.startswith("* "):
+            story.append(Paragraph("• " + xml_escape(markdown_line_text(line[2:])), body))
+        elif re.match(r"^\d+[.)]\s+", line):
+            story.append(Paragraph(xml_escape(line), body))
+        elif line.startswith("> "):
+            story.append(Paragraph(xml_escape(markdown_line_text(line[2:])), callout))
+        elif re.fullmatch(r"[-*_]{3,}", line):
+            story.append(Spacer(1, 6))
+        else:
+            story.append(Paragraph(text, body))
+    document.build(story)
+    return buffer.getvalue()
 
 
 # --------------------------------------------------------------------------- #
@@ -1337,9 +1661,9 @@ class SciHubHandler(BaseHTTPRequestHandler):
             return
 
         if method == "GET" and len(segments) == 4 and segments[3] == "export":
-            filename = f"{meta_value(project['meta'], 'name', project['slug'])}-项目完整导出.md"
+            filename = f"{meta_value(project['meta'], 'name', project['slug'])}-项目记忆.md"
             disposition = (
-                'attachment; filename="scihub-project.md"; '
+                'attachment; filename="scihub-project-memory.md"; '
                 f"filename*=UTF-8''{urllib.parse.quote(filename)}"
             )
             self._send_bytes(
@@ -1354,6 +1678,13 @@ class SciHubHandler(BaseHTTPRequestHandler):
             path = project["dir"] / "AGENTS.md"
             content = path.read_text(encoding="utf-8") if path.is_file() else ""
             self._send_json(HTTPStatus.OK, {"content": content})
+            return
+
+        if method == "GET" and len(segments) == 4 and segments[3] == "memory":
+            self._send_json(
+                HTTPStatus.OK,
+                {"content": export_project_markdown(project).decode("utf-8")},
+            )
             return
 
         if len(segments) >= 4 and segments[3] == "plans":
@@ -1387,6 +1718,40 @@ class SciHubHandler(BaseHTTPRequestHandler):
             plan, content = plan_markdown_content(project, segments[4])
             self._send_json(HTTPStatus.OK, {"plan": plan, "content": content})
             return
+        if method == "PUT" and len(segments) == 6 and segments[5] == "content":
+            payload = self._read_json()
+            plan = update_plan_content(project, segments[4], str(payload.get("planContent", "")))
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"plan": plan})
+            return
+        if method == "POST" and len(segments) == 6 and segments[5] == "import":
+            imported = import_plan_source_document(project, segments[4], self._read_json())
+            update_agents(project)
+            self._send_json(HTTPStatus.CREATED, imported)
+            return
+        if method == "GET" and len(segments) == 7 and segments[5] == "export":
+            export_format = segments[6].lower()
+            plan = read_plan(project, segments[4])
+            filename_base = f"{plan['name']}-{plan['version']}"
+            if export_format == "docx":
+                data = export_plan_docx(project, segments[4])
+                self._send_bytes(
+                    HTTPStatus.OK,
+                    data,
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    {"Content-Disposition": "attachment; filename=\"scihub-plan.docx\"; filename*=UTF-8''" + urllib.parse.quote(filename_base + ".docx")},
+                )
+                return
+            if export_format == "pdf":
+                data = export_plan_pdf(project, segments[4])
+                self._send_bytes(
+                    HTTPStatus.OK,
+                    data,
+                    "application/pdf",
+                    {"Content-Disposition": "attachment; filename=\"scihub-plan.pdf\"; filename*=UTF-8''" + urllib.parse.quote(filename_base + ".pdf")},
+                )
+                return
+            raise ApiError("仅支持导出 Word 或 PDF。")
         if method == "GET" and len(segments) == 6 and segments[5] == "compare":
             self._send_json(HTTPStatus.OK, plan_comparison(project, segments[4]))
             return

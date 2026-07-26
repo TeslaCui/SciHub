@@ -57,6 +57,7 @@
     conversation: null,
     agents: '',
     autoPolish: true,
+    useFullProjectMemory: false,
     sessionKey: ''       // 未持久化时本会话内的 API Key
   };
 
@@ -197,6 +198,7 @@
     R.date = TODAY;
     R.log = { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' };
     R.autoPolish = true;
+    R.useFullProjectMemory = false;
     R.conversation = null;
     if (!R.active) return;
     try {
@@ -313,12 +315,12 @@
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
           return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件夹</button></div></li>`;
         }).join('')
-        : `<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></li>`;
+        : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions"><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}">+ 新增 Markdown 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}">+ 新增子文件夹</button></div></div>
+        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button><button class="text-button" data-edit-plan-content="${esc(plan.id)}">查看 / 编辑方案正文</button>` : ''}<button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="docx">↓ 导出 Word</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-export-format="pdf">↓ 导出 PDF</button></div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
@@ -332,6 +334,15 @@
     });
     $('plansBody').querySelectorAll('[data-add-subexperiment]').forEach(button => {
       button.onclick = () => openSubexperimentDialog(button.dataset.addSubexperiment);
+    });
+    $('plansBody').querySelectorAll('[data-import-plan-source]').forEach(button => {
+      button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource);
+    });
+    $('plansBody').querySelectorAll('[data-edit-plan-content]').forEach(button => {
+      button.onclick = () => openPlanContentEditor(button.dataset.editPlanContent);
+    });
+    $('plansBody').querySelectorAll('[data-export-plan]').forEach(button => {
+      button.onclick = () => exportPlan(button.dataset.exportPlan, button.dataset.exportFormat);
     });
     $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
       button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
@@ -459,6 +470,124 @@
         }
       });
     });
+  }
+
+  function editablePlanContent(content = '') {
+    const marked = content.match(/<!-- PLAN-CONTENT:START -->\s*([\s\S]*?)\s*<!-- PLAN-CONTENT:END -->/);
+    if (marked) return marked[1].trim();
+    const legacy = content.match(/(?:^|\n)## 实验方案\s*\n([\s\S]*?)(?=\n## 子实验\s*$|$)/m);
+    return legacy ? legacy[1].trim() : content.trim();
+  }
+
+  function standardPlanPrompt(sourceMarkdown) {
+    return [
+      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
+      { role: 'user', content: `请读取以下已转换的 Markdown 资料，并生成标准实验方案：\n\n${sourceMarkdown}` }
+    ];
+  }
+
+  function openPlanSourceImportDialog(planId) {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan || !R.active) { toast('未找到可导入资料的实验方案'); return; }
+    openModal(`<div class="modal-header"><div><h2>导入方案文件</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。系统只会把转换后的 Markdown 保存到 <b>${esc(plan.folder)}/导入资料/</b>，不会保留原始二进制文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><div class="form-field full"><label>选择方案资料</label><input id="planSourceFile" type="file" accept=".docx,.pdf,.md,.markdown,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" /></div><p class="import-tip">Word 中的图片、PDF 页面中的嵌入图片会以文件/页码信息记录在转换后的 Markdown 中；扫描版 PDF 需要先 OCR。</p></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="planSourceImportConfirm" type="button" class="primary-button">导入并生成方案</button></div>`, () => {
+      $('planSourceImportConfirm').onclick = () => importPlanSourceDocument(planId);
+    });
+  }
+
+  async function importPlanSourceDocument(planId) {
+    const file = $('planSourceFile')?.files?.[0];
+    if (!file) { toast('请选择要导入的方案文件'); return; }
+    if (file.size > 15 * 1024 * 1024) { toast('文件超过 15 MB，暂不能导入'); return; }
+    const button = $('planSourceImportConfirm');
+    button.disabled = true;
+    button.textContent = '正在转换为 Markdown…';
+    try {
+      const imported = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/import`, {
+        method: 'POST',
+        body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
+      });
+      R.plans = (await api(`${slugPath(R.active.slug)}/plans`)).plans || R.plans;
+      await loadAgents();
+      closeModal();
+      await openPlanContentEditor(planId, imported);
+    } catch (error) {
+      toast(`方案文件导入失败：${error.message}`);
+    } finally {
+      const current = $('planSourceImportConfirm');
+      if (current) { current.disabled = false; current.textContent = '导入并生成方案'; }
+    }
+  }
+
+  async function openPlanContentEditor(planId, imported = null) {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan || !R.active) { toast('未找到实验方案'); return; }
+    let existing = '';
+    if (!imported) {
+      try {
+        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content`);
+        existing = editablePlanContent(response.content || '');
+      } catch (error) {
+        toast(`读取方案正文失败：${error.message}`);
+        return;
+      }
+    }
+    const sourcePanel = imported ? `<div class="plan-source-panel"><b>已转换并保存为 Markdown</b><br>${esc(imported.storedPath || '导入资料')}<br><small>AI 只读取下方资料生成方案；原始 Word/PDF 不会保存到项目目录。</small><details class="plan-import-details"><summary>查看转换后的资料</summary><pre>${esc(imported.markdown || imported.source || '')}</pre></details></div>` : '<div class="plan-source-panel"><b>方案正文编辑</b><br><small>可直接编辑 Markdown。若要依据文件重新生成，请使用方案卡片中的“导入方案文件”。</small></div>';
+    openModal(`<div class="modal-header"><div><h2>${imported ? '生成标准实验方案' : '查看 / 编辑方案正文'}</h2><p>方案保存为 Markdown；AI 生成结果会先显示给你审核和修改，再写入方案。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><div class="form-grid"><div class="form-field full">${sourcePanel}</div><label class="form-field full"><span>实验方案正文（可编辑）</span><textarea id="planContentEditor" style="min-height:300px" placeholder="点击“AI 生成标准方案”后，内容会显示在这里；也可以直接手动填写。">${esc(existing)}</textarea><div class="plan-ai-actions"><small>AI 会保留来源中的事实；资料未给出的条件会标为“待补充”。</small>${imported ? '<button type="button" class="secondary-button" id="generateStandardPlanButton">✦ AI 生成标准方案</button>' : ''}</div></label></div></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="savePlanContentButton" type="button" class="primary-button">保存方案 Markdown</button></div>`, () => {
+      $('generateStandardPlanButton')?.addEventListener('click', async () => {
+        const button = $('generateStandardPlanButton');
+        button.disabled = true;
+        button.textContent = 'AI 生成中…';
+        try {
+          const result = await askModel(standardPlanPrompt(imported.markdown || imported.source || ''));
+          $('planContentEditor').value = result.trim();
+          toast('标准实验方案已生成，请审核后保存');
+        } catch (error) {
+          toast(`AI 生成失败：${error.message}`);
+        } finally {
+          button.disabled = false;
+          button.textContent = '✦ AI 生成标准方案';
+        }
+      });
+      $('savePlanContentButton').addEventListener('click', async () => {
+        const content = $('planContentEditor').value.trim();
+        if (!content) { toast('请先生成或填写方案正文'); return; }
+        const button = $('savePlanContentButton');
+        button.disabled = true;
+        button.textContent = '保存中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content`, {
+            method: 'PUT', body: JSON.stringify({ planContent: content })
+          });
+          R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+          await loadAgents();
+          closeModal();
+          renderPlansView();
+          toast('实验方案已保存为 Markdown，并已更新项目记忆');
+        } catch (error) {
+          toast(`保存方案失败：${error.message}`);
+        } finally {
+          const current = $('savePlanContentButton');
+          if (current) { current.disabled = false; current.textContent = '保存方案 Markdown'; }
+        }
+      });
+    });
+  }
+
+  function exportPlan(planId, format) {
+    if (!R.active || !['docx', 'pdf'].includes(format)) return;
+    const plan = R.plans.find(item => item.id === planId);
+    const label = format === 'docx' ? 'Word' : 'PDF';
+    const link = document.createElement('a');
+    link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}`;
+    link.download = `${plan?.name || '实验方案'}-${plan?.version || ''}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast(`正在导出 ${label} 实验方案；项目内仍仅保存 Markdown`);
   }
 
   function openSubexperimentDialog(planId) {
@@ -823,11 +952,11 @@
     if (!R.active) { toast('请先选择项目'); return; }
     const link = document.createElement('a');
     link.href = `${slugPath(R.active.slug)}/export`;
-    link.download = `${R.active.name}-项目完整导出.md`;
+    link.download = `${R.active.name}-项目记忆.md`;
     document.body.appendChild(link);
     link.click();
     link.remove();
-    toast('正在导出整个项目 Markdown（保留目录层级）');
+    toast('正在导出整合的项目记忆 Markdown，可直接提供给 AI 读取');
   }
 
   // ------------------------------------------------------- 视图：对话记录 --
@@ -845,12 +974,13 @@
         : '<div class="empty-state" style="border:0"><span>◌</span><strong>空对话</strong>输入第一条消息后会保存为 Markdown。</div>';
       chatHtml = `<div class="conversation-head"><h2>${esc(c.title)}</h2><div class="detail-meta"><span class="model-badge">${esc(c.model)}</span><span>·</span><span>${c.messages.length} 条消息</span></div></div>
         <div id="recordMessages" class="messages" style="max-height:460px;overflow:auto">${msgs}</div>
-        <div class="record-composer"><textarea id="recordInput" placeholder="继续提问；系统会把 AGENTS.md 作为项目上下文提供给 AI。（Ctrl/⌘ + Enter 发送）"></textarea><button id="recordSend" class="primary-button">发送</button></div>`;
+        <div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统默认附带 AGENTS.md 项目上下文。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次同时附带完整项目记忆 MD（所有 Markdown；内容较大时可能增加 API 用量）</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
     }
     $('recordsBody').innerHTML = `<div class="content-layout conversation-layout"><section class="conversation-list-panel"><div class="list-toolbar"><span>${R.conversations.length} 段对话</span></div><div class="conversation-list">${listHtml}</div></section><section class="conversation-detail-panel">${chatHtml}</section></div>`;
     $('recordsBody').querySelectorAll('[data-record]').forEach(b => b.onclick = () => loadConversation(b.dataset.record));
     if (c) {
       $('recordSend').onclick = sendMessage;
+      $('recordFullMemory').onchange = e => { R.useFullProjectMemory = e.target.checked; };
       $('recordInput').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendMessage(); });
       const m = $('recordMessages'); if (m) m.scrollTop = m.scrollHeight;
     }
@@ -879,10 +1009,12 @@
       if (!c.model || c.model === '手工记录') c.model = s.model;
       await saveConversation(); renderRecordsView();
       const b = $('recordSend'); if (b) { b.disabled = true; b.textContent = '思考中…'; }
-      const memory = (await api(`${slugPath(R.active.slug)}/agents`)).content;
+      const memory = R.useFullProjectMemory
+        ? (await api(`${slugPath(R.active.slug)}/memory`)).content
+        : (await api(`${slugPath(R.active.slug)}/agents`)).content;
       const history = c.messages.map(m => ({ role: m.role, content: m.content }));
       const answer = await askModel([
-        { role: 'system', content: `你是科研协作助手。以下是项目 AGENTS.md 上下文；它包含原始记录索引，不能把模型建议当作已验证事实。请用中文清楚回答，区分证据、推测和待验证事项。\n\n${memory}` },
+        { role: 'system', content: `你是科研协作助手。以下是${R.useFullProjectMemory ? '完整项目记忆 Markdown' : '项目 AGENTS.md 上下文'}；它包含原始记录或索引，不能把模型建议当作已验证事实。请用中文清楚回答，区分证据、推测和待验证事项。\n\n${memory}` },
         ...history
       ]);
       c.messages.push({ role: 'assistant', content: answer, createdAt: iso() });

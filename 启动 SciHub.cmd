@@ -18,6 +18,14 @@ if not defined SCIHUB_PYTHON (
   exit /b 1
 )
 
+"%SCIHUB_PYTHON%" -c "import pypdf, docx, reportlab" >nul 2>nul
+if errorlevel 1 (
+  echo ERROR: Document features need pypdf, python-docx and reportlab.
+  echo Run: "%SCIHUB_PYTHON%" -m pip install pypdf python-docx reportlab
+  pause
+  exit /b 1
+)
+
 set "SCIHUB_URL=http://127.0.0.1:8770/"
 powershell.exe -NoProfile -Command "try { $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8770/api/health' -TimeoutSec 2; if ($h.service -eq 'SciHub') { exit 0 } } catch {}; exit 1" >nul 2>nul
 if not errorlevel 1 (
