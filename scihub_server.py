@@ -14,12 +14,10 @@ import base64
 import io
 import json
 import mimetypes
-import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
-import webbrowser
 import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -33,15 +31,20 @@ PROJECTS_ROOT = ROOT / "科研项目"
 HOST = "127.0.0.1"
 PORT = 8770
 MAX_BODY_SIZE = 24 * 1024 * 1024
+APP_VERSION = "2026.07.26"
 
 INDEX_FILE = "index.html"
 SLUG_RE = re.compile(r"^[\w一-鿿-]+$", re.UNICODE)
 CONVERSATION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+PLAN_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FRONT_MATTER_RE = re.compile(r"(?s)^---\r?\n(.*?)\r?\n---\r?\n?")
 META_LINE_RE = re.compile(r'^([A-Za-z_]+):\s*"?(.*?)"?$')
 MESSAGE_RE = re.compile(
     r"(?ms)^### (user|assistant) \| ([^\r\n]+)\r?\n(.*?)(?=^### (?:user|assistant) \||\Z)"
+)
+SUBEXPERIMENT_RE = re.compile(
+    r"(?ms)^### \[([A-Za-z0-9_-]+)\] ([^\r\n]+)\r?\n(.*?)(?=^### \[|\Z)"
 )
 
 AUTO_START = "<!-- AUTO-UPDATE:START -->"
@@ -58,6 +61,12 @@ STATIC_TYPES = {
     ".png": "image/png",
     ".ico": "image/x-icon",
 }
+
+
+class SciHubServer(ThreadingHTTPServer):
+    """拒绝重复监听同一端口，防止多个版本随机处理同一请求。"""
+
+    allow_reuse_address = False
 
 
 class ApiError(Exception):
@@ -223,6 +232,34 @@ def update_agents(project: dict) -> None:
     else:
         log_lines = ["- 暂无实验日志。"]
 
+    if recent_logs:
+        log_lines = []
+        for p in recent_logs:
+            doc = read_markdown_document(p)
+            date = meta_value(doc["meta"], "date", p.stem[:10])
+            plan_name = meta_value(doc["meta"], "plan_name")
+            plan_version = meta_value(doc["meta"], "plan_version")
+            subexperiment_name = meta_value(doc["meta"], "subexperiment_name")
+            relation = ""
+            if plan_name:
+                relation = f" · 方案：{plan_name}{(' · ' + plan_version) if plan_version else ''}"
+                if subexperiment_name:
+                    relation += f" · 子实验：{subexperiment_name}"
+            updated = datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            log_lines.append(f"- [{date}](实验日志/{p.name}){relation} · 最后更新 {updated}")
+
+    plans = list_plans(project)
+    if plans:
+        plan_lines = []
+        for plan in plans[:8]:
+            sub_count = len(plan["subexperiments"])
+            plan_lines.append(
+                f"- [{plan['name']} · {plan['version']}](实验方案/{plan['id']}.md)"
+                f" · {sub_count} 个子实验"
+            )
+    else:
+        plan_lines = ["- 暂无实验方案。"]
+
     if recent_conversations:
         conversation_lines = []
         for p in recent_conversations:
@@ -248,6 +285,10 @@ def update_agents(project: dict) -> None:
             "## 项目重要信息",
             "",
             meta_value(readme["meta"], "important_info", "尚未填写。"),
+            "",
+            "## 实验方案",
+            "",
+            *plan_lines,
             "",
             "## 最近实验日志",
             "",
@@ -281,19 +322,172 @@ def update_agents(project: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 实验方案
+# --------------------------------------------------------------------------- #
+def plans_dir(project: dict) -> Path:
+    return project["dir"] / "实验方案"
+
+
+def plan_path(project: dict, plan_id: str) -> Path:
+    if not plan_id or not PLAN_ID_RE.match(plan_id):
+        raise ApiError("实验方案标识无效。")
+    return plans_dir(project) / f"{plan_id}.md"
+
+
+def parse_subexperiments(content: str) -> list[dict]:
+    subexperiments = []
+    for match in SUBEXPERIMENT_RE.finditer(content):
+        subexperiments.append({
+            "id": match.group(1),
+            "name": match.group(2).strip(),
+            "description": match.group(3).strip(),
+        })
+    return subexperiments
+
+
+def read_plan(project: dict, plan_id: str) -> dict:
+    path = plan_path(project, plan_id)
+    doc = read_markdown_document(path)
+    if doc["meta"].get("kind") != "experiment_plan":
+        raise ApiError("实验方案文件无效。", HTTPStatus.NOT_FOUND)
+    return {
+        "id": plan_id,
+        "name": meta_value(doc["meta"], "name", plan_id),
+        "version": meta_value(doc["meta"], "version"),
+        "description": meta_value(doc["meta"], "description"),
+        "createdAt": meta_value(doc["meta"], "created_at"),
+        "updatedAt": meta_value(doc["meta"], "updated_at"),
+        "subexperiments": parse_subexperiments(doc["content"]),
+    }
+
+
+def list_plans(project: dict) -> list[dict]:
+    directory = plans_dir(project)
+    if not directory.is_dir():
+        return []
+    items = []
+    for path in directory.glob("*.md"):
+        try:
+            items.append(read_plan(project, path.stem))
+        except ApiError:
+            continue
+    return sorted(items, key=lambda item: item.get("updatedAt", ""), reverse=True)
+
+
+def normalise_subexperiments(value: Any) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            continue
+        name = one_line(item.get("name"))
+        if not name:
+            continue
+        result.append({
+            "id": f"sub-{index}",
+            "name": name,
+            "description": str(item.get("description", "")).strip(),
+        })
+    return result
+
+
+def write_plan(project: dict, payload: dict) -> dict:
+    name = one_line(payload.get("name"))
+    version = one_line(payload.get("version"))
+    if not name:
+        raise ApiError("请填写实验方案名称。")
+    if not version:
+        raise ApiError("请填写方案版本，例如 V1 或 V2。")
+    plan_id = "plan-" + datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+    now = now_iso()
+    description = str(payload.get("description", "")).strip()
+    subexperiments = normalise_subexperiments(payload.get("subexperiments"))
+    meta = {
+        "kind": "experiment_plan",
+        "id": plan_id,
+        "name": name,
+        "version": version,
+        "description": description,
+        "created_at": now,
+        "updated_at": now,
+    }
+    sections = [f"# {name} · {version}", f"## 方案说明\n\n{description or '尚未填写。'}", "## 子实验"]
+    if subexperiments:
+        sections.extend(
+            f"### [{item['id']}] {item['name']}\n{item['description'] or '尚未填写。'}"
+            for item in subexperiments
+        )
+    else:
+        sections.append("尚未添加子实验。")
+    write_markdown(plan_path(project, plan_id), front_matter(meta) + "\n\n".join(sections) + "\n")
+    return read_plan(project, plan_id)
+
+
+def resolve_plan_association(project: dict, payload: dict) -> dict:
+    plan_id = one_line(payload.get("planId"))
+    if not plan_id:
+        return {"plan_id": "", "plan_name": "", "plan_version": "", "subexperiment_id": "", "subexperiment_name": ""}
+    plan = read_plan(project, plan_id)
+    subexperiment_id = one_line(payload.get("subexperimentId"))
+    subexperiment = next((item for item in plan["subexperiments"] if item["id"] == subexperiment_id), None)
+    if subexperiment_id and not subexperiment:
+        raise ApiError("未找到所选实验方案中的子实验。")
+    return {
+        "plan_id": plan["id"],
+        "plan_name": plan["name"],
+        "plan_version": plan["version"],
+        "subexperiment_id": subexperiment["id"] if subexperiment else "",
+        "subexperiment_name": subexperiment["name"] if subexperiment else "",
+    }
+
+
+def association_from_meta(meta: dict, fallback: Optional[dict] = None) -> dict:
+    """读取日志关联；对于尚未保存的新日志保留前端所选方案。"""
+    fallback = fallback or {}
+    return {
+        "plan_id": meta_value(meta, "plan_id", fallback.get("plan_id", "")),
+        "plan_name": meta_value(meta, "plan_name", fallback.get("plan_name", "")),
+        "plan_version": meta_value(meta, "plan_version", fallback.get("plan_version", "")),
+        "subexperiment_id": meta_value(meta, "subexperiment_id", fallback.get("subexperiment_id", "")),
+        "subexperiment_name": meta_value(meta, "subexperiment_name", fallback.get("subexperiment_name", "")),
+    }
+
+
+def association_for_api(association: dict) -> dict:
+    return {
+        "planId": association.get("plan_id", ""),
+        "planName": association.get("plan_name", ""),
+        "planVersion": association.get("plan_version", ""),
+        "subexperimentId": association.get("subexperiment_id", ""),
+        "subexperimentName": association.get("subexperiment_name", ""),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # 实验日志
 # --------------------------------------------------------------------------- #
-def log_path(project: dict, date: str) -> Path:
+def log_path(project: dict, date: str, association: Optional[dict] = None) -> Path:
     if not DATE_RE.match(date):
         raise ApiError("实验日期无效。")
-    return project["dir"] / "实验日志" / f"{date}.md"
+    association = association or {}
+    plan_id = one_line(association.get("plan_id"))
+    subexperiment_id = one_line(association.get("subexperiment_id"))
+    if not plan_id:
+        return project["dir"] / "实验日志" / f"{date}.md"
+    if not PLAN_ID_RE.match(plan_id):
+        raise ApiError("实验方案标识无效。")
+    if subexperiment_id and not PLAN_ID_RE.match(subexperiment_id):
+        raise ApiError("子实验标识无效。")
+    suffix = f"--{plan_id}" + (f"--{subexperiment_id}" if subexperiment_id else "")
+    return project["dir"] / "实验日志" / f"{date}{suffix}.md"
 
 
-def read_log(project: dict, date: str) -> dict:
-    doc = read_markdown_document(log_path(project, date))
+def read_log(project: dict, date: str, association: Optional[dict] = None) -> dict:
+    doc = read_markdown_document(log_path(project, date, association))
     image_section = get_section(doc["content"], "导入文档图片信息")
     images = [line[2:].strip() for line in image_section.splitlines() if line.startswith("- ")]
-    return {
+    result = {
         "date": date,
         "source": get_section(doc["content"], "原始输入") or get_section(doc["content"], "原始实验记录"),
         "phenomena": get_section(doc["content"], "实验现象"),
@@ -301,11 +495,19 @@ def read_log(project: dict, date: str) -> dict:
         "images": images,
         "updatedAt": meta_value(doc["meta"], "updated_at"),
     }
+    result.update(association_for_api(association_from_meta(doc["meta"], association)))
+    return result
 
 
-def write_log(project: dict, date: str, payload: dict) -> None:
+def write_log(project: dict, date: str, payload: dict) -> dict:
     now = now_iso()
-    meta = {"kind": "experiment_log", "date": date, "updated_at": now}
+    association = resolve_plan_association(project, payload)
+    meta = {
+        "kind": "experiment_log",
+        "date": date,
+        "updated_at": now,
+        **association,
+    }
     source = str(payload.get("source", ""))
     phenomena = str(payload.get("phenomena", ""))
     record = str(payload.get("record", ""))
@@ -313,6 +515,13 @@ def write_log(project: dict, date: str, payload: dict) -> None:
     images = [one_line(item) for item in raw_images if one_line(item)][:100] if isinstance(raw_images, list) else []
     # 旧版本的“原始实验记录”仍可读取；新日志统一使用单输入框对应的“原始输入”。
     sections = [f"# {date} 实验日志"]
+    if association["plan_id"]:
+        association_lines = [
+            f"- 实验方案：{association['plan_name']} · {association['plan_version']}"
+        ]
+        if association["subexperiment_id"]:
+            association_lines.append(f"- 子实验：{association['subexperiment_name']}")
+        sections.append("## 关联实验方案\n\n" + "\n".join(association_lines))
     if source.strip():
         sections.append(f"## 原始输入\n\n{source}")
     sections.extend([
@@ -322,8 +531,9 @@ def write_log(project: dict, date: str, payload: dict) -> None:
     if images:
         sections.append("## 导入文档图片信息\n\n" + "\n".join(f"- {item}" for item in images))
     body = "\n\n".join(sections) + "\n"
-    write_markdown(log_path(project, date), front_matter(meta) + body)
+    write_markdown(log_path(project, date, association), front_matter(meta) + body)
     update_agents(project)
+    return association
 
 
 def list_logs(project: dict) -> list:
@@ -333,7 +543,14 @@ def list_logs(project: dict) -> list:
     items = []
     for p in sorted(directory.glob("*.md"), key=lambda x: x.name, reverse=True):
         doc = read_markdown_document(p)
-        items.append({"date": p.stem, "updatedAt": meta_value(doc["meta"], "updated_at")})
+        date = meta_value(doc["meta"], "date", p.stem[:10])
+        item = {
+            "id": p.stem,
+            "date": date,
+            "updatedAt": meta_value(doc["meta"], "updated_at"),
+        }
+        item.update(association_for_api(association_from_meta(doc["meta"])))
+        items.append(item)
     return items
 
 
@@ -517,6 +734,11 @@ class SciHubHandler(BaseHTTPRequestHandler):
         path = urllib.parse.unquote(self.path.split("?", 1)[0])
         return [s for s in path.strip("/").split("/") if s]
 
+    def _query(self) -> dict[str, str]:
+        parsed = urllib.parse.urlparse(self.path)
+        values = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        return {key: one_line(items[-1]) for key, items in values.items() if items}
+
     # --- 路由 --- #
     def do_OPTIONS(self):
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -528,6 +750,9 @@ class SciHubHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             segments = self._segments()
+            if segments == ["api", "health"]:
+                self._send_json(HTTPStatus.OK, {"service": "SciHub", "version": APP_VERSION})
+                return
             if segments[:2] == ["api", "projects"]:
                 self._handle_projects(segments)
                 return
@@ -635,6 +860,10 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"content": content})
             return
 
+        if len(segments) >= 4 and segments[3] == "plans":
+            self._handle_plans(project, segments)
+            return
+
         if len(segments) >= 4 and segments[3] == "logs":
             self._handle_logs(project, segments)
             return
@@ -645,6 +874,32 @@ class SciHubHandler(BaseHTTPRequestHandler):
 
         raise ApiError("找不到该接口。", HTTPStatus.NOT_FOUND)
 
+    def _handle_plans(self, project: dict, segments: list):
+        method = self.command
+        if method == "GET" and len(segments) == 4:
+            self._send_json(HTTPStatus.OK, {"plans": list_plans(project)})
+            return
+        if method == "POST" and len(segments) == 4:
+            plan = write_plan(project, self._read_json())
+            update_agents(project)
+            self._send_json(HTTPStatus.CREATED, {"plan": plan})
+            return
+        if method == "GET" and len(segments) == 5:
+            self._send_json(HTTPStatus.OK, {"plan": read_plan(project, segments[4])})
+            return
+        raise ApiError("找不到实验方案。", HTTPStatus.NOT_FOUND)
+
+    def _log_association_from_query(self, project: dict) -> dict:
+        query = self._query()
+        plan_id = one_line(query.get("planId"))
+        subexperiment_id = one_line(query.get("subexperimentId"))
+        if subexperiment_id and not plan_id:
+            raise ApiError("请先选择实验方案，再选择子实验。")
+        return resolve_plan_association(
+            project,
+            {"planId": plan_id, "subexperimentId": subexperiment_id},
+        )
+
     def _handle_logs(self, project: dict, segments: list):
         method = self.command
         if method == "GET" and len(segments) == 4:
@@ -652,7 +907,8 @@ class SciHubHandler(BaseHTTPRequestHandler):
             return
         if method == "GET" and len(segments) == 6 and segments[5] == "export":
             date = segments[4]
-            path = log_path(project, date)
+            association = self._log_association_from_query(project)
+            path = log_path(project, date, association)
             if not path.is_file():
                 raise ApiError("没有可导出的实验日志。", HTTPStatus.NOT_FOUND)
             filename = f"{date}-实验日志.md"
@@ -674,12 +930,13 @@ class SciHubHandler(BaseHTTPRequestHandler):
             raise ApiError("找不到实验日志。", HTTPStatus.NOT_FOUND)
         date = segments[4]
         if method == "GET":
-            self._send_json(HTTPStatus.OK, {"log": read_log(project, date)})
+            association = self._log_association_from_query(project)
+            self._send_json(HTTPStatus.OK, {"log": read_log(project, date, association)})
             return
         if method == "POST":
             payload = self._read_json()
-            write_log(project, date, payload)
-            self._send_json(HTTPStatus.OK, {"log": read_log(project, date)})
+            association = write_log(project, date, payload)
+            self._send_json(HTTPStatus.OK, {"log": read_log(project, date, association)})
             return
         raise ApiError("不支持的请求方式。", HTTPStatus.METHOD_NOT_ALLOWED)
 
@@ -734,17 +991,16 @@ class SciHubHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    print("正在初始化 SciHub 本地服务…", flush=True)
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer((HOST, PORT), SciHubHandler)
+    print("正在监听本地端口…", flush=True)
+    server = SciHubServer((HOST, PORT), SciHubHandler)
     url = f"http://{HOST}:{PORT}/{INDEX_FILE}"
     print(f"SciHub 本地服务已启动：{url}")
     print(f"项目文件夹：{PROJECTS_ROOT}")
     print("请保持此窗口开启；按 Ctrl+C 停止服务。")
-    if not os.environ.get("SCIHUB_NO_BROWSER"):
-        try:
-            webbrowser.open(url)
-        except Exception:  # noqa: BLE001
-            pass
+    # 不在服务进程中唤起浏览器：某些 Windows 默认浏览器配置会阻塞该调用，
+    # 进而造成界面已打开但本地 API 尚未可用的假象。
     try:
         server.serve_forever()
     except KeyboardInterrupt:

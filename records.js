@@ -50,8 +50,9 @@
     active: null,        // 当前项目 summary
     tab: 'logs',
     date: TODAY,
-    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '' },
+    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' },
     logs: [],
+    plans: [],
     conversations: [],
     conversation: null,
     agents: '',
@@ -194,17 +195,19 @@
   async function loadProject(slug) {
     R.active = R.projects.find(p => p.slug === slug) || null;
     R.date = TODAY;
-    R.log = { source: '', phenomena: '', record: '', images: [], formattedSource: '' };
+    R.log = { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' };
     R.autoPolish = true;
     R.conversation = null;
     if (!R.active) return;
     try {
-      const [logs, conversations] = await Promise.all([
+      const [logs, conversations, plans] = await Promise.all([
         api(`${slugPath(slug)}/logs`),
-        api(`${slugPath(slug)}/conversations`)
+        api(`${slugPath(slug)}/conversations`),
+        api(`${slugPath(slug)}/plans`)
       ]);
       R.logs = logs.logs || [];
       R.conversations = conversations.conversations || [];
+      R.plans = plans.plans || [];
       await loadAgents();
     } catch (e) { toast(`打开项目失败：${e.message}`); }
   }
@@ -219,7 +222,7 @@
     loadProject(slug).then(() => {
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
-      const v = ['logs', 'records', 'memory'].includes(currentView()) ? currentView() : 'logs';
+      const v = ['plans', 'logs', 'records', 'memory'].includes(currentView()) ? currentView() : 'logs';
       window.switchView(v);
       renderActiveView();
     });
@@ -256,17 +259,102 @@
     return false;
   }
 
+  // ---------------------------------------------------------- 视图：方案 --
+  function renderPlansView() {
+    if (!requireProject('plansProjectTitle', 'plansBody')) return;
+    $('plansProjectTitle').textContent = R.active.name;
+    if (!R.plans.length) {
+      $('plansBody').innerHTML = `<div class="empty-state plans-empty"><span>◇</span><strong>还没有实验方案</strong><p>先创建方案版本，再录入它包含的子实验。之后每条实验日志都可以关联到方案或某个子实验。</p><button id="plansEmptyCreate" class="primary-button">+ 新建实验方案</button></div>`;
+      $('plansEmptyCreate').onclick = openPlanDialog;
+      return;
+    }
+    const cards = R.plans.map(plan => {
+      const relatedLogs = R.logs.filter(log => log.planId === plan.id);
+      const subexperiments = plan.subexperiments?.length
+        ? plan.subexperiments.map(item => {
+          const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}</div><div><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button></div></li>`;
+        }).join('')
+        : '<li class="plan-subexperiment-empty">尚未设置子实验；可先将日志关联到整个方案。</li>';
+      return `<article class="plan-card">
+        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span></div>
+        <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
+        <div class="plan-subexperiments"><div class="plan-section-label">子实验</div><ul>${subexperiments}</ul></div>
+        <div class="plan-card-foot"><span>保存为 Markdown · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
+      </article>`;
+    }).join('');
+    $('plansBody').innerHTML = `<div class="plans-grid">${cards}</div>`;
+    $('plansBody').querySelectorAll('[data-start-log]').forEach(button => {
+      button.onclick = () => startPlanLog(button.dataset.startLog, button.dataset.startSubexperiment || '');
+    });
+  }
+
+  function startPlanLog(planId, subexperimentId = '') {
+    R.date = TODAY;
+    window.switchView('logs');
+    loadLog(TODAY, { planId, subexperimentId });
+  }
+
+  function openPlanDialog() {
+    if (!R.active) { toast('请先选择或新建一个项目'); return; }
+    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本与子实验会写入独立的 Markdown 文件。日志关联后，可清楚区分方案 V1、V2 及各自子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="planForm"><div class="modal-body"><div class="form-grid">
+        <label class="form-field"><span>方案名称</span><input id="planName" required placeholder="例如：蛋白纯化条件筛选" /></label>
+        <label class="form-field"><span>方案版本</span><input id="planVersion" required placeholder="例如：V1" /></label>
+        <label class="form-field full"><span>方案说明（可选）</span><textarea id="planDescription" placeholder="记录方案目的、变量范围、判定标准等。"></textarea></label>
+        <label class="form-field full"><span>子实验（可选）</span><textarea id="planSubexperiments" placeholder="每行一个；可用“名称 | 说明”格式。&#10;例如：不同 pH 条件 | pH 6.5、7.0、7.5 的对照实验&#10;例如：重复验证 | 对 V1 最优条件进行三次重复"></textarea><small class="field-note">创建后子实验会成为日志的可选关联项。</small></label>
+      </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建方案</button></div></form>`, () => {
+      $('planForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('planForm').querySelector('[type=submit]');
+        const subexperiments = $('planSubexperiments').value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
+          const [name, ...rest] = line.split('|');
+          return { name: name.trim(), description: rest.join('|').trim() };
+        }).filter(item => item.name);
+        button.disabled = true;
+        button.textContent = '创建中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans`, {
+            method: 'POST',
+            body: JSON.stringify({
+              name: $('planName').value.trim(),
+              version: $('planVersion').value.trim(),
+              description: $('planDescription').value.trim(),
+              subexperiments
+            })
+          });
+          R.plans = [response.plan, ...R.plans];
+          closeModal();
+          renderPlansView();
+          toast('实验方案已创建；现在可以在日志中关联它或其子实验');
+        } catch (error) {
+          toast(`创建实验方案失败：${error.message}`);
+        } finally {
+          const current = $('planForm')?.querySelector('[type=submit]');
+          if (current) { current.disabled = false; current.textContent = '创建方案'; }
+        }
+      });
+    });
+  }
+
   // ---------------------------------------------------------- 视图：日志 --
   function normalizeLog(log = {}) {
     const source = typeof log.source === 'string' ? log.source : '';
     const phenomena = typeof log.phenomena === 'string' ? log.phenomena : '';
     const record = typeof log.record === 'string' ? log.record : '';
+    const planId = typeof log.planId === 'string' ? log.planId : '';
+    const subexperimentId = typeof log.subexperimentId === 'string' ? log.subexperimentId : '';
     return {
       ...log,
       source,
       phenomena,
       record,
       images: Array.isArray(log.images) ? log.images : [],
+      planId,
+      planName: typeof log.planName === 'string' ? log.planName : '',
+      planVersion: typeof log.planVersion === 'string' ? log.planVersion : '',
+      subexperimentId,
+      subexperimentName: typeof log.subexperimentName === 'string' ? log.subexperimentName : '',
       formattedSource: source && (phenomena || record) ? source : ''
     };
   }
@@ -279,6 +367,26 @@
     ].filter(Boolean).join('\n\n');
   }
 
+  function planForLog(log = R.log) {
+    return R.plans.find(plan => plan.id === log.planId) || null;
+  }
+
+  function logQuery(log = R.log) {
+    const params = new URLSearchParams();
+    if (log.planId) params.set('planId', log.planId);
+    if (log.subexperimentId) params.set('subexperimentId', log.subexperimentId);
+    const query = params.toString();
+    return query ? `?${query}` : '';
+  }
+
+  function logAssociationText(log = R.log) {
+    if (!log.planId) return '未关联方案';
+    const plan = planForLog(log);
+    const planText = plan ? `${plan.name} · ${plan.version}` : (log.planName || '已关联实验方案');
+    const subexperiment = plan?.subexperiments?.find(item => item.id === log.subexperimentId);
+    return subexperiment ? `${planText} · ${subexperiment.name}` : planText;
+  }
+
   function renderLogsView() {
     if (!requireProject('logsProjectTitle', 'logsBody')) return;
     $('logsProjectTitle').textContent = R.active.name;
@@ -286,11 +394,20 @@
     const textDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${R.date}T12:00:00`));
     const source = visibleLogSource(l);
     const hasContent = Boolean(source.trim());
+    const selectedPlan = planForLog(l);
+    const planOptions = ['<option value="">不关联实验方案</option>'].concat(
+      R.plans.map(plan => `<option value="${esc(plan.id)}" ${plan.id === l.planId ? 'selected' : ''}>${esc(plan.name)} · ${esc(plan.version)}</option>`)
+    ).join('');
+    const subexperimentOptions = ['<option value="">关联整个方案（不指定子实验）</option>'].concat(
+      (selectedPlan?.subexperiments || []).map(item => `<option value="${esc(item.id)}" ${item.id === l.subexperimentId ? 'selected' : ''}>${esc(item.name)}</option>`)
+    ).join('');
     $('logsBody').innerHTML = `
       <div class="record-panel">
         <div class="record-meta-row">
           <label class="record-field"><span>实验日期</span><input id="logDate" type="date" value="${R.date}" /></label>
-          <p class="record-note">${textDate}<br>保存后写入 <b>实验日志/${R.date}.md</b>，并更新 AGENTS.md。</p>
+          <label class="record-field log-association-field"><span>关联实验方案</span><select id="logPlan">${planOptions}</select></label>
+          <label class="record-field log-association-field"><span>关联子实验</span><select id="logSubexperiment" ${selectedPlan ? '' : 'disabled'}>${subexperimentOptions}</select></label>
+          <p class="record-note">${textDate}<br><b>${esc(logAssociationText(l))}</b>；保存后会写入对应 Markdown，并更新 AGENTS.md。</p>
         </div>
         <div class="record-field"><div class="record-field-head"><span>实验日志内容</span><small id="logSourceCount">${source.length} 字</small></div>
           <textarea id="logSource" class="record-textarea log-source-input" placeholder="输入实验过程、现象、数据、条件、结论与后续计划；保存时可由 AI 自动整理为实验现象、实验记录等板块。">${esc(source)}</textarea>
@@ -306,6 +423,14 @@
         </div>
       </div>`;
     $('logDate').onchange = e => loadLog(e.target.value);
+    $('logPlan').onchange = e => {
+      const next = { ...R.log, planId: e.target.value, subexperimentId: '' };
+      loadLog(R.date, next);
+    };
+    $('logSubexperiment').onchange = e => {
+      const next = { ...R.log, subexperimentId: e.target.value };
+      loadLog(R.date, next);
+    };
     $('logSource').oninput = e => {
       R.log.source = e.target.value;
       R.log.formattedSource = '';
@@ -318,9 +443,13 @@
     $('exportLogBtn').onclick = exportLog;
   }
 
-  async function loadLog(date) {
+  async function loadLog(date, association = R.log) {
     R.date = date;
-    try { R.log = normalizeLog((await api(`${slugPath(R.active.slug)}/logs/${date}`)).log); renderLogsView(); }
+    const selected = {
+      planId: association.planId || '',
+      subexperimentId: association.subexperimentId || ''
+    };
+    try { R.log = normalizeLog((await api(`${slugPath(R.active.slug)}/logs/${date}${logQuery(selected)}`)).log); renderLogsView(); }
     catch (e) { toast(e.message); }
   }
 
@@ -345,6 +474,7 @@
       }
       const data = await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(R.log) });
       R.log = normalizeLog(data.log);
+      R.logs = (await api(`${slugPath(R.active.slug)}/logs`)).logs || [];
       await refreshProjects(true);
       if (announce) toast(autoPolish ? 'AI 已整理并保存实验日志与 AGENTS.md' : '实验日志与 AGENTS.md 已保存');
       return true;
@@ -405,7 +535,15 @@
       }
       const source = (imported.source || '').trim();
       if (!source) throw new Error('文档中没有可导入的文本内容。');
-      R.log = { source, phenomena: '', record: '', images: imported.images || [], formattedSource: '' };
+      R.log = {
+        source,
+        phenomena: '',
+        record: '',
+        images: imported.images || [],
+        formattedSource: '',
+        planId: R.log.planId || '',
+        subexperimentId: R.log.subexperimentId || ''
+      };
       closeModal();
       renderLogsView();
       await saveLog(true);
@@ -417,7 +555,7 @@
     if (!R.log.source.trim()) { toast('请先输入或导入实验日志内容'); return; }
     if (!await saveLog(false)) return;
     const link = document.createElement('a');
-    link.href = `${slugPath(R.active.slug)}/logs/${R.date}/export`;
+    link.href = `${slugPath(R.active.slug)}/logs/${R.date}/export${logQuery(R.log)}`;
     link.download = `${R.date}-实验日志.md`;
     document.body.appendChild(link);
     link.click();
@@ -690,13 +828,15 @@
   // ------------------------------------------------------------------ 派发 --
   function renderActiveView() {
     const v = currentView();
-    if (v === 'logs') renderLogsView();
+    if (v === 'plans') renderPlansView();
+    else if (v === 'logs') renderLogsView();
     else if (v === 'records') renderRecordsView();
     else if (v === 'memory') renderMemoryView();
   }
 
   function onViewActivated(view) {
-    if (view === 'logs') renderLogsView();
+    if (view === 'plans') renderPlansView();
+    else if (view === 'logs') renderLogsView();
     else if (view === 'records') renderRecordsView();
     else if (view === 'memory') renderMemoryView();
   }
@@ -704,6 +844,7 @@
   // 事件绑定
   document.addEventListener('DOMContentLoaded', () => {
     $('apiSettingsButton')?.addEventListener('click', openApiDialog);
+    $('newPlanButton')?.addEventListener('click', openPlanDialog);
     $('viewAgentsButton')?.addEventListener('click', showAgents);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
     $('recordImportButton')?.addEventListener('click', openRecordImport);

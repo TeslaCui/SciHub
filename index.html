@@ -6,6 +6,10 @@
     <meta name="theme-color" content="#f6f5ef" />
     <title>SciHub · 科研记录工作台</title>
     <link rel="stylesheet" href="styles.css" />
+    <style>
+      .record-field select{border:1px solid #d8dfd6;border-radius:6px;padding:8px 10px;background:#fff;color:var(--ink);font-size:12px}.record-field select:disabled{background:#f2f4ef;color:#98a29b}.log-association-field{min-width:175px}
+      .plans-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px;max-width:1120px}.plan-card{display:grid;gap:15px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:20px;box-shadow:var(--shadow)}.plan-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.plan-card h2{margin:7px 0 0;font-size:19px}.plan-version{display:inline-block;background:var(--green-soft);color:var(--green-deep);border-radius:99px;padding:4px 8px;font-size:10px;font-weight:700}.plan-log-count{font-size:10px;color:var(--muted);white-space:nowrap;padding-top:4px}.plan-description{margin:0;color:#59675f;font-size:12px;line-height:1.75;white-space:pre-wrap}.plan-subexperiments{border-top:1px solid var(--line);padding-top:13px}.plan-section-label{font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px}.plan-subexperiments ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}.plan-subexperiments li{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;background:#f7f9f5;border-radius:6px;padding:9px 10px;font-size:11px}.plan-subexperiments li>div:first-child{display:grid;gap:3px;min-width:0}.plan-subexperiments b{font-size:12px}.plan-subexperiments small{color:var(--muted);line-height:1.5}.plan-subexperiments li>div:last-child{display:flex;gap:8px;align-items:center;white-space:nowrap}.plan-subexperiments li span{font-size:10px;color:var(--muted)}.plan-subexperiments .plan-subexperiment-empty{display:block;color:var(--muted);font-size:11px}.plan-card-foot{border-top:1px solid var(--line);padding-top:14px;display:flex;justify-content:space-between;gap:12px;align-items:center;color:var(--muted);font-size:10px}.plans-empty{max-width:720px}.plans-empty p{font-size:12px;line-height:1.7;margin:0 0 16px}
+    </style>
   </head>
   <body>
     <div class="app-shell">
@@ -18,6 +22,7 @@
         <div class="workspace-switcher"><span class="workspace-dot"></span><span>本地 Markdown 工作区</span></div>
 
         <nav class="nav-list">
+          <button class="nav-item" data-view="plans"><span>◇</span>实验方案</button>
           <button class="nav-item active" data-view="logs"><span>◒</span>实验日志</button>
           <button class="nav-item" data-view="records"><span>◌</span>对话记录</button>
           <button class="nav-item" data-view="memory"><span>≡</span>项目记忆</button>
@@ -36,13 +41,18 @@
       <main class="main-content">
         <header class="topbar">
           <button class="menu-button" id="menuButton" aria-label="打开导航">☰</button>
-          <div class="topbar-title"><strong>科研记录</strong><span>实验日志、对话与项目记忆</span></div>
+          <div class="topbar-title"><strong>科研记录</strong><span>实验方案、日志、对话与项目记忆</span></div>
           <div class="topbar-actions"><button class="secondary-button" id="apiSettingsButton" title="配置 AI 接口">AI 设置</button><button class="primary-button" id="topNewProjectButton"><span>+</span> 新建项目</button></div>
         </header>
 
         <section id="logsView" class="view active-view">
-          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>每天的记录保存为 <b>实验日志/日期.md</b>，并实时更新项目 AGENTS.md。</p></div><button class="secondary-button" id="viewAgentsButton">查看 AGENTS.md</button></div>
+          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>日志保存为项目中的 Markdown，并实时更新项目 AGENTS.md。</p></div><button class="secondary-button" id="viewAgentsButton">查看 AGENTS.md</button></div>
           <div id="logsBody"></div>
+        </section>
+
+        <section id="plansView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">实验方案</p><h1 id="plansProjectTitle">选择一个研究项目</h1><p>方案、版本与子实验均保存到项目的 <b>实验方案/</b> 文件夹；日志可精确关联到其中一项。</p></div><button class="primary-button" id="newPlanButton"><span>+</span> 新建实验方案</button></div>
+          <div id="plansBody"></div>
         </section>
 
         <section id="recordsView" class="view">
