@@ -260,6 +260,11 @@
   }
 
   // ---------------------------------------------------------- 视图：方案 --
+  function planEntriesHtml(entries = []) {
+    if (!entries.length) return '<span class="plan-entry-empty">暂无附加文件或子文件夹</span>';
+    return `<div class="plan-entry-list">${entries.map(entry => `<span class="plan-entry"><i>${entry.kind === 'folder' ? '▣' : '▤'}</i>${esc(entry.name)}</span>`).join('')}</div>`;
+  }
+
   function renderPlansView() {
     if (!requireProject('plansProjectTitle', 'plansBody')) return;
     $('plansProjectTitle').textContent = R.active.name;
@@ -273,19 +278,26 @@
       const subexperiments = plan.subexperiments?.length
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}</div><div><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button></div></li>`;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}" data-entry-subexperiment="${esc(item.id)}">+ 文件夹</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty">尚未设置子实验；可先将日志关联到整个方案。</li>';
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
+        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions"><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 新增关联子实验</button><button class="text-button" data-add-entry="file" data-entry-plan="${esc(plan.id)}">+ 新增 Markdown 文件</button><button class="text-button" data-add-entry="folder" data-entry-plan="${esc(plan.id)}">+ 新增子文件夹</button></div></div>
         <div class="plan-subexperiments"><div class="plan-section-label">子实验</div><ul>${subexperiments}</ul></div>
-        <div class="plan-card-foot"><span>保存为 Markdown · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
+        <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
     }).join('');
     $('plansBody').innerHTML = `<div class="plans-grid">${cards}</div>`;
     $('plansBody').querySelectorAll('[data-start-log]').forEach(button => {
       button.onclick = () => startPlanLog(button.dataset.startLog, button.dataset.startSubexperiment || '');
+    });
+    $('plansBody').querySelectorAll('[data-add-entry]').forEach(button => {
+      button.onclick = () => openPlanEntryDialog(button.dataset.entryPlan, button.dataset.entrySubexperiment || '', button.dataset.addEntry);
+    });
+    $('plansBody').querySelectorAll('[data-add-subexperiment]').forEach(button => {
+      button.onclick = () => openSubexperimentDialog(button.dataset.addSubexperiment);
     });
   }
 
@@ -295,9 +307,78 @@
     loadLog(TODAY, { planId, subexperimentId });
   }
 
+  function openPlanEntryDialog(planId, subexperimentId, kind) {
+    const label = kind === 'folder' ? '子文件夹' : 'Markdown 文件';
+    openModal(`<div class="modal-header"><div><h2>新增${label}</h2><p>文件会直接创建在当前方案或子实验文件夹中，并随“导出整个项目”一同保留。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="planEntryForm"><div class="modal-body"><div class="form-grid">
+        <label class="form-field full"><span>${label}名称</span><input id="planEntryName" required placeholder="例如：结果汇总${kind === 'file' ? '.md（可省略）' : ''}" /></label>
+        ${kind === 'file' ? '<label class="form-field full"><span>文件内容（可选）</span><textarea id="planEntryContent" placeholder="可直接写入 Markdown 内容。"></textarea></label>' : ''}
+      </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建${label}</button></div></form>`, () => {
+      $('planEntryForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('planEntryForm').querySelector('[type=submit]');
+        button.disabled = true;
+        button.textContent = '创建中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/entries`, {
+            method: 'POST',
+            body: JSON.stringify({
+              kind,
+              name: $('planEntryName').value.trim(),
+              content: $('planEntryContent')?.value.trim() || '',
+              subexperimentId
+            })
+          });
+          R.plans = R.plans.map(plan => plan.id === response.plan.id ? response.plan : plan);
+          closeModal();
+          renderPlansView();
+          toast(`${label}已创建`);
+        } catch (error) {
+          toast(`创建${label}失败：${error.message}`);
+        } finally {
+          const current = $('planEntryForm')?.querySelector('[type=submit]');
+          if (current) { current.disabled = false; current.textContent = `创建${label}`; }
+        }
+      });
+    });
+  }
+
+  function openSubexperimentDialog(planId) {
+    openModal(`<div class="modal-header"><div><h2>新增关联子实验</h2><p>将直接创建为 V1 下的子文件夹；之后可在日志页选择它，使日志保存到该文件夹中。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="subexperimentForm"><div class="modal-body"><div class="form-grid">
+        <label class="form-field full"><span>子实验名称</span><input id="subexperimentName" required placeholder="例如：不同 pH 条件" /></label>
+        <label class="form-field full"><span>说明（可选）</span><textarea id="subexperimentDescription" placeholder="记录变量、样品或目的。"></textarea></label>
+      </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建子实验</button></div></form>`, () => {
+      $('subexperimentForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('subexperimentForm').querySelector('[type=submit]');
+        button.disabled = true;
+        button.textContent = '创建中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/subexperiments`, {
+            method: 'POST',
+            body: JSON.stringify({
+              name: $('subexperimentName').value.trim(),
+              description: $('subexperimentDescription').value.trim()
+            })
+          });
+          R.plans = R.plans.map(plan => plan.id === response.plan.id ? response.plan : plan);
+          closeModal();
+          renderPlansView();
+          toast('子实验文件夹已创建，可直接关联实验日志');
+        } catch (error) {
+          toast(`创建子实验失败：${error.message}`);
+        } finally {
+          const current = $('subexperimentForm')?.querySelector('[type=submit]');
+          if (current) { current.disabled = false; current.textContent = '创建子实验'; }
+        }
+      });
+    });
+  }
+
   function openPlanDialog() {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
-    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本与子实验会写入独立的 Markdown 文件。日志关联后，可清楚区分方案 V1、V2 及各自子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
+    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。日志关联后，可清楚区分方案 V1、V2 及各自子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="planForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field"><span>方案名称</span><input id="planName" required placeholder="例如：蛋白纯化条件筛选" /></label>
         <label class="form-field"><span>方案版本</span><input id="planVersion" required placeholder="例如：V1" /></label>
@@ -561,6 +642,17 @@
     link.click();
     link.remove();
     toast('已导出 Markdown 实验日志');
+  }
+
+  function exportProject() {
+    if (!R.active) { toast('请先选择项目'); return; }
+    const link = document.createElement('a');
+    link.href = `${slugPath(R.active.slug)}/export`;
+    link.download = `${R.active.name}-项目完整导出.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast('正在导出整个项目 Markdown（保留目录层级）');
   }
 
   // ------------------------------------------------------- 视图：对话记录 --
@@ -844,6 +936,7 @@
   // 事件绑定
   document.addEventListener('DOMContentLoaded', () => {
     $('apiSettingsButton')?.addEventListener('click', openApiDialog);
+    $('exportProjectButton')?.addEventListener('click', exportProject);
     $('newPlanButton')?.addEventListener('click', openPlanDialog);
     $('viewAgentsButton')?.addEventListener('click', showAgents);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
