@@ -49,6 +49,7 @@
     document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
     document.getElementById('addProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
     document.getElementById('topNewProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
+    document.getElementById('homeLogoButton')?.addEventListener('click', () => switchView('home'));
     document.getElementById('menuButton')?.addEventListener('click', () => document.querySelector('.sidebar')?.classList.toggle('open'));
     let sidebarCollapsed = false;
     try { sidebarCollapsed = localStorage.getItem(SIDEBAR_STATE_KEY) === '1'; } catch { /* 使用默认展开 */ }
