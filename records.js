@@ -82,8 +82,7 @@
     return 'openai';
   }
 
-  function settingsForUse() {
-    const stored = readSettings();
+  function normalizeSettings(stored = {}) {
     const provider = providerFor(stored);
     return {
       ...stored,
@@ -94,12 +93,14 @@
     };
   }
 
+  function settingsForUse() { return normalizeSettings(readSettings()); }
+
   function geminiEndpoint(settings) {
     return settings.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
   }
 
-  async function askModel(messages) {
-    const settings = settingsForUse();
+  async function askModel(messages, draftSettings = null) {
+    const settings = draftSettings ? normalizeSettings(draftSettings) : settingsForUse();
     const key = settings.key || R.sessionKey;
     if (!settings.model || !key) throw new Error('请先在「AI 设置」中选择服务商、模型并填写 API Key。');
     const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
@@ -508,8 +509,9 @@
       <div class="form-field"><label>推理强度</label><select id="apiReasoning">${Object.entries(REASONING_EFFORTS).map(([id, label]) => `<option value="${id}" ${id === s.reasoningEffort ? 'selected' : ''}>${label}</option>`).join('')}</select><span class="field-note">仅在 GPT 模型原生支持时发送；不支持时请选择“模型默认”。</span></div>
       <div class="form-field"><label>API Key</label><input id="apiKey" type="password" autocomplete="off" value="${esc(s.key || R.sessionKey || '')}" placeholder="粘贴 API Key" /></div></div>
       <label class="field-note" style="display:flex;align-items:center;gap:8px;margin-top:13px"><input id="apiStore" type="checkbox" ${s.persist ? 'checked' : ''} style="width:16px;height:16px" /> 保存 API Key 到本浏览器</label>
+      <p id="apiTestStatus" class="api-test-status" aria-live="polite"></p>
       <p class="import-tip">GPT 与 DeepSeek 使用兼容 Chat Completions；Gemini 与 Claude 使用各自的官方消息格式。模型列表仅作快捷选择，也可填写自定义模型 ID。</p></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存设置</button></div></form>`,
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="apiTestButton" type="button" class="secondary-button">测试连接</button><button class="primary-button" type="submit">保存设置</button></div></form>`,
       () => {
         const renderModels = (selected) => {
           const id = $('apiProvider').value;
@@ -526,15 +528,51 @@
         $('apiProvider').addEventListener('change', () => { renderModels(PROVIDERS[$('apiProvider').value].models[0]); $('apiEndpoint').value = ''; });
         $('apiModel').addEventListener('change', () => { $('customModelField').hidden = $('apiModel').value !== '__custom__'; if ($('apiModel').value === '__custom__') $('apiCustomModel').focus(); });
         renderModels(s.model);
-        $('apiForm').addEventListener('submit', e => {
-          e.preventDefault();
+        const readDraftSettings = () => {
           const providerId = $('apiProvider').value;
           const model = $('apiModel').value === '__custom__' ? $('apiCustomModel').value.trim() : $('apiModel').value;
-          if (!model) { toast('请选择模型或填写自定义模型名称'); return; }
+          return {
+            provider: providerId,
+            endpoint: $('apiEndpoint').value.trim(),
+            model,
+            reasoningEffort: $('apiReasoning').value,
+            key: $('apiKey').value.trim()
+          };
+        };
+        const setTestStatus = (message, type = '') => {
+          const status = $('apiTestStatus');
+          status.textContent = message;
+          status.className = `api-test-status ${type}`;
+        };
+        $('apiTestButton').addEventListener('click', async () => {
+          const draft = readDraftSettings();
+          if (!draft.model) { setTestStatus('请先选择模型或填写自定义模型名称。', 'error'); return; }
+          if (!draft.key) { setTestStatus('请填写 API Key 后再测试。', 'error'); return; }
+          const button = $('apiTestButton');
+          button.disabled = true;
+          button.textContent = '测试中…';
+          setTestStatus('正在发送一条最短测试请求；当前设置尚未保存。', 'pending');
+          try {
+            const answer = await askModel([
+              { role: 'system', content: '这是 API 连通性测试。请只回复：OK' },
+              { role: 'user', content: '请确认连接。' }
+            ], draft);
+            const preview = answer.replace(/\s+/g, ' ').trim().slice(0, 80);
+            setTestStatus(`连接成功 · ${PROVIDERS[draft.provider].label} / ${draft.model}${preview ? ` · 返回：${preview}` : ''}`, 'success');
+          } catch (error) {
+            setTestStatus(`连接失败：${error.message}`, 'error');
+          } finally {
+            const currentButton = $('apiTestButton');
+            if (currentButton) { currentButton.disabled = false; currentButton.textContent = '测试连接'; }
+          }
+        });
+        $('apiForm').addEventListener('submit', e => {
+          e.preventDefault();
+          const draft = readDraftSettings();
+          if (!draft.model) { toast('请选择模型或填写自定义模型名称'); return; }
           const persist = $('apiStore').checked;
-          const key = $('apiKey').value.trim();
-          R.sessionKey = key;
-          saveSettings({ provider: providerId, endpoint: $('apiEndpoint').value.trim(), model, reasoningEffort: $('apiReasoning').value, key: persist ? key : '', persist });
+          R.sessionKey = draft.key;
+          saveSettings({ ...draft, key: persist ? draft.key : '', persist });
           closeModal();
           toast(persist ? 'AI 设置已保存到本浏览器' : 'AI 设置已保存；刷新页面后需重新填写 API Key');
         });
