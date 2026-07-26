@@ -2,13 +2,40 @@
  *
  * 负责：从本地服务读取/写入项目、实验日志、对话记录（全部保存为 .md），
  * 维护每个项目的 AGENTS.md，并提供基于项目记忆的 AI 对话与整理。
- * 与 app.js（知识卡片 / 概览，仍用 localStorage）协作，共享侧栏与视觉风格。
+ * 与 app.js 协作，共享侧栏与视觉风格。
  */
 (() => {
   'use strict';
 
   const API_SETTINGS_KEY = 'scihub-api-settings-v1';
   const TODAY = new Date().toISOString().slice(0, 10);
+  const PROVIDERS = {
+    openai: {
+      label: 'GPT（OpenAI）',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      models: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini']
+    },
+    gemini: {
+      label: 'Gemini（Google）',
+      endpoint: '',
+      models: ['gemini-2.5-flash', 'gemini-2.5-pro']
+    },
+    claude: {
+      label: 'Claude（Anthropic）',
+      endpoint: 'https://api.anthropic.com/v1/messages',
+      models: ['claude-sonnet-4-5', 'claude-haiku-4-5']
+    },
+    deepseek: {
+      label: 'DeepSeek',
+      endpoint: 'https://api.deepseek.com/chat/completions',
+      models: ['deepseek-chat', 'deepseek-reasoner']
+    }
+  };
+  const POLISH_STRENGTHS = {
+    light: '轻度：只修正错别字、标点和明显语病，尽量保持原有句式。',
+    standard: '标准：在不改变原意的前提下重组表达与段落，让内容清楚、专业、易读。',
+    deep: '深度：在不改变原意、事实或现象的前提下重写为结构严谨的专业实验日志。'
+  };
 
   const esc = (v = '') => (window.SciHubApp ? window.SciHubApp.escapeHtml(v)
     : String(v).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[c])));
@@ -26,6 +53,7 @@
     conversations: [],
     conversation: null,
     agents: '',
+    polishPreview: null,
     saveTimer: null,
     sessionKey: ''       // 未持久化时本会话内的 API Key
   };
@@ -43,15 +71,71 @@
   function readSettings() { try { return JSON.parse(localStorage.getItem(API_SETTINGS_KEY)) || {}; } catch { return {}; } }
   function saveSettings(s) { localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(s)); }
 
-  async function askModel(messages) {
+  function providerFor(settings) {
+    if (PROVIDERS[settings.provider]) return settings.provider;
+    const endpoint = settings.endpoint || '';
+    if (endpoint.includes('generativelanguage.googleapis.com')) return 'gemini';
+    if (endpoint.includes('anthropic.com')) return 'claude';
+    if (endpoint.includes('deepseek.com')) return 'deepseek';
+    return 'openai';
+  }
+
+  function settingsForUse() {
     const stored = readSettings();
-    const key = stored.key || R.sessionKey;
-    if (!stored.endpoint || !stored.model || !key) throw new Error('请先在「AI 设置」中填写接口地址、模型与 API Key。');
+    const provider = providerFor(stored);
+    return {
+      ...stored,
+      provider,
+      model: stored.model || PROVIDERS[provider].models[0],
+      endpoint: stored.endpoint || PROVIDERS[provider].endpoint,
+      polishStrength: stored.polishStrength || 'standard'
+    };
+  }
+
+  function geminiEndpoint(settings) {
+    return settings.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
+  }
+
+  async function askModel(messages) {
+    const settings = settingsForUse();
+    const key = settings.key || R.sessionKey;
+    if (!settings.model || !key) throw new Error('请先在「AI 设置」中选择服务商、模型并填写 API Key。');
+    const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n\n');
+    const chatMessages = messages.filter(m => m.role !== 'system');
+    let url;
+    let headers;
+    let body;
+    if (settings.provider === 'gemini') {
+      url = `${geminiEndpoint(settings)}${geminiEndpoint(settings).includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`;
+      headers = {};
+      body = {
+        contents: chatMessages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+        generationConfig: { temperature: 0.2 },
+        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {})
+      };
+    } else if (settings.provider === 'claude') {
+      url = settings.endpoint || PROVIDERS.claude.endpoint;
+      headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
+      body = {
+        model: settings.model,
+        max_tokens: 4096,
+        messages: chatMessages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+        ...(system ? { system } : {})
+      };
+    } else {
+      url = settings.endpoint || PROVIDERS[settings.provider].endpoint;
+      headers = { Authorization: `Bearer ${key}` };
+      body = { model: settings.model, temperature: 0.2, messages };
+    }
     const response = await api('/api/proxy', {
       method: 'POST',
-      body: JSON.stringify({ url: stored.endpoint, headers: { Authorization: `Bearer ${key}` }, body: { model: stored.model, temperature: 0.2, messages } })
+      body: JSON.stringify({ url, headers, body })
     });
-    const content = response.choices?.[0]?.message?.content;
+    const content = settings.provider === 'gemini'
+      ? response.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('')
+      : settings.provider === 'claude'
+        ? response.content?.map(part => part.text || '').join('')
+        : response.choices?.[0]?.message?.content;
     if (!content) throw new Error('接口没有返回可用内容，请检查模型与接口格式。');
     return content;
   }
@@ -76,7 +160,7 @@
 
   function showServerHint() {
     const host = $('logsBody') || $('recordsBody');
-    // 概览页也提示
+    // 任一核心视图均显示相同的本地服务提示
     const hint = '未连接本地文件服务。请通过「启动 SciHub.cmd」以 Python 启动，再刷新页面。';
     toast(hint);
   }
@@ -148,37 +232,40 @@
     $('logsProjectTitle').textContent = R.active.name;
     const l = R.log;
     const textDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${R.date}T12:00:00`));
+    const hasEditableContent = [l.phenomena, l.record].some(value => value.trim());
+    const hasContent = Boolean(l.source.trim()) || hasEditableContent;
     $('logsBody').innerHTML = `
       <div class="record-panel">
         <div class="record-meta-row">
           <label class="record-field"><span>实验日期</span><input id="logDate" type="date" value="${R.date}" /></label>
           <p class="record-note">${textDate}<br>保存后写入 <b>实验日志/${R.date}.md</b>，并更新 AGENTS.md。</p>
         </div>
-        <div class="record-field"><div class="record-field-head"><span>原始实验记录</span><small id="sourceCount">${l.source.length} 字</small></div>
-          <textarea id="logSource" class="record-textarea" placeholder="记录当天的实验过程、参数、观察现象、数据、结论和后续计划。">${esc(l.source)}</textarea>
-          <p class="record-hint">自动保存只在已有文字时创建日志文件。AI 整理不会编造数据；采用结果前可继续手动修改。</p>
-        </div>
         <div class="record-organized">
-          <div class="record-field"><div class="record-field-head"><span>实验现象</span></div><textarea id="logPhenomena" class="record-textarea short" placeholder="观察结果与直接数据">${esc(l.phenomena)}</textarea></div>
-          <div class="record-field"><div class="record-field-head"><span>实验记录</span></div><textarea id="logRecord" class="record-textarea short" placeholder="目的、条件、步骤、结论与计划">${esc(l.record)}</textarea></div>
+          <div class="record-field"><div class="record-field-head"><span>实验现象</span><small>${l.phenomena.length} 字</small></div><textarea id="logPhenomena" class="record-textarea" placeholder="记录可直接观察到的现象、结果与数据。">${esc(l.phenomena)}</textarea></div>
+          <div class="record-field"><div class="record-field-head"><span>实验记录</span><small>${l.record.length} 字</small></div><textarea id="logRecord" class="record-textarea" placeholder="记录目的、样品、条件、步骤、结论与后续计划。">${esc(l.record)}</textarea></div>
         </div>
         <div class="record-foot">
-          <span class="record-hint">每次保存都会同步 AGENTS.md · Ctrl / ⌘ + S 立即保存</span>
+          <span class="record-hint">AI 润色只会在预览确认后写入；不会添加实验事实或改变原意。Ctrl / ⌘ + S 可立即保存。</span>
           <div style="display:flex;gap:8px">
-            <button id="organizeBtn" class="secondary-button" ${l.source.trim() ? '' : 'disabled'}>✦ AI 整理</button>
+            <button id="polishBtn" class="secondary-button" ${hasEditableContent ? '' : 'disabled'}>✦ AI 润色</button>
+            <button id="exportLogBtn" class="secondary-button" ${hasContent ? '' : 'disabled'}>↓ 导出 .md</button>
             <button id="saveLogBtn" class="primary-button">保存实验日志</button>
           </div>
         </div>
       </div>`;
-    $('logDate').onchange = e => loadLog(e.target.value);
+    $('logDate').onchange = async e => {
+      clearTimeout(R.saveTimer);
+      await saveLog(false);
+      loadLog(e.target.value);
+    };
     const bind = (id, key) => $(id).oninput = e => {
       R.log[key] = e.target.value;
-      if (id === 'logSource') { $('sourceCount').textContent = `${e.target.value.length} 字`; $('organizeBtn').disabled = !e.target.value.trim(); }
       scheduleLogSave();
     };
-    bind('logSource', 'source'); bind('logPhenomena', 'phenomena'); bind('logRecord', 'record');
+    bind('logPhenomena', 'phenomena'); bind('logRecord', 'record');
     $('saveLogBtn').onclick = () => saveLog(true);
-    $('organizeBtn').onclick = organizeLog;
+    $('polishBtn').onclick = polishLog;
+    $('exportLogBtn').onclick = exportLog;
   }
 
   function scheduleLogSave() { clearTimeout(R.saveTimer); R.saveTimer = setTimeout(() => saveLog(false), 900); }
@@ -190,29 +277,58 @@
   }
 
   async function saveLog(announce) {
-    if (!R.active || !Object.values(R.log).some(v => v.trim())) return;
+    if (!R.active || ![R.log.phenomena, R.log.record].some(v => v.trim())) {
+      if (announce) toast('请至少填写实验现象或实验记录');
+      return false;
+    }
     try {
       await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(R.log) });
       await refreshProjects(true);
       if (announce) toast('实验日志与 AGENTS.md 已保存');
+      return true;
     } catch (e) { toast(`保存失败：${e.message}`); }
+    return false;
   }
 
-  async function organizeLog() {
-    const source = R.log.source.trim();
-    if (!source) return;
-    const b = $('organizeBtn'); b.disabled = true; b.textContent = '正在整理…';
+  async function polishLog() {
+    if (![R.log.phenomena, R.log.record].some(value => value.trim())) return;
+    const b = $('polishBtn'); b.disabled = true; b.textContent = '正在润色…';
     try {
+      const settings = settingsForUse();
       const reply = await askModel([
-        { role: 'system', content: '你是严谨的中文实验日志编辑助手。仅根据原文整理，不得编造或改变任何事实、数据、条件、结论和不确定性。只返回 JSON：{"phenomena":"...","record":"..."}。' },
-        { role: 'user', content: source }
+        { role: 'system', content: `你是严谨的中文科研实验日志编辑。${POLISH_STRENGTHS[settings.polishStrength] || POLISH_STRENGTHS.standard}\n\n只能基于用户提供的文本润色。允许修正错别字、标点、语法、措辞和结构；不得添加、删除、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性。必须保留原始含义。返回完整的润色文本，不要输出解释、Markdown 围栏或额外字段。只返回 JSON：{"phenomena":"...","record":"..."}。` },
+        { role: 'user', content: JSON.stringify({ phenomena: R.log.phenomena, record: R.log.record }) }
       ]);
-      let parsed; try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); } catch { parsed = { phenomena: '', record: reply }; }
-      R.log.phenomena = typeof parsed.phenomena === 'string' ? parsed.phenomena : '';
-      R.log.record = typeof parsed.record === 'string' ? parsed.record : reply;
-      renderLogsView();
-      toast('已生成整理建议，请检查后保存');
-    } catch (e) { toast(`AI 整理失败：${e.message}`); const f = $('organizeBtn'); if (f) { f.disabled = false; f.textContent = '✦ AI 整理'; } }
+      let parsed;
+      try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
+      catch { throw new Error('模型未返回可用的润色结果，请重试或降低润色强度。'); }
+      const polished = {
+        phenomena: typeof parsed.phenomena === 'string' ? parsed.phenomena : R.log.phenomena,
+        record: typeof parsed.record === 'string' ? parsed.record : R.log.record
+      };
+      openPolishPreview({ phenomena: R.log.phenomena, record: R.log.record }, polished);
+    } catch (e) { toast(`AI 润色失败：${e.message}`); const f = $('polishBtn'); if (f) { f.disabled = false; f.textContent = '✦ AI 润色'; } }
+  }
+
+  function openPolishPreview(original, polished) {
+    const section = (title, before, after) => `<div class="polish-preview-section"><h3>${title}</h3><div><span>原文</span><pre>${esc(before || '（未填写）')}</pre></div><div><span>润色后</span><pre>${esc(after || '（未填写）')}</pre></div></div>`;
+    openModal(`<div class="modal-header"><div><h2>AI 润色预览</h2><p>结果尚未写入日志。请确认没有改变实验事实、数据、现象或原意后再采用。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body polish-preview">${section('实验现象', original.phenomena, polished.phenomena)}${section('实验记录', original.record, polished.record)}</div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>保留原文</button><button id="applyPolishBtn" type="button" class="primary-button">采用润色结果</button></div>`,
+      () => { $('applyPolishBtn').onclick = () => { R.log.phenomena = polished.phenomena; R.log.record = polished.record; closeModal(); renderLogsView(); toast('已采用润色结果，请保存实验日志'); }; });
+  }
+
+  async function exportLog() {
+    const hasEditableContent = [R.log.phenomena, R.log.record].some(value => value.trim());
+    if (hasEditableContent && !await saveLog(false)) return;
+    if (!hasEditableContent && !R.log.source.trim()) { toast('请至少填写实验现象或实验记录'); return; }
+    const link = document.createElement('a');
+    link.href = `${slugPath(R.active.slug)}/logs/${R.date}/export`;
+    link.download = `${R.date}-实验日志.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    toast('已导出 Markdown 实验日志');
   }
 
   // ------------------------------------------------------- 视图：对话记录 --
@@ -259,9 +375,10 @@
     input.value = '';
     c.messages.push({ role: 'user', content, createdAt: iso() });
     try {
+      const s = settingsForUse();
+      if (!s.model || !(s.key || R.sessionKey)) { await saveConversation(); renderRecordsView(); toast('问题已记录。配置 AI 设置后可基于项目记忆获得回复。'); return; }
+      if (!c.model || c.model === '手工记录') c.model = s.model;
       await saveConversation(); renderRecordsView();
-      const s = readSettings();
-      if (!s.endpoint || !s.model || !(s.key || R.sessionKey)) { toast('问题已记录。配置 AI 设置后可基于项目记忆获得回复。'); return; }
       const b = $('recordSend'); if (b) { b.disabled = true; b.textContent = '思考中…'; }
       const memory = (await api(`${slugPath(R.active.slug)}/agents`)).content;
       const history = c.messages.map(m => ({ role: m.role, content: m.content }));
@@ -373,21 +490,47 @@
   }
 
   function openApiDialog() {
-    const s = readSettings();
-    openModal(`<div class="modal-header"><div><h2>AI 对话设置</h2><p>用于「AI 整理」实验日志，以及基于项目记忆继续提问。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <form id="apiForm"><div class="modal-body"><p class="import-tip" style="border-left:3px solid #c7dccd;background:#f4f8f3;padding:10px 12px;margin-top:0">API Key 仅保存在本浏览器。项目 Markdown、实验数据与对话只有在你点击发送时才会随请求发送给所配置的服务商。</p>
-      <div class="form-field full"><label>接口地址</label><input id="apiEndpoint" type="url" required value="${esc(s.endpoint || 'https://api.openai.com/v1/chat/completions')}" placeholder="https://api.openai.com/v1/chat/completions" /></div>
-      <div class="form-field full"><label>模型名称</label><input id="apiModel" required value="${esc(s.model || '')}" placeholder="例如：gpt-4.1-mini" /></div>
-      <div class="form-field full"><label>API Key</label><input id="apiKey" type="password" autocomplete="off" value="${esc(s.key || R.sessionKey || '')}" placeholder="粘贴 API Key" /></div>
-      <label class="field-note" style="display:flex;align-items:center;gap:8px"><input id="apiStore" type="checkbox" ${s.persist ? 'checked' : ''} style="width:16px;height:16px" /> 保存 API Key 到本浏览器</label>
-      <p class="import-tip">支持 OpenAI Chat Completions 兼容接口。请求经本机服务转发至 HTTPS 地址，以避免 CORS 限制。</p></div>
+    const s = settingsForUse();
+    const provider = s.provider;
+    const models = PROVIDERS[provider].models;
+    const customModel = models.includes(s.model) ? '' : s.model;
+    const modelOptions = models.map(model => `<option value="${esc(model)}" ${model === s.model ? 'selected' : ''}>${esc(model)}</option>`).join('');
+    openModal(`<div class="modal-header"><div><h2>AI 设置</h2><p>用于实验日志润色，以及携带项目记忆继续对话。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="apiForm"><div class="modal-body"><p class="import-tip" style="border-left:3px solid #c7dccd;background:#f4f8f3;padding:10px 12px;margin-top:0">API Key 仅保存在本浏览器。项目 Markdown、实验数据与对话只有在你点击润色或发送时才会发送给所选服务商。</p>
+      <div class="form-grid"><div class="form-field"><label>服务商</label><select id="apiProvider">${Object.entries(PROVIDERS).map(([id, item]) => `<option value="${id}" ${id === provider ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></div>
+      <div class="form-field"><label>模型</label><select id="apiModel">${modelOptions}<option value="__custom__" ${customModel ? 'selected' : ''}>自定义模型…</option></select></div>
+      <div id="customModelField" class="form-field full" ${customModel ? '' : 'hidden'}><label>自定义模型名称</label><input id="apiCustomModel" maxlength="160" value="${esc(customModel)}" placeholder="填写服务商提供的模型 ID" /></div>
+      <div class="form-field full"><label>接口地址（可选）</label><input id="apiEndpoint" type="url" value="${esc(s.endpoint)}" placeholder="留空将使用所选服务商的默认接口" /><span class="field-note" id="providerEndpointHint"></span></div>
+      <div class="form-field"><label>润色强度</label><select id="apiStrength">${Object.entries(POLISH_STRENGTHS).map(([id, description]) => `<option value="${id}" ${id === s.polishStrength ? 'selected' : ''}>${id === 'light' ? '轻度' : id === 'standard' ? '标准' : '深度'} · ${esc(description.slice(0, 14))}</option>`).join('')}</select></div>
+      <div class="form-field"><label>API Key</label><input id="apiKey" type="password" autocomplete="off" value="${esc(s.key || R.sessionKey || '')}" placeholder="粘贴 API Key" /></div></div>
+      <label class="field-note" style="display:flex;align-items:center;gap:8px;margin-top:13px"><input id="apiStore" type="checkbox" ${s.persist ? 'checked' : ''} style="width:16px;height:16px" /> 保存 API Key 到本浏览器</label>
+      <p class="import-tip">GPT 与 DeepSeek 使用兼容 Chat Completions；Gemini 与 Claude 使用各自的官方消息格式。模型列表仅作快捷选择，也可填写自定义模型 ID。</p></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存设置</button></div></form>`,
       () => {
+        const renderModels = (selected) => {
+          const id = $('apiProvider').value;
+          const knownModels = PROVIDERS[id].models;
+          const chosen = knownModels.includes(selected) ? selected : knownModels[0];
+          $('apiModel').innerHTML = `${knownModels.map(model => `<option value="${esc(model)}" ${model === chosen ? 'selected' : ''}>${esc(model)}</option>`).join('')}<option value="__custom__" ${knownModels.includes(selected) ? '' : 'selected'}>自定义模型…</option>`;
+          $('apiCustomModel').value = knownModels.includes(selected) ? '' : selected;
+          $('customModelField').hidden = $('apiModel').value !== '__custom__';
+          const defaultEndpoint = PROVIDERS[id].endpoint;
+          $('providerEndpointHint').textContent = id === 'gemini'
+            ? 'Gemini 留空时会按所选模型自动生成官方接口地址。'
+            : `留空时使用：${defaultEndpoint}`;
+        };
+        $('apiProvider').addEventListener('change', () => { renderModels(PROVIDERS[$('apiProvider').value].models[0]); $('apiEndpoint').value = ''; });
+        $('apiModel').addEventListener('change', () => { $('customModelField').hidden = $('apiModel').value !== '__custom__'; if ($('apiModel').value === '__custom__') $('apiCustomModel').focus(); });
+        renderModels(s.model);
         $('apiForm').addEventListener('submit', e => {
           e.preventDefault();
-          const persist = $('apiStore').checked; const key = $('apiKey').value.trim();
+          const providerId = $('apiProvider').value;
+          const model = $('apiModel').value === '__custom__' ? $('apiCustomModel').value.trim() : $('apiModel').value;
+          if (!model) { toast('请选择模型或填写自定义模型名称'); return; }
+          const persist = $('apiStore').checked;
+          const key = $('apiKey').value.trim();
           R.sessionKey = key;
-          saveSettings({ endpoint: $('apiEndpoint').value.trim(), model: $('apiModel').value.trim(), key: persist ? key : '', persist });
+          saveSettings({ provider: providerId, endpoint: $('apiEndpoint').value.trim(), model, polishStrength: $('apiStrength').value, key: persist ? key : '', persist });
           closeModal();
           toast(persist ? 'AI 设置已保存到本浏览器' : 'AI 设置已保存；刷新页面后需重新填写 API Key');
         });

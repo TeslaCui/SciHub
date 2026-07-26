@@ -301,12 +301,16 @@ def write_log(project: dict, date: str, payload: dict) -> None:
     source = str(payload.get("source", ""))
     phenomena = str(payload.get("phenomena", ""))
     record = str(payload.get("record", ""))
-    body = (
-        f"# {date} 实验日志\n\n"
-        f"## 原始实验记录\n\n{source}\n\n"
-        f"## 实验现象\n\n{phenomena}\n\n"
-        f"## 实验记录\n\n{record}\n"
-    )
+    # 旧版本的“原始实验记录”继续原样保留，避免保存时丢失已有资料；
+    # 新建日志只包含用户当前需要的“实验现象”和“实验记录”两部分。
+    sections = [f"# {date} 实验日志"]
+    if source.strip():
+        sections.append(f"## 原始实验记录\n\n{source}")
+    sections.extend([
+        f"## 实验现象\n\n{phenomena}",
+        f"## 实验记录\n\n{record}",
+    ])
+    body = "\n\n".join(sections) + "\n"
     write_markdown(log_path(project, date), front_matter(meta) + body)
     update_agents(project)
 
@@ -415,11 +419,19 @@ class SciHubHandler(BaseHTTPRequestHandler):
         pass
 
     # --- 底层输出 --- #
-    def _send_bytes(self, status: int, data: bytes, content_type: str) -> None:
+    def _send_bytes(
+        self,
+        status: int,
+        data: bytes,
+        content_type: str,
+        extra_headers: Optional[dict[str, str]] = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -585,6 +597,23 @@ class SciHubHandler(BaseHTTPRequestHandler):
         method = self.command
         if method == "GET" and len(segments) == 4:
             self._send_json(HTTPStatus.OK, {"logs": list_logs(project)})
+            return
+        if method == "GET" and len(segments) == 6 and segments[5] == "export":
+            date = segments[4]
+            path = log_path(project, date)
+            if not path.is_file():
+                raise ApiError("没有可导出的实验日志。", HTTPStatus.NOT_FOUND)
+            filename = f"{date}-实验日志.md"
+            disposition = (
+                f'attachment; filename="experiment-log-{date}.md"; '
+                f"filename*=UTF-8''{urllib.parse.quote(filename)}"
+            )
+            self._send_bytes(
+                HTTPStatus.OK,
+                path.read_bytes(),
+                "text/markdown; charset=utf-8",
+                {"Content-Disposition": disposition},
+            )
             return
         if len(segments) != 5:
             raise ApiError("找不到实验日志。", HTTPStatus.NOT_FOUND)
