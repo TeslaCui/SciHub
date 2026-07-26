@@ -10,24 +10,29 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
+import mimetypes
 import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+import zipfile
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent
 PROJECTS_ROOT = ROOT / "科研项目"
 HOST = "127.0.0.1"
 PORT = 8770
-MAX_BODY_SIZE = 4 * 1024 * 1024
+MAX_BODY_SIZE = 24 * 1024 * 1024
 
 INDEX_FILE = "index.html"
 SLUG_RE = re.compile(r"^[\w一-鿿-]+$", re.UNICODE)
@@ -286,11 +291,14 @@ def log_path(project: dict, date: str) -> Path:
 
 def read_log(project: dict, date: str) -> dict:
     doc = read_markdown_document(log_path(project, date))
+    image_section = get_section(doc["content"], "导入文档图片信息")
+    images = [line[2:].strip() for line in image_section.splitlines() if line.startswith("- ")]
     return {
         "date": date,
-        "source": get_section(doc["content"], "原始实验记录"),
+        "source": get_section(doc["content"], "原始输入") or get_section(doc["content"], "原始实验记录"),
         "phenomena": get_section(doc["content"], "实验现象"),
         "record": get_section(doc["content"], "实验记录"),
+        "images": images,
         "updatedAt": meta_value(doc["meta"], "updated_at"),
     }
 
@@ -301,15 +309,18 @@ def write_log(project: dict, date: str, payload: dict) -> None:
     source = str(payload.get("source", ""))
     phenomena = str(payload.get("phenomena", ""))
     record = str(payload.get("record", ""))
-    # 旧版本的“原始实验记录”继续原样保留，避免保存时丢失已有资料；
-    # 新建日志只包含用户当前需要的“实验现象”和“实验记录”两部分。
+    raw_images = payload.get("images", [])
+    images = [one_line(item) for item in raw_images if one_line(item)][:100] if isinstance(raw_images, list) else []
+    # 旧版本的“原始实验记录”仍可读取；新日志统一使用单输入框对应的“原始输入”。
     sections = [f"# {date} 实验日志"]
     if source.strip():
-        sections.append(f"## 原始实验记录\n\n{source}")
+        sections.append(f"## 原始输入\n\n{source}")
     sections.extend([
         f"## 实验现象\n\n{phenomena}",
         f"## 实验记录\n\n{record}",
     ])
+    if images:
+        sections.append("## 导入文档图片信息\n\n" + "\n".join(f"- {item}" for item in images))
     body = "\n\n".join(sections) + "\n"
     write_markdown(log_path(project, date), front_matter(meta) + body)
     update_agents(project)
@@ -324,6 +335,47 @@ def list_logs(project: dict) -> list:
         doc = read_markdown_document(p)
         items.append({"date": p.stem, "updatedAt": meta_value(doc["meta"], "updated_at")})
     return items
+
+
+def import_docx_document(payload: dict) -> dict:
+    """提取 DOCX 文本和内嵌图片元数据；不把二进制图片写入项目目录。"""
+    filename = one_line(payload.get("filename"))
+    if Path(filename).suffix.lower() != ".docx":
+        raise ApiError("仅支持导入 .docx 文档。")
+    encoded = payload.get("contentBase64")
+    if not isinstance(encoded, str) or not encoded:
+        raise ApiError("文档内容无效。")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        raise ApiError("文档编码无效。")
+    if len(content) > 15 * 1024 * 1024:
+        raise ApiError("文档超过 15 MB，暂不能导入。")
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            xml = archive.read("word/document.xml")
+            root = ElementTree.fromstring(xml)
+            text_nodes = root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p")
+            paragraphs = []
+            for paragraph in text_nodes:
+                text = "".join(
+                    node.text or ""
+                    for node in paragraph.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")
+                ).strip()
+                if text:
+                    paragraphs.append(text)
+            images = []
+            for member in sorted(name for name in archive.namelist() if name.startswith("word/media/") and not name.endswith("/")):
+                data = archive.read(member)
+                name = Path(member).name
+                mime = mimetypes.guess_type(name)[0] or "未知类型"
+                images.append(f"{name} · {mime} · {len(data):,} 字节")
+    except (KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+        raise ApiError("无法读取 Word 文档，请确认文件是有效的 .docx。")
+    source = "\n\n".join(paragraphs)
+    if not source:
+        raise ApiError("Word 文档中没有可导入的文本内容。")
+    return {"source": source, "images": images}
 
 
 # --------------------------------------------------------------------------- #
@@ -614,6 +666,9 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 "text/markdown; charset=utf-8",
                 {"Content-Disposition": disposition},
             )
+            return
+        if method == "POST" and len(segments) == 6 and segments[5] == "import":
+            self._send_json(HTTPStatus.OK, import_docx_document(self._read_json()))
             return
         if len(segments) != 5:
             raise ApiError("找不到实验日志。", HTTPStatus.NOT_FOUND)

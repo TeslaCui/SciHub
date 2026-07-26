@@ -24,10 +24,10 @@ SciHub 是本地优先的科研记录工具，仅提供：
 
 ## 代码结构
 
-- `scihub_server.py`：本地 HTTP 服务与项目、日志、对话、项目记忆、AI 转发 API；日志导出接口为 `/api/projects/<slug>/logs/<date>/export`。
+- `scihub_server.py`：本地 HTTP 服务与项目、日志、对话、项目记忆、AI 转发 API；日志导出接口为 `/api/projects/<slug>/logs/<date>/export`，DOCX 导入接口为 `/api/projects/<slug>/logs/<date>/import`。
 - `index.html`：只包含实验日志、对话记录、项目记忆三个视图。
 - `app.js`：轻量导航、提示消息和项目创建入口。
-- `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT / DeepSeek 原生推理强度、日志润色预览、Markdown 导出和 `AGENTS.md` 预览。
+- `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT / DeepSeek 原生推理强度、单输入框的自动日志整理、DOCX/Markdown/文本导入、Markdown 导出和 `AGENTS.md` 预览。
 - `styles.css`：现有鼠尾草绿主题及界面样式。
 
 ## 数据约定
@@ -36,4 +36,5 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - 项目 `AGENTS.md` 用 `<!-- AUTO-UPDATE:START -->` 和 `<!-- AUTO-UPDATE:END -->` 标识自动区域；区域外的人工信息必须保留。
 - 保存实验日志、对话或项目记忆后，都应更新项目 `AGENTS.md` 的自动区域。
 - `AGENTS.md` 是 AI 上下文，不等同于已验证的科研结论；需区分原始观察、模型建议和已验证证据。
-- AI 润色只允许修正错别字、语病、表达和结构；不得改变实验原意、事实、数据、条件、现象或不确定性。润色结果必须先向用户预览，不能自动覆盖原文。
+- AI 自动整理与润色只允许修正错别字、语病、表达和结构；不得改变实验原意、事实、数据、条件、现象或不确定性。原始输入必须与自动生成板块一同保留在日志 Markdown 中。
+- DOCX 导入仅提取文本和内嵌图片元数据（文件名、类型、大小）；不得额外写入图片二进制文件，确保项目生成内容保持 Markdown 为主。

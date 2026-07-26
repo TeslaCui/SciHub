@@ -50,13 +50,12 @@
     active: null,        // 当前项目 summary
     tab: 'logs',
     date: TODAY,
-    log: { source: '', phenomena: '', record: '' },
+    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '' },
     logs: [],
     conversations: [],
     conversation: null,
     agents: '',
-    polishPreview: null,
-    saveTimer: null,
+    autoPolish: true,
     sessionKey: ''       // 未持久化时本会话内的 API Key
   };
 
@@ -195,7 +194,8 @@
   async function loadProject(slug) {
     R.active = R.projects.find(p => p.slug === slug) || null;
     R.date = TODAY;
-    R.log = { source: '', phenomena: '', record: '' };
+    R.log = { source: '', phenomena: '', record: '', images: [], formattedSource: '' };
+    R.autoPolish = true;
     R.conversation = null;
     if (!R.active) return;
     try {
@@ -254,100 +254,165 @@
   }
 
   // ---------------------------------------------------------- 视图：日志 --
+  function normalizeLog(log = {}) {
+    const source = typeof log.source === 'string' ? log.source : '';
+    const phenomena = typeof log.phenomena === 'string' ? log.phenomena : '';
+    const record = typeof log.record === 'string' ? log.record : '';
+    return {
+      ...log,
+      source,
+      phenomena,
+      record,
+      images: Array.isArray(log.images) ? log.images : [],
+      formattedSource: source && (phenomena || record) ? source : ''
+    };
+  }
+
+  function visibleLogSource(log) {
+    if (log.source.trim()) return log.source;
+    return [
+      log.phenomena.trim() ? `实验现象：\n${log.phenomena.trim()}` : '',
+      log.record.trim() ? `实验记录：\n${log.record.trim()}` : ''
+    ].filter(Boolean).join('\n\n');
+  }
+
   function renderLogsView() {
     if (!requireProject('logsProjectTitle', 'logsBody')) return;
     $('logsProjectTitle').textContent = R.active.name;
     const l = R.log;
     const textDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${R.date}T12:00:00`));
-    const hasEditableContent = [l.phenomena, l.record].some(value => value.trim());
-    const hasContent = Boolean(l.source.trim()) || hasEditableContent;
+    const source = visibleLogSource(l);
+    const hasContent = Boolean(source.trim());
     $('logsBody').innerHTML = `
       <div class="record-panel">
         <div class="record-meta-row">
           <label class="record-field"><span>实验日期</span><input id="logDate" type="date" value="${R.date}" /></label>
           <p class="record-note">${textDate}<br>保存后写入 <b>实验日志/${R.date}.md</b>，并更新 AGENTS.md。</p>
         </div>
-        <div class="record-organized">
-          <div class="record-field"><div class="record-field-head"><span>实验现象</span><small>${l.phenomena.length} 字</small></div><textarea id="logPhenomena" class="record-textarea" placeholder="记录可直接观察到的现象、结果与数据。">${esc(l.phenomena)}</textarea></div>
-          <div class="record-field"><div class="record-field-head"><span>实验记录</span><small>${l.record.length} 字</small></div><textarea id="logRecord" class="record-textarea" placeholder="记录目的、样品、条件、步骤、结论与后续计划。">${esc(l.record)}</textarea></div>
+        <div class="record-field"><div class="record-field-head"><span>实验日志内容</span><small id="logSourceCount">${source.length} 字</small></div>
+          <textarea id="logSource" class="record-textarea log-source-input" placeholder="输入实验过程、现象、数据、条件、结论与后续计划；保存时可由 AI 自动整理为实验现象、实验记录等板块。">${esc(source)}</textarea>
+          <p class="record-hint">${l.images.length ? `已记录导入文档中的 ${l.images.length} 项图片信息。` : '可直接输入，或导入 Word / Markdown / 文本文档。'}</p>
         </div>
         <div class="record-foot">
-          <span class="record-hint">AI 润色只会在预览确认后写入；不会添加实验事实或改变原意。Ctrl / ⌘ + S 可立即保存。</span>
+          <label class="auto-polish-toggle"><input id="autoPolish" type="checkbox" ${R.autoPolish ? 'checked' : ''} /><span>保存时使用 AI 自动整理与润色</span><small>默认开启；保留原意，不添加实验事实。</small></label>
           <div style="display:flex;gap:8px">
-            <button id="polishBtn" class="secondary-button" ${hasEditableContent ? '' : 'disabled'}>✦ AI 润色</button>
+            <button id="importLogButton" class="secondary-button">导入文档</button>
             <button id="exportLogBtn" class="secondary-button" ${hasContent ? '' : 'disabled'}>↓ 导出 .md</button>
             <button id="saveLogBtn" class="primary-button">保存实验日志</button>
           </div>
         </div>
       </div>`;
-    $('logDate').onchange = async e => {
-      clearTimeout(R.saveTimer);
-      await saveLog(false);
-      loadLog(e.target.value);
+    $('logDate').onchange = e => loadLog(e.target.value);
+    $('logSource').oninput = e => {
+      R.log.source = e.target.value;
+      R.log.formattedSource = '';
+      $('logSourceCount').textContent = `${e.target.value.length} 字`;
+      $('exportLogBtn').disabled = !e.target.value.trim();
     };
-    const bind = (id, key) => $(id).oninput = e => {
-      R.log[key] = e.target.value;
-      scheduleLogSave();
-    };
-    bind('logPhenomena', 'phenomena'); bind('logRecord', 'record');
+    $('autoPolish').onchange = e => { R.autoPolish = e.target.checked; };
     $('saveLogBtn').onclick = () => saveLog(true);
-    $('polishBtn').onclick = polishLog;
+    $('importLogButton').onclick = openLogImport;
     $('exportLogBtn').onclick = exportLog;
   }
 
-  function scheduleLogSave() { clearTimeout(R.saveTimer); R.saveTimer = setTimeout(() => saveLog(false), 900); }
-
   async function loadLog(date) {
     R.date = date;
-    try { R.log = (await api(`${slugPath(R.active.slug)}/logs/${date}`)).log; renderLogsView(); }
+    try { R.log = normalizeLog((await api(`${slugPath(R.active.slug)}/logs/${date}`)).log); renderLogsView(); }
     catch (e) { toast(e.message); }
   }
 
   async function saveLog(announce) {
-    if (!R.active || ![R.log.phenomena, R.log.record].some(v => v.trim())) {
-      if (announce) toast('请至少填写实验现象或实验记录');
+    const source = visibleLogSource(R.log).trim();
+    R.log.source = source;
+    if (!R.active || !source) {
+      if (announce) toast('请先输入或导入实验日志内容');
       return false;
     }
+    const autoPolish = $('autoPolish') ? $('autoPolish').checked : R.autoPolish;
+    R.autoPolish = autoPolish;
+    const saveButton = $('saveLogBtn');
     try {
-      await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(R.log) });
+      if (autoPolish && R.log.formattedSource !== source) {
+        if (saveButton) { saveButton.disabled = true; saveButton.textContent = 'AI 整理中…'; }
+        await formatLogWithAi(source);
+      } else if (!autoPolish) {
+        R.log.phenomena = '';
+        R.log.record = source;
+        R.log.formattedSource = '';
+      }
+      const data = await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(R.log) });
+      R.log = normalizeLog(data.log);
       await refreshProjects(true);
-      if (announce) toast('实验日志与 AGENTS.md 已保存');
+      if (announce) toast(autoPolish ? 'AI 已整理并保存实验日志与 AGENTS.md' : '实验日志与 AGENTS.md 已保存');
       return true;
     } catch (e) { toast(`保存失败：${e.message}`); }
+    finally { const button = $('saveLogBtn'); if (button) { button.disabled = false; button.textContent = '保存实验日志'; } }
     return false;
   }
 
-  async function polishLog() {
-    if (![R.log.phenomena, R.log.record].some(value => value.trim())) return;
-    const b = $('polishBtn'); b.disabled = true; b.textContent = '正在润色…';
-    try {
-      const reply = await askModel([
-        { role: 'system', content: '你是严谨的中文科研实验日志编辑。只能基于用户提供的文本润色。允许修正错别字、标点、语法、措辞和结构；不得添加、删除、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性。必须保留原始含义。返回完整的润色文本，不要输出解释、Markdown 围栏或额外字段。只返回 JSON：{"phenomena":"...","record":"..."}。' },
-        { role: 'user', content: JSON.stringify({ phenomena: R.log.phenomena, record: R.log.record }) }
-      ]);
-      let parsed;
-      try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
-      catch { throw new Error('模型未返回可用的润色结果，请检查模型设置后重试。'); }
-      const polished = {
-        phenomena: typeof parsed.phenomena === 'string' ? parsed.phenomena : R.log.phenomena,
-        record: typeof parsed.record === 'string' ? parsed.record : R.log.record
-      };
-      openPolishPreview({ phenomena: R.log.phenomena, record: R.log.record }, polished);
-    } catch (e) { toast(`AI 润色失败：${e.message}`); const f = $('polishBtn'); if (f) { f.disabled = false; f.textContent = '✦ AI 润色'; } }
+  async function formatLogWithAi(source) {
+    const reply = await askModel([
+      { role: 'system', content: '你是严谨的中文科研实验日志编辑。请将用户的原始输入自动整理为“实验现象”和“实验记录”两个板块，并润色错别字、语法、表达和结构。不得编造、删减、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性，必须保留原意。只返回 JSON：{"phenomena":"...","record":"..."}。' },
+      { role: 'user', content: source }
+    ]);
+    let parsed;
+    try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
+    catch { throw new Error('模型未返回可用的日志结构，请检查模型设置后重试。'); }
+    R.log.phenomena = typeof parsed.phenomena === 'string' ? parsed.phenomena : '';
+    R.log.record = typeof parsed.record === 'string' ? parsed.record : '';
+    if (!R.log.phenomena.trim() && !R.log.record.trim()) throw new Error('模型未生成实验日志内容，请重试。');
+    R.log.formattedSource = source;
   }
 
-  function openPolishPreview(original, polished) {
-    const section = (title, before, after) => `<div class="polish-preview-section"><h3>${title}</h3><div><span>原文</span><pre>${esc(before || '（未填写）')}</pre></div><div><span>润色后</span><pre>${esc(after || '（未填写）')}</pre></div></div>`;
-    openModal(`<div class="modal-header"><div><h2>AI 润色预览</h2><p>结果尚未写入日志。请确认没有改变实验事实、数据、现象或原意后再采用。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body polish-preview">${section('实验现象', original.phenomena, polished.phenomena)}${section('实验记录', original.record, polished.record)}</div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>保留原文</button><button id="applyPolishBtn" type="button" class="primary-button">采用润色结果</button></div>`,
-      () => { $('applyPolishBtn').onclick = () => { R.log.phenomena = polished.phenomena; R.log.record = polished.record; closeModal(); renderLogsView(); toast('已采用润色结果，请保存实验日志'); }; });
+  function openLogImport() {
+    if (!R.active) { toast('请先选择或新建一个项目'); return; }
+    openModal(`<div class="modal-header"><div><h2>导入文档生成日志</h2><p>支持 Word（.docx）、Markdown 与文本。Word 中的图片将以文件名、类型和大小记录在日志 Markdown 中。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><div class="form-field full"><label>选择文档</label><input id="logImportFile" type="file" accept=".docx,.md,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" /></div><p class="import-tip">导入后会自动生成当前日期日志；若“保存时使用 AI 自动整理与润色”已开启，将调用你配置的 AI 整理文档内容。</p></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="logImportConfirm" type="button" class="primary-button">导入并生成日志</button></div>`,
+      () => { $('logImportConfirm').onclick = importLogDocument; });
+  }
+
+  function fileToBase64(file) {
+    return file.arrayBuffer().then(buffer => {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const size = 0x8000;
+      for (let start = 0; start < bytes.length; start += size) binary += String.fromCharCode(...bytes.subarray(start, start + size));
+      return btoa(binary);
+    });
+  }
+
+  async function importLogDocument() {
+    const file = $('logImportFile').files[0];
+    if (!file) { toast('请选择要导入的文档'); return; }
+    if (file.size > 15 * 1024 * 1024) { toast('文档超过 15 MB，暂不能导入'); return; }
+    const button = $('logImportConfirm');
+    button.disabled = true; button.textContent = '正在导入…';
+    try {
+      const ext = file.name.split('.').pop().toLowerCase();
+      let imported;
+      if (ext === 'docx') {
+        imported = await api(`${slugPath(R.active.slug)}/logs/${R.date}/import`, {
+          method: 'POST', body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
+        });
+      } else if (ext === 'md' || ext === 'txt') {
+        imported = { source: await file.text(), images: [] };
+      } else {
+        throw new Error('仅支持 .docx、.md 和 .txt 文档。');
+      }
+      const source = (imported.source || '').trim();
+      if (!source) throw new Error('文档中没有可导入的文本内容。');
+      R.log = { source, phenomena: '', record: '', images: imported.images || [], formattedSource: '' };
+      closeModal();
+      renderLogsView();
+      await saveLog(true);
+    } catch (e) { toast(`文档导入失败：${e.message}`); }
+    finally { const current = $('logImportConfirm'); if (current) { current.disabled = false; current.textContent = '导入并生成日志'; } }
   }
 
   async function exportLog() {
-    const hasEditableContent = [R.log.phenomena, R.log.record].some(value => value.trim());
-    if (hasEditableContent && !await saveLog(false)) return;
-    if (!hasEditableContent && !R.log.source.trim()) { toast('请至少填写实验现象或实验记录'); return; }
+    if (!R.log.source.trim()) { toast('请先输入或导入实验日志内容'); return; }
+    if (!await saveLog(false)) return;
     const link = document.createElement('a');
     link.href = `${slugPath(R.active.slug)}/logs/${R.date}/export`;
     link.download = `${R.date}-实验日志.md`;
