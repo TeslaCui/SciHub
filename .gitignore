@@ -1,0 +1,14 @@
+# 用户的科研数据（实验日志、对话记录、项目记忆），不纳入版本库
+科研项目/
+
+# API 设置等运行期文件
+*.local
+
+# Python
+__pycache__/
+*.pyc
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini

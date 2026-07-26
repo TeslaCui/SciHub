@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f5ef" />
+    <title>SciHub · 科研对话知识库</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div><strong>SciHub</strong><small>研究知识工作台</small></div>
+        </div>
+
+        <div class="workspace-switcher"><span class="workspace-dot"></span><span>个人研究空间</span><span class="chevron">⌄</span></div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" data-view="dashboard"><span>◫</span>概览</button>
+          <button class="nav-item" data-view="logs"><span>◒</span>实验日志</button>
+          <button class="nav-item" data-view="records"><span>💬</span>对话记录</button>
+          <button class="nav-item" data-view="memory"><span>≡</span>项目记忆</button>
+          <button class="nav-item" data-view="conversations"><span>◌</span>导入资料 <b id="conversationNavCount">0</b></button>
+          <button class="nav-item" data-view="cards"><span>◇</span>知识卡片 <b id="cardNavCount">0</b></button>
+        </nav>
+
+        <div class="side-section">
+          <div class="side-section-heading"><span>研究项目</span><button id="addProjectButton" title="新建项目">+</button></div>
+          <div id="projectList" class="project-list"></div>
+        </div>
+
+        <div class="sidebar-bottom">
+          <button class="privacy-note" id="privacyButton"><span>⌾</span><span><b>本地优先</b><small>数据仅存储在此浏览器</small></span></button>
+          <button class="profile"><span class="avatar">林</span><span><b>林予安</b><small>研究者</small></span><span>⋮</span></button>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <button class="menu-button" id="menuButton" aria-label="打开导航">☰</button>
+          <label class="global-search"><span>⌕</span><input id="globalSearch" type="search" placeholder="搜索对话、卡片或研究线索…" /><kbd>⌘ K</kbd></label>
+          <div class="topbar-actions"><button class="secondary-button" id="apiSettingsButton" title="配置 AI 接口">AI 设置</button><button class="icon-button" id="helpButton" title="使用说明">?</button><button class="import-button" id="importButton"><span>↓</span> 导入对话</button></div>
+        </header>
+
+        <section id="dashboardView" class="view active-view">
+          <div class="page-heading">
+            <div><p class="eyebrow" id="todayLabel">研究空间</p><h1>早上好，林予安。</h1><p>把有价值的 AI 对话，变成经得起追溯的科研资产。</p></div>
+            <button class="primary-button" id="newCardButton"><span>+</span> 新建知识卡片</button>
+          </div>
+
+          <div class="stats-grid" id="statsGrid"></div>
+
+          <div class="dashboard-grid">
+            <section class="panel activity-panel">
+              <div class="panel-heading"><div><p class="eyebrow">研究动态</p><h2>最近沉淀</h2></div><button class="text-button" data-goto="cards">查看全部 <span>→</span></button></div>
+              <div id="recentActivity" class="activity-list"></div>
+            </section>
+            <section class="panel verification-panel">
+              <div class="panel-heading"><div><p class="eyebrow amber">需要关注</p><h2>待验证线索</h2></div><button class="text-button" data-filter-status="待验证">查看全部 <span>→</span></button></div>
+              <div id="verificationList" class="verification-list"></div>
+            </section>
+          </div>
+
+          <section class="panel quick-panel">
+            <div class="panel-heading"><div><p class="eyebrow">下一步</p><h2>从这里继续你的研究</h2></div></div>
+            <div class="quick-actions">
+              <button class="quick-action accent-green" data-action="import"><span>↓</span><b>导入一段对话</b><small>支持 JSON 和文本文件</small><i>→</i></button>
+              <button class="quick-action accent-purple" data-action="card"><span>◇</span><b>记录研究发现</b><small>结论、方法或灵感</small><i>→</i></button>
+              <button class="quick-action accent-amber" data-action="verify"><span>✓</span><b>核验一个线索</b><small>标注 AI 内容的可信度</small><i>→</i></button>
+            </div>
+          </section>
+        </section>
+
+        <section id="conversationsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">对话资料</p><h1>来自不同模型的研究过程</h1><p>原始上下文会被保留，沉淀的内容可随时回溯。</p></div><button class="primary-button" data-action="import"><span>↓</span> 导入对话</button></div>
+          <div class="content-layout conversation-layout">
+            <section class="conversation-list-panel"><div class="list-toolbar"><span id="conversationCount"></span><select id="conversationProjectFilter" aria-label="按项目筛选对话"></select></div><div id="conversationList" class="conversation-list"></div></section>
+            <section class="conversation-detail-panel" id="conversationDetail"></section>
+          </div>
+        </section>
+
+        <section id="cardsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">知识卡片</p><h1>可复用的研究资产</h1><p>先记录，再核验；所有结论均可回到它的来源。</p></div><button class="primary-button" data-action="card"><span>+</span> 新建知识卡片</button></div>
+          <div class="filter-bar">
+            <label class="filter-search"><span>⌕</span><input id="cardSearch" placeholder="在知识卡片中搜索" /></label>
+            <select id="typeFilter" aria-label="按类型筛选"><option value="all">全部类型</option><option>研究结论</option><option>研究方法</option><option>提示词</option><option>代码片段</option><option>文献线索</option><option>待办</option></select>
+            <select id="statusFilter" aria-label="按核验状态筛选"><option value="all">全部状态</option><option>未核验</option><option>待验证</option><option>已验证</option><option>存疑</option></select>
+            <select id="projectFilter" aria-label="按项目筛选"></select>
+            <button class="clear-filters" id="clearFilters">清除筛选</button>
+          </div>
+          <p class="result-summary" id="cardResultSummary"></p>
+          <div id="cardGrid" class="card-grid"></div>
+        </section>
+
+        <section id="referencesView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">文献与证据</p><h1>为研究结论补上依据</h1><p>将 DOI、网页、数据文件或实验记录关联到知识卡片。</p></div><button class="primary-button" id="addEvidenceButton"><span>+</span> 添加证据</button></div>
+          <div class="evidence-empty panel"><div class="empty-illustration">↗</div><h2>证据库正在建立</h2><p>在知识卡片中关联文献或原始数据后，它们会集中显示在这里。<br />请始终核验模型提供的参考文献与结论。</p><button class="secondary-button" data-goto="cards">前往知识卡片</button></div>
+        </section>
+
+        <section id="logsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>每天的实验记录都会保存为 <b>实验日志/日期.md</b>，并实时更新项目 AGENTS.md。</p></div><button class="secondary-button" id="viewAgentsButton">查看 AGENTS.md</button></div>
+          <div id="logsBody"></div>
+        </section>
+
+        <section id="recordsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">对话记录</p><h1 id="recordsProjectTitle">选择一个研究项目</h1><p>对话保存到项目的 <b>对话记录/</b> 文件夹；配置 AI 设置后可基于项目记忆继续提问。</p></div><div style="display:flex;gap:8px"><button class="secondary-button" id="recordImportButton">导入对话</button><button class="primary-button" id="newRecordButton"><span>+</span> 新建对话</button></div></div>
+          <div id="recordsBody"></div>
+        </section>
+
+        <section id="memoryView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">项目记忆</p><h1 id="memoryProjectTitle">选择一个研究项目</h1><p>项目说明与重要信息会写入 README.md 与 AGENTS.md；手工写在自动区块外的内容会保留。</p></div></div>
+          <div id="memoryBody"></div>
+        </section>
+      </main>
+    </div>
+
+    <input id="fileInput" type="file" accept=".json,.txt,.md,text/plain,application/json" hidden />
+    <div id="modalRoot"></div>
+    <div id="toast" class="toast" role="status"></div>
+    <script src="app.js"></script>
+    <script src="records.js"></script>
+  </body>
+</html>
