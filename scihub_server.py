@@ -210,6 +210,47 @@ def project_summary(project: dict) -> dict:
     }
 
 
+def project_deletion_paths(project: dict) -> tuple[Path, list[Path], list[Path]]:
+    """列出项目内的全部待删除条目；链接或异常类型会被拒绝，避免误删。"""
+    projects_root = PROJECTS_ROOT.resolve()
+    target = project["dir"].resolve()
+    if target.parent != projects_root or not target.is_dir() or target.is_symlink():
+        raise ApiError("项目目录无效，已拒绝删除。")
+    files: list[Path] = []
+    directories: list[Path] = []
+    for item in sorted(target.rglob("*"), key=lambda path: path.relative_to(target).as_posix().casefold()):
+        if item.is_symlink():
+            raise ApiError("项目目录包含链接文件，为避免误删已拒绝删除。")
+        if item.is_file():
+            files.append(item)
+        elif item.is_dir():
+            directories.append(item)
+        else:
+            raise ApiError("项目目录包含无法安全识别的条目，已拒绝删除。")
+    return target, files, directories
+
+
+def project_deletion_preview(project: dict) -> dict:
+    target, files, directories = project_deletion_paths(project)
+    root = PROJECTS_ROOT.resolve()
+    items = [{"path": target.relative_to(root).as_posix() + "/", "kind": "folder"}]
+    items.extend({"path": path.relative_to(root).as_posix() + "/", "kind": "folder"} for path in directories)
+    items.extend({"path": path.relative_to(root).as_posix(), "kind": "file"} for path in files)
+    return {"project": project_summary(project), "folder": target.name, "items": items}
+
+
+def delete_project(project: dict, confirmation: str) -> None:
+    """删除用户已明确确认的项目；按清单逐项处理，不使用递归删除。"""
+    target, files, directories = project_deletion_paths(project)
+    if confirmation != target.name:
+        raise ApiError("请准确输入项目文件夹名以确认删除。")
+    for path in files:
+        path.unlink()
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        path.rmdir()
+    target.rmdir()
+
+
 def update_agents(project: dict) -> None:
     """实时更新项目 AGENTS.md 的自动区块。"""
     readme = read_markdown_document(project["dir"] / "README.md")
@@ -1283,6 +1324,16 @@ class SciHubHandler(BaseHTTPRequestHandler):
             )
             update_agents(project)
             self._send_json(HTTPStatus.OK, {"project": project_summary(project)})
+            return
+
+        if method == "GET" and len(segments) == 4 and segments[3] == "delete-preview":
+            self._send_json(HTTPStatus.OK, project_deletion_preview(project))
+            return
+
+        if method == "DELETE" and len(segments) == 3:
+            payload = self._read_json()
+            delete_project(project, one_line(payload.get("confirmation")))
+            self._send_json(HTTPStatus.OK, {"deleted": True})
             return
 
         if method == "GET" and len(segments) == 4 and segments[3] == "export":

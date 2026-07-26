@@ -272,10 +272,16 @@
         <div><p class="eyebrow">研究项目</p><h2>${esc(project.name)}</h2></div>
         <p>${esc(project.description || '尚未填写项目说明。')}</p>
         <div class="home-project-meta"><span>${project.logCount || 0} 条实验日志</span><span>${project.conversationCount || 0} 段对话</span></div>
-        <div class="home-project-footer"><span>项目/${esc(project.slug)}/</span><button class="primary-button" data-enter-project="${esc(project.slug)}">进入项目</button></div>
+        <div class="home-project-footer"><span>项目/${esc(project.slug)}/</span><div class="home-project-actions"><button class="text-button" data-edit-project="${esc(project.slug)}">编辑信息</button><button class="text-button danger-button" data-delete-project="${esc(project.slug)}">删除项目</button><button class="primary-button" data-enter-project="${esc(project.slug)}">进入项目</button></div></div>
       </article>`).join('')}</div>`;
     body.querySelectorAll('[data-enter-project]').forEach(button => {
       button.onclick = () => selectProject(button.dataset.enterProject);
+    });
+    body.querySelectorAll('[data-edit-project]').forEach(button => {
+      button.onclick = () => openProjectEditDialog(button.dataset.editProject);
+    });
+    body.querySelectorAll('[data-delete-project]').forEach(button => {
+      button.onclick = () => openProjectDeleteDialog(button.dataset.deleteProject);
     });
   }
 
@@ -922,6 +928,92 @@
     init?.();
   }
   function closeModal() { $('modalRoot').innerHTML = ''; }
+
+  function openProjectEditDialog(slug) {
+    const project = R.projects.find(item => item.slug === slug);
+    if (!project) { toast('未找到项目'); return; }
+    openModal(`<div class="modal-header"><div><h2>编辑项目信息</h2><p>会更新该项目的 README.md 与 AGENTS.md；项目文件夹名保持不变，避免移动已有记录。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="editProjectForm"><div class="modal-body"><div class="form-grid">
+        <label class="form-field full"><span>项目名称</span><input id="editProjectName" required maxlength="80" value="${esc(project.name)}" /></label>
+        <label class="form-field full"><span>项目说明</span><textarea id="editProjectDescription" maxlength="800" placeholder="研究目标、样品信息或范围">${esc(project.description || '')}</textarea></label>
+        <label class="form-field full"><span>重要信息</span><textarea id="editProjectImportant" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。">${esc(project.importantInfo || '')}</textarea></label>
+        <p class="field-note full">项目路径保持为：科研项目/${esc(project.slug)}/</p>
+      </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存项目信息</button></div></form>`, () => {
+      $('editProjectForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('editProjectForm').querySelector('[type=submit]');
+        button.disabled = true;
+        button.textContent = '保存中…';
+        try {
+          const response = await api(slugPath(slug), {
+            method: 'POST',
+            body: JSON.stringify({
+              name: $('editProjectName').value.trim(),
+              description: $('editProjectDescription').value.trim(),
+              importantInfo: $('editProjectImportant').value.trim()
+            })
+          });
+          if (R.active?.slug === slug) {
+            R.active = response.project;
+            await loadAgents();
+          }
+          closeModal();
+          await refreshProjects(true);
+          renderHomeView();
+          toast('项目信息已更新');
+        } catch (error) {
+          toast(`保存项目信息失败：${error.message}`);
+        } finally {
+          const current = $('editProjectForm')?.querySelector('[type=submit]');
+          if (current) { current.disabled = false; current.textContent = '保存项目信息'; }
+        }
+      });
+    });
+  }
+
+  async function openProjectDeleteDialog(slug) {
+    const project = R.projects.find(item => item.slug === slug);
+    if (!project) { toast('未找到项目'); return; }
+    try {
+      const preview = await api(`${slugPath(slug)}/delete-preview`);
+      const items = preview.items || [];
+      const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
+      openModal(`<div class="modal-header"><div><h2>删除研究项目</h2><p>该操作会删除整个项目文件夹中的方案、日志、对话、项目记忆及其他文件，无法撤销。</p></div><button class="close-button" data-close-modal>×</button></div>
+        <form id="deleteProjectForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：删除研究项目「${esc(project.name)}」</b><br>待删除目录：科研项目/${esc(preview.folder)}/。以下 ${items.length} 项会被逐项删除，请完整核对后确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入项目文件夹名 <b>${esc(preview.folder)}</b> 以确认删除</span><input id="deleteProjectConfirmation" required autocomplete="off" placeholder="${esc(preview.folder)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除项目</button></div></form>`, () => {
+        $('deleteProjectConfirmation').focus();
+        $('deleteProjectForm').addEventListener('submit', async event => {
+          event.preventDefault();
+          const confirmation = $('deleteProjectConfirmation').value.trim();
+          if (confirmation !== preview.folder) { toast('请输入完整且正确的项目文件夹名'); return; }
+          const button = $('deleteProjectForm').querySelector('[type=submit]');
+          button.disabled = true;
+          button.textContent = '删除中…';
+          try {
+            await api(slugPath(slug), { method: 'DELETE', body: JSON.stringify({ confirmation }) });
+            const deletedActive = R.active?.slug === slug;
+            if (deletedActive) {
+              R.active = null;
+              R.logs = [];
+              R.plans = [];
+              R.conversations = [];
+              R.conversation = null;
+              R.agents = '';
+            }
+            closeModal();
+            await refreshProjects(false);
+            renderHomeView();
+            toast('项目文件夹及确认清单中的内容已删除');
+          } catch (error) {
+            toast(`删除项目失败：${error.message}`);
+            const current = $('deleteProjectForm')?.querySelector('[type=submit]');
+            if (current) { current.disabled = false; current.textContent = '删除项目'; }
+          }
+        });
+      });
+    } catch (error) {
+      toast(`无法读取项目删除清单：${error.message}`);
+    }
+  }
 
   function openProjectDialog() {
     openModal(`<div class="modal-header"><div><h2>新建研究项目</h2><p>会在 科研项目/ 下创建项目文件夹、README.md 与 AGENTS.md。</p></div><button class="close-button" data-close-modal>×</button></div>
