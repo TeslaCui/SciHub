@@ -52,7 +52,9 @@ SciHub 在本机统一转发请求，支持下列服务商的原生消息格式�
 - Claude（Anthropic）
 - DeepSeek
 
-模型下拉列表提供常用示例，并支持填写服务商提供的自定义模型 ID。GPT 可选择“模型默认、低、中、高、极高”推理强度；当所选模型原生支持时，SciHub 会向 GPT 请求发送 `reasoning_effort`。其他服务商或不支持的模型应选择“模型默认”。
+模型下拉列表提供常用示例，并支持填写服务商提供的自定义模型 ID。GPT 与 DeepSeek 可选择“模型默认、低、中、高、极高”推理强度；当所选模型原生支持时，SciHub 会发送 `reasoning_effort`。DeepSeek 会启用其官方思考模式，其中低/中映射为高、极高映射为 `max`；Gemini、Claude 当前不使用此参数。
+
+DeepSeek 的当前预设为 `deepseek-v4-pro` 和 `deepseek-v4-flash`；`deepseek-chat` 与 `deepseek-reasoner` 已于 2026-07-24 弃用。若服务商测试提示了其他允许的模型名，请使用“自定义模型”填写错误提示中给出的名称。
 
 填写服务商、模型和 API Key 后，可点击“测试连接”。测试会使用当前表单内容发送一条最短请求，不要求先保存设置，并在窗口中显示成功结果或服务商返回的错误信息。
 

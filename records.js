@@ -28,7 +28,7 @@
     deepseek: {
       label: 'DeepSeek',
       endpoint: 'https://api.deepseek.com/chat/completions',
-      models: ['deepseek-chat', 'deepseek-reasoner']
+      models: ['deepseek-v4-pro', 'deepseek-v4-flash']
     }
   };
   const REASONING_EFFORTS = {
@@ -84,10 +84,16 @@
 
   function normalizeSettings(stored = {}) {
     const provider = providerFor(stored);
+    const isOfficialDeepSeek = !stored.endpoint
+      || stored.endpoint === 'https://api.deepseek.com'
+      || stored.endpoint === PROVIDERS.deepseek.endpoint;
+    const legacyDeepSeekModel = provider === 'deepseek'
+      && isOfficialDeepSeek
+      && ['deepseek-chat', 'deepseek-reasoner'].includes(stored.model);
     return {
       ...stored,
       provider,
-      model: stored.model || PROVIDERS[provider].models[0],
+      model: legacyDeepSeekModel ? PROVIDERS.deepseek.models[0] : (stored.model || PROVIDERS[provider].models[0]),
       endpoint: stored.endpoint || PROVIDERS[provider].endpoint,
       reasoningEffort: stored.reasoningEffort || 'default'
     };
@@ -128,10 +134,25 @@
     } else {
       url = settings.endpoint || PROVIDERS[settings.provider].endpoint;
       headers = { Authorization: `Bearer ${key}` };
-      const reasoning = settings.provider === 'openai' && settings.reasoningEffort !== 'default'
-        ? { reasoning_effort: settings.reasoningEffort }
-        : {};
-      body = { model: settings.model, messages, ...(Object.keys(reasoning).length ? reasoning : { temperature: 0.2 }) };
+      if (settings.provider === 'deepseek') {
+        const deepSeekEffort = {
+          low: 'high',
+          medium: 'high',
+          high: 'high',
+          xhigh: 'max'
+        }[settings.reasoningEffort];
+        body = {
+          model: settings.model,
+          messages,
+          thinking: { type: 'enabled' },
+          ...(deepSeekEffort ? { reasoning_effort: deepSeekEffort } : {})
+        };
+      } else {
+        const reasoning = settings.provider === 'openai' && settings.reasoningEffort !== 'default'
+          ? { reasoning_effort: settings.reasoningEffort }
+          : {};
+        body = { model: settings.model, messages, ...(Object.keys(reasoning).length ? reasoning : { temperature: 0.2 }) };
+      }
     }
     const response = await api('/api/proxy', {
       method: 'POST',
@@ -506,7 +527,7 @@
       <div class="form-field"><label>模型</label><select id="apiModel">${modelOptions}<option value="__custom__" ${customModel ? 'selected' : ''}>自定义模型…</option></select></div>
       <div id="customModelField" class="form-field full" ${customModel ? '' : 'hidden'}><label>自定义模型名称</label><input id="apiCustomModel" maxlength="160" value="${esc(customModel)}" placeholder="填写服务商提供的模型 ID" /></div>
       <div class="form-field full"><label>接口地址（可选）</label><input id="apiEndpoint" type="url" value="${esc(s.endpoint)}" placeholder="留空将使用所选服务商的默认接口" /><span class="field-note" id="providerEndpointHint"></span></div>
-      <div class="form-field"><label>推理强度</label><select id="apiReasoning">${Object.entries(REASONING_EFFORTS).map(([id, label]) => `<option value="${id}" ${id === s.reasoningEffort ? 'selected' : ''}>${label}</option>`).join('')}</select><span class="field-note">仅在 GPT 模型原生支持时发送；不支持时请选择“模型默认”。</span></div>
+      <div class="form-field"><label>推理强度</label><select id="apiReasoning">${Object.entries(REASONING_EFFORTS).map(([id, label]) => `<option value="${id}" ${id === s.reasoningEffort ? 'selected' : ''}>${label}</option>`).join('')}</select><span class="field-note" id="reasoningHint"></span></div>
       <div class="form-field"><label>API Key</label><input id="apiKey" type="password" autocomplete="off" value="${esc(s.key || R.sessionKey || '')}" placeholder="粘贴 API Key" /></div></div>
       <label class="field-note" style="display:flex;align-items:center;gap:8px;margin-top:13px"><input id="apiStore" type="checkbox" ${s.persist ? 'checked' : ''} style="width:16px;height:16px" /> 保存 API Key 到本浏览器</label>
       <p id="apiTestStatus" class="api-test-status" aria-live="polite"></p>
@@ -525,9 +546,20 @@
             ? 'Gemini 留空时会按所选模型自动生成官方接口地址。'
             : `留空时使用：${defaultEndpoint}`;
         };
-        $('apiProvider').addEventListener('change', () => { renderModels(PROVIDERS[$('apiProvider').value].models[0]); $('apiEndpoint').value = ''; });
+        const updateReasoningControl = () => {
+          const providerId = $('apiProvider').value;
+          const supported = providerId === 'openai' || providerId === 'deepseek';
+          $('apiReasoning').disabled = !supported;
+          $('reasoningHint').textContent = providerId === 'deepseek'
+            ? 'DeepSeek 会启用思考模式；低/中会映射为高，极高会映射为 max。'
+            : providerId === 'openai'
+              ? '仅在所选 GPT 模型原生支持时发送；不支持时请选择“模型默认”。'
+              : '当前服务商不使用此参数，已禁用。';
+        };
+        $('apiProvider').addEventListener('change', () => { renderModels(PROVIDERS[$('apiProvider').value].models[0]); updateReasoningControl(); $('apiEndpoint').value = ''; });
         $('apiModel').addEventListener('change', () => { $('customModelField').hidden = $('apiModel').value !== '__custom__'; if ($('apiModel').value === '__custom__') $('apiCustomModel').focus(); });
         renderModels(s.model);
+        updateReasoningControl();
         const readDraftSettings = () => {
           const providerId = $('apiProvider').value;
           const model = $('apiModel').value === '__custom__' ? $('apiCustomModel').value.trim() : $('apiModel').value;

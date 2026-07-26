@@ -27,7 +27,7 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - `scihub_server.py`：本地 HTTP 服务与项目、日志、对话、项目记忆、AI 转发 API；日志导出接口为 `/api/projects/<slug>/logs/<date>/export`。
 - `index.html`：只包含实验日志、对话记录、项目记忆三个视图。
 - `app.js`：轻量导航、提示消息和项目创建入口。
-- `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT 原生推理强度、日志润色预览、Markdown 导出和 `AGENTS.md` 预览。
+- `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT / DeepSeek 原生推理强度、日志润色预览、Markdown 导出和 `AGENTS.md` 预览。
 - `styles.css`：现有鼠尾草绿主题及界面样式。
 
 ## 数据约定
