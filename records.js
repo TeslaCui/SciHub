@@ -31,10 +31,12 @@
       models: ['deepseek-chat', 'deepseek-reasoner']
     }
   };
-  const POLISH_STRENGTHS = {
-    light: '轻度：只修正错别字、标点和明显语病，尽量保持原有句式。',
-    standard: '标准：在不改变原意的前提下重组表达与段落，让内容清楚、专业、易读。',
-    deep: '深度：在不改变原意、事实或现象的前提下重写为结构严谨的专业实验日志。'
+  const REASONING_EFFORTS = {
+    default: '模型默认',
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '极高'
   };
 
   const esc = (v = '') => (window.SciHubApp ? window.SciHubApp.escapeHtml(v)
@@ -88,7 +90,7 @@
       provider,
       model: stored.model || PROVIDERS[provider].models[0],
       endpoint: stored.endpoint || PROVIDERS[provider].endpoint,
-      polishStrength: stored.polishStrength || 'standard'
+      reasoningEffort: stored.reasoningEffort || 'default'
     };
   }
 
@@ -125,7 +127,10 @@
     } else {
       url = settings.endpoint || PROVIDERS[settings.provider].endpoint;
       headers = { Authorization: `Bearer ${key}` };
-      body = { model: settings.model, temperature: 0.2, messages };
+      const reasoning = settings.provider === 'openai' && settings.reasoningEffort !== 'default'
+        ? { reasoning_effort: settings.reasoningEffort }
+        : {};
+      body = { model: settings.model, messages, ...(Object.keys(reasoning).length ? reasoning : { temperature: 0.2 }) };
     }
     const response = await api('/api/proxy', {
       method: 'POST',
@@ -294,14 +299,13 @@
     if (![R.log.phenomena, R.log.record].some(value => value.trim())) return;
     const b = $('polishBtn'); b.disabled = true; b.textContent = '正在润色…';
     try {
-      const settings = settingsForUse();
       const reply = await askModel([
-        { role: 'system', content: `你是严谨的中文科研实验日志编辑。${POLISH_STRENGTHS[settings.polishStrength] || POLISH_STRENGTHS.standard}\n\n只能基于用户提供的文本润色。允许修正错别字、标点、语法、措辞和结构；不得添加、删除、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性。必须保留原始含义。返回完整的润色文本，不要输出解释、Markdown 围栏或额外字段。只返回 JSON：{"phenomena":"...","record":"..."}。` },
+        { role: 'system', content: '你是严谨的中文科研实验日志编辑。只能基于用户提供的文本润色。允许修正错别字、标点、语法、措辞和结构；不得添加、删除、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性。必须保留原始含义。返回完整的润色文本，不要输出解释、Markdown 围栏或额外字段。只返回 JSON：{"phenomena":"...","record":"..."}。' },
         { role: 'user', content: JSON.stringify({ phenomena: R.log.phenomena, record: R.log.record }) }
       ]);
       let parsed;
       try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
-      catch { throw new Error('模型未返回可用的润色结果，请重试或降低润色强度。'); }
+      catch { throw new Error('模型未返回可用的润色结果，请检查模型设置后重试。'); }
       const polished = {
         phenomena: typeof parsed.phenomena === 'string' ? parsed.phenomena : R.log.phenomena,
         record: typeof parsed.record === 'string' ? parsed.record : R.log.record
@@ -501,7 +505,7 @@
       <div class="form-field"><label>模型</label><select id="apiModel">${modelOptions}<option value="__custom__" ${customModel ? 'selected' : ''}>自定义模型…</option></select></div>
       <div id="customModelField" class="form-field full" ${customModel ? '' : 'hidden'}><label>自定义模型名称</label><input id="apiCustomModel" maxlength="160" value="${esc(customModel)}" placeholder="填写服务商提供的模型 ID" /></div>
       <div class="form-field full"><label>接口地址（可选）</label><input id="apiEndpoint" type="url" value="${esc(s.endpoint)}" placeholder="留空将使用所选服务商的默认接口" /><span class="field-note" id="providerEndpointHint"></span></div>
-      <div class="form-field"><label>润色强度</label><select id="apiStrength">${Object.entries(POLISH_STRENGTHS).map(([id, description]) => `<option value="${id}" ${id === s.polishStrength ? 'selected' : ''}>${id === 'light' ? '轻度' : id === 'standard' ? '标准' : '深度'} · ${esc(description.slice(0, 14))}</option>`).join('')}</select></div>
+      <div class="form-field"><label>推理强度</label><select id="apiReasoning">${Object.entries(REASONING_EFFORTS).map(([id, label]) => `<option value="${id}" ${id === s.reasoningEffort ? 'selected' : ''}>${label}</option>`).join('')}</select><span class="field-note">仅在 GPT 模型原生支持时发送；不支持时请选择“模型默认”。</span></div>
       <div class="form-field"><label>API Key</label><input id="apiKey" type="password" autocomplete="off" value="${esc(s.key || R.sessionKey || '')}" placeholder="粘贴 API Key" /></div></div>
       <label class="field-note" style="display:flex;align-items:center;gap:8px;margin-top:13px"><input id="apiStore" type="checkbox" ${s.persist ? 'checked' : ''} style="width:16px;height:16px" /> 保存 API Key 到本浏览器</label>
       <p class="import-tip">GPT 与 DeepSeek 使用兼容 Chat Completions；Gemini 与 Claude 使用各自的官方消息格式。模型列表仅作快捷选择，也可填写自定义模型 ID。</p></div>
@@ -530,7 +534,7 @@
           const persist = $('apiStore').checked;
           const key = $('apiKey').value.trim();
           R.sessionKey = key;
-          saveSettings({ provider: providerId, endpoint: $('apiEndpoint').value.trim(), model, polishStrength: $('apiStrength').value, key: persist ? key : '', persist });
+          saveSettings({ provider: providerId, endpoint: $('apiEndpoint').value.trim(), model, reasoningEffort: $('apiReasoning').value, key: persist ? key : '', persist });
           closeModal();
           toast(persist ? 'AI 设置已保存到本浏览器' : 'AI 设置已保存；刷新页面后需重新填写 API Key');
         });
