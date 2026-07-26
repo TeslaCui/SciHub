@@ -956,7 +956,7 @@
     document.body.appendChild(link);
     link.click();
     link.remove();
-    toast('正在导出整合的项目记忆 Markdown，可直接提供给 AI 读取');
+    toast('正在更新 scihub-memory/项目记忆.md，并下载同一份项目记忆');
   }
 
   // ------------------------------------------------------- 视图：对话记录 --

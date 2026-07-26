@@ -372,7 +372,9 @@ PLAN_FILE_NAME = "方案.md"
 SUBEXPERIMENT_FILE_NAME = "README.md"
 LOGS_FOLDER = "实验日志"
 PLAN_IMPORTS_FOLDER = "导入资料"
-RESERVED_PLAN_FOLDERS = {"实验日志", "对话记录", "实验方案", "__pycache__"}
+SCIHUB_MEMORY_FOLDER = "scihub-memory"
+SCIHUB_MEMORY_FILE = "项目记忆.md"
+RESERVED_PLAN_FOLDERS = {"实验日志", "对话记录", "实验方案", SCIHUB_MEMORY_FOLDER, "__pycache__"}
 INVALID_FOLDER_CHARS = re.compile(r'[\\/:*?"<>|]+')
 
 
@@ -999,7 +1001,13 @@ def export_project_markdown(project: dict) -> bytes:
     """把项目内全部 Markdown 合并为一份保留目录层级的 Markdown。"""
     root = project["dir"]
     markdown_paths = sorted(
-        (path for path in root.rglob("*.md") if path.is_file()),
+        (
+            path for path in root.rglob("*.md")
+            if path.is_file()
+            and SCIHUB_MEMORY_FOLDER.casefold() not in {
+                item.casefold() for item in path.relative_to(root).parts
+            }
+        ),
         key=lambda item: item.relative_to(root).as_posix().casefold(),
     )
 
@@ -1024,10 +1032,11 @@ def export_project_markdown(project: dict) -> bytes:
 
     name = meta_value(project["meta"], "name", project["slug"])
     lines = [
-        f"# {name} · 项目完整导出",
+        f"# {name} · 项目记忆",
         "",
         f"> 导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "> 此文件按项目目录层级汇总全部 `.md` 文件。",
+        f"> 此文件保存于 `{SCIHUB_MEMORY_FOLDER}/{SCIHUB_MEMORY_FILE}`，按项目目录层级汇总全部源 `.md` 文件。",
+        "> 为避免递归嵌套，汇总时会排除 `scihub-memory/` 自身。",
         "",
         "## 文件目录",
         "",
@@ -1049,6 +1058,17 @@ def export_project_markdown(project: dict) -> bytes:
             "",
         ])
     return "\n".join(lines).encode("utf-8")
+
+
+def project_memory_path(project: dict) -> Path:
+    return project["dir"] / SCIHUB_MEMORY_FOLDER / SCIHUB_MEMORY_FILE
+
+
+def write_project_memory(project: dict) -> bytes:
+    """更新项目内供 Codex 或其他 AI 读取的单一项目记忆 Markdown。"""
+    content = export_project_markdown(project)
+    write_markdown(project_memory_path(project), content.decode("utf-8"))
+    return content
 
 
 def decode_import_payload(payload: dict, allowed_extensions: set[str]) -> tuple[str, bytes, str]:
@@ -1630,6 +1650,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 str(payload.get("importantInfo", "")),
             )
             update_agents(project)
+            write_project_memory(project)
             self._send_json(HTTPStatus.CREATED, {"project": project_summary(project)})
             return
 
@@ -1668,7 +1689,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
             )
             self._send_bytes(
                 HTTPStatus.OK,
-                export_project_markdown(project),
+                write_project_memory(project),
                 "text/markdown; charset=utf-8",
                 {"Content-Disposition": disposition},
             )
