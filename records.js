@@ -253,6 +253,7 @@
   }
 
   function updateTopbarActions(view = currentView()) {
+    document.querySelector('.app-shell')?.classList.toggle('home-mode', view === 'home');
     const exportButton = $('exportProjectButton');
     if (exportButton) exportButton.hidden = view === 'home' || !R.active;
   }
