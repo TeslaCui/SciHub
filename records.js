@@ -53,6 +53,7 @@
     log: { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' },
     logs: [],
     plans: [],
+    planBook: null,
     conversations: [],
     conversation: null,
     agents: '',
@@ -224,7 +225,7 @@
     loadProject(slug).then(() => {
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
-      const v = ['plans', 'logs', 'records', 'memory'].includes(currentView()) ? currentView() : 'logs';
+      const v = ['plans', 'logs', 'records', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'logs';
       window.switchView(v);
       renderActiveView();
     });
@@ -337,10 +338,7 @@
       button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-preview-plan]').forEach(button => {
-      button.onclick = () => openPlanExecutionPreview(button.dataset.previewPlan, button.dataset.subexperimentId || '');
-    });
-    $('plansBody').querySelectorAll('[data-edit-plan-content]').forEach(button => {
-      button.onclick = () => openPlanContentEditor(button.dataset.editPlanContent, null, button.dataset.subexperimentId || '');
+      button.onclick = () => openPlanBookPage(button.dataset.previewPlan, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-export-plan]').forEach(button => {
       button.onclick = () => openPlanExportDialog(button.dataset.exportPlan, button.dataset.subexperimentId || '');
@@ -514,7 +512,7 @@
       R.plans = (await api(`${slugPath(R.active.slug)}/plans`)).plans || R.plans;
       await loadAgents();
       closeModal();
-      await openPlanContentEditor(planId, imported, subexperimentId);
+      openPlanBookPage(planId, subexperimentId, imported);
     } catch (error) {
       toast(`方案文件导入失败：${error.message}`);
     } finally {
@@ -523,42 +521,24 @@
     }
   }
 
-  async function openPlanContentEditor(planId, imported = null, subexperimentId = '') {
+  async function openPlanContentEditor(planId, subexperimentId = '') {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
     const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
     let existing = '';
-    if (!imported) {
-      try {
-        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scopeQuery}`);
-        existing = editablePlanContent(response.content || '');
-      } catch (error) {
-        toast(`读取方案正文失败：${error.message}`);
-        return;
-      }
+    try {
+      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scopeQuery}`);
+      existing = editablePlanContent(response.content || '');
+    } catch (error) {
+      toast(`读取方案正文失败：${error.message}`);
+      return;
     }
-    const sourcePanel = imported ? `<div class="plan-source-panel"><b>已转换并保存为 Markdown</b><br>${esc(imported.storedPath || '导入资料')}<br><small>AI 只读取下方资料生成方案；原始 Word/PDF 不会保存到项目目录。</small><details class="plan-import-details"><summary>查看转换后的资料</summary><pre>${esc(imported.markdown || imported.source || '')}</pre></details></div>` : '<div class="plan-source-panel"><b>方案正文编辑</b><br><small>可直接编辑 Markdown。若要依据文件重新生成，请使用方案卡片中的“导入方案文件”。</small></div>';
-    openModal(`<div class="modal-header"><div><h2>${imported ? '生成标准实验方案' : '查看 / 编辑方案正文'}</h2><p>方案保存为 Markdown；AI 生成结果会先显示给你审核和修改，再写入方案。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body"><div class="form-grid"><div class="form-field full">${sourcePanel}</div><label class="form-field full"><span>实验方案正文（可编辑）</span><textarea id="planContentEditor" style="min-height:300px" placeholder="点击“AI 生成标准方案”后，内容会显示在这里；也可以直接手动填写。">${esc(existing)}</textarea><div class="plan-ai-actions"><small>AI 会保留来源中的事实；资料未给出的条件会标为“待补充”。</small>${imported ? '<button type="button" class="secondary-button" id="generateStandardPlanButton">✦ AI 生成标准方案</button>' : ''}</div></label></div></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="savePlanContentButton" type="button" class="primary-button">保存方案 Markdown</button></div>`, () => {
-      $('generateStandardPlanButton')?.addEventListener('click', async () => {
-        const button = $('generateStandardPlanButton');
-        button.disabled = true;
-        button.textContent = 'AI 生成中…';
-        try {
-          const result = await askModel(standardPlanPrompt(imported.markdown || imported.source || ''));
-          $('planContentEditor').value = result.trim();
-          toast('标准实验方案已生成，请审核后保存');
-        } catch (error) {
-          toast(`AI 生成失败：${error.message}`);
-        } finally {
-          button.disabled = false;
-          button.textContent = '✦ AI 生成标准方案';
-        }
-      });
+    openModal(`<div class="modal-header"><div><h2>编辑实验方案书</h2><p>这里用于手动修订已生成的方案。保存后会回到排版好的实验方案书页面。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><label class="form-field full"><span>方案正文</span><textarea id="planContentEditor" style="min-height:340px" placeholder="输入需要修订的方案内容…">${esc(existing)}</textarea></label></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="savePlanContentButton" type="button" class="primary-button">保存并查看方案书</button></div>`, () => {
       $('savePlanContentButton').addEventListener('click', async () => {
         const content = $('planContentEditor').value.trim();
-        if (!content) { toast('请先生成或填写方案正文'); return; }
+        if (!content) { toast('请填写实验方案正文'); return; }
         const button = $('savePlanContentButton');
         button.disabled = true;
         button.textContent = '保存中…';
@@ -570,13 +550,13 @@
           await loadAgents();
           closeModal();
           renderPlansView();
-          await openPlanExecutionPreview(planId, subexperimentId);
-          toast('实验方案已保存；现在显示 A4 实验执行单预览');
+          openPlanBookPage(planId, subexperimentId);
+          toast('实验方案书已保存');
         } catch (error) {
           toast(`保存方案失败：${error.message}`);
         } finally {
           const current = $('savePlanContentButton');
-          if (current) { current.disabled = false; current.textContent = '保存方案 Markdown'; }
+          if (current) { current.disabled = false; current.textContent = '保存并查看方案书'; }
         }
       });
     });
@@ -633,33 +613,66 @@
     };
   }
 
-  async function openPlanExecutionPreview(planId, subexperimentId = '') {
+  function openPlanBookPage(planId, subexperimentId = '', imported = null) {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
-    const scope = planScopeDetails(plan, subexperimentId);
-    let response;
+    R.planBook = { planId, subexperimentId, imported };
+    window.switchView('planBook');
+  }
+
+  async function renderPlanBookView() {
+    const book = R.planBook;
+    const host = $('planBookBody');
+    if (!book || !host || !R.active) { window.switchView('plans'); return; }
+    const plan = R.plans.find(item => item.id === book.planId);
+    if (!plan) { toast('未找到实验方案'); window.switchView('plans'); return; }
+    const scope = planScopeDetails(plan, book.subexperimentId);
+    host.innerHTML = '<div class="empty-state"><span>◌</span><strong>正在载入实验方案书…</strong></div>';
+    let content = '';
     try {
-      response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scope.query}`);
+      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content${scope.query}`);
+      content = editablePlanContent(response.content || '');
     } catch (error) {
-      toast(`读取实验执行方案失败：${error.message}`);
+      host.innerHTML = `<div class="empty-state"><span>!</span><strong>无法读取实验方案书</strong><p>${esc(error.message)}</p></div>`;
       return;
     }
-    openModal(`<div class="modal-header execution-preview-header"><div><p class="eyebrow">A4 实验执行单</p><h2>${esc(scope.title)}</h2><p>这是按 Word 执行单版式排版的预览；项目中仍仅保存可追溯的 Markdown 源文件。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="execution-preview-toolbar"><span>预览缩放</span><button class="text-button" id="executionZoomOut">−</button><b id="executionZoomValue">72%</b><button class="text-button" id="executionZoomIn">+</button><button class="text-button" id="executionZoomReset">适合窗口</button></div>
-      <div class="execution-preview-scroller"><article id="executionA4Page" class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验执行方案</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验执行方案</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(response.content || '')}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article></div>
-      <div class="modal-footer"><button id="executionEditButton" type="button" class="secondary-button">编辑方案正文</button><button id="executionExportButton" type="button" class="primary-button">导出实验方案</button></div>`, () => {
-      let zoom = 72;
-      const applyZoom = () => {
-        $('executionA4Page').style.zoom = `${zoom}%`;
-        $('executionZoomValue').textContent = `${zoom}%`;
-      };
-      applyZoom();
-      $('executionZoomOut').onclick = () => { zoom = Math.max(45, zoom - 8); applyZoom(); };
-      $('executionZoomIn').onclick = () => { zoom = Math.min(120, zoom + 8); applyZoom(); };
-      $('executionZoomReset').onclick = () => { zoom = 72; applyZoom(); };
-      $('executionEditButton').onclick = () => { closeModal(); openPlanContentEditor(planId, null, subexperimentId); };
-      $('executionExportButton').onclick = () => { closeModal(); openPlanExportDialog(planId, subexperimentId); };
-    });
+    const imported = book.imported;
+    const sourceAction = imported && !content
+      ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
+      : content
+        ? `<article class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(content)}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article>`
+        : '<div class="plan-book-empty"><h2>尚未生成实验方案书</h2><p>请先导入方案资料；系统会将资料转换为 Markdown 后，按统一模板生成可执行的实验方案书。</p></div>';
+    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${content ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
+    $('backToPlansButton').onclick = () => window.switchView('plans');
+    $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
+    $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId));
+    $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
+  }
+
+  async function generatePlanBook(book, scope) {
+    const imported = book.imported;
+    if (!imported) { toast('请先导入方案资料'); return; }
+    const button = $('generatePlanBookButton');
+    if (!button) return;
+    button.disabled = true;
+    button.textContent = '正在生成实验方案书…';
+    try {
+      const content = (await askModel(standardPlanPrompt(imported.markdown || imported.source || ''))).trim();
+      if (!content) throw new Error('AI 未返回可保存的方案内容');
+      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content`, {
+        method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId: book.subexperimentId })
+      });
+      R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+      R.planBook = { ...book, imported: null };
+      await loadAgents();
+      renderPlansView();
+      await renderPlanBookView();
+      toast('实验方案书已按统一模板生成');
+    } catch (error) {
+      toast(`生成实验方案书失败：${error.message}`);
+      button.disabled = false;
+      button.textContent = '生成实验方案书';
+    }
   }
 
   function downloadPlanExport(planId, format, subexperimentId = '', includeRecordSheet = false) {
@@ -1418,6 +1431,7 @@
     const v = currentView();
     if (v === 'home') renderHomeView();
     else if (v === 'plans') renderPlansView();
+    else if (v === 'planBook') renderPlanBookView();
     else if (v === 'logs') renderLogsView();
     else if (v === 'records') renderRecordsView();
     else if (v === 'memory') renderMemoryView();
@@ -1427,6 +1441,7 @@
     updateTopbarActions(view);
     if (view === 'home') renderHomeView();
     else if (view === 'plans') renderPlansView();
+    else if (view === 'planBook') renderPlanBookView();
     else if (view === 'logs') renderLogsView();
     else if (view === 'records') renderRecordsView();
     else if (view === 'memory') renderMemoryView();
