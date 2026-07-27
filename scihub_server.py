@@ -1226,10 +1226,9 @@ def extract_imported_document(payload: dict, allowed_extensions: set[str]) -> di
     }
 
 
-def import_docx_document(payload: dict) -> dict:
-    """兼容实验日志的既有 DOCX 导入接口。"""
-    document = extract_imported_document(payload, {".docx"})
-    return {"source": document["source"], "images": document["images"]}
+def import_log_document(payload: dict) -> dict:
+    """读取实验日志来源文件；原文件不落盘，日志仍以 Markdown 保存。"""
+    return extract_imported_document(payload, {".docx", ".pdf", ".md", ".markdown", ".txt"})
 
 
 def source_document_markdown(document: dict) -> str:
@@ -2057,7 +2056,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
             )
             return
         if method == "POST" and len(segments) == 6 and segments[5] == "import":
-            self._send_json(HTTPStatus.OK, import_docx_document(self._read_json()))
+            self._send_json(HTTPStatus.OK, import_log_document(self._read_json()))
             return
         if len(segments) != 5:
             raise ApiError("找不到实验日志。", HTTPStatus.NOT_FOUND)

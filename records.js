@@ -50,7 +50,7 @@
     active: null,        // 当前项目 summary
     tab: 'logs',
     date: TODAY,
-    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' },
+    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '', aiContext: '', includePlanMemory: true },
     logs: [],
     plans: [],
     planBook: null,
@@ -856,6 +856,8 @@
       planVersion: typeof log.planVersion === 'string' ? log.planVersion : '',
       subexperimentId,
       subexperimentName: typeof log.subexperimentName === 'string' ? log.subexperimentName : '',
+      aiContext: typeof log.aiContext === 'string' ? log.aiContext : '',
+      includePlanMemory: log.includePlanMemory !== false,
       formattedSource: source && (phenomena || record) ? source : ''
     };
   }
@@ -912,7 +914,7 @@
         </div>
         <div class="record-field"><div class="record-field-head"><span>实验日志内容</span><small id="logSourceCount">${source.length} 字</small></div>
           <textarea id="logSource" class="record-textarea log-source-input" placeholder="输入实验过程、现象、数据、条件、结论与后续计划；保存时可由 AI 自动整理为实验现象、实验记录等板块。">${esc(source)}</textarea>
-          <p class="record-hint">${l.images.length ? `已记录导入文档中的 ${l.images.length} 项图片信息。` : '可直接输入，或导入 Word / Markdown / 文本文档。'}</p>
+          <p class="record-hint">${l.images.length ? `已记录导入文档中的 ${l.images.length} 项图片信息。` : '可直接输入，或导入 Word、PDF、Markdown / 文本文档。'}</p>
         </div>
         <div class="record-foot">
           <label class="auto-polish-toggle"><input id="autoPolish" type="checkbox" ${R.autoPolish ? 'checked' : ''} /><span>保存时使用 AI 自动整理与润色</span><small>默认开启；保留原意，不添加实验事实。</small></label>
@@ -984,10 +986,41 @@
     return false;
   }
 
+  async function buildLogAiContext() {
+    const parts = [];
+    const manualMemory = String(R.log.aiContext || '').trim();
+    if (manualMemory) parts.push(`## 用户提供的实验方案记忆\n\n${manualMemory}`);
+    if (R.log.includePlanMemory !== false && R.log.planId) {
+      const plan = planForLog(R.log);
+      const scope = planScopeDetails(plan, R.log.subexperimentId);
+      const label = scope.subexperiment
+        ? `${plan.name} · ${plan.version} · ${scope.subexperiment.name}`
+        : `${plan?.name || '关联实验方案'} · ${plan?.version || ''}`;
+      try {
+        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(R.log.planId)}/content${scope.query}`);
+        const content = editablePlanContent(response.content || '').trim();
+        if (content) {
+          const maximum = 12000;
+          const clipped = content.length > maximum
+            ? `${content.slice(0, maximum)}\n\n[方案内容较长，以下部分未发送给 AI]`
+            : content;
+          parts.push(`## 当前关联实验方案：${label}\n\n${clipped}`);
+        }
+      } catch (error) {
+        toast('未能读取关联方案内容；将仅依据导入文档和手动记忆进行整理。');
+      }
+    }
+    return parts.join('\n\n---\n\n');
+  }
+
   async function formatLogWithAi(source) {
+    const context = await buildLogAiContext();
+    const contextMessage = context
+      ? `\n\n以下是仅用于术语、样品与步骤校对的实验方案记忆。它不是实验已经发生的证据，不能用它补写、修改或推断导入文档中没有的事实：\n\n${context}`
+      : '';
     const reply = await askModel([
-      { role: 'system', content: '你是严谨的中文科研实验日志编辑。请将用户的原始输入自动整理为“实验现象”和“实验记录”两个板块，并润色错别字、语法、表达和结构。不得编造、删减、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性，必须保留原意。只返回 JSON：{"phenomena":"...","record":"..."}。' },
-      { role: 'user', content: source }
+      { role: 'system', content: '你是严谨的中文科研实验日志编辑。请从导入文档中提取明确属于已执行实验的过程、条件、数据、观察现象、结果、异常和后续事项，整理为“实验现象”和“实验记录”两个板块，并润色错别字、语法、表达和结构。背景介绍、文献内容、计划步骤或模板字段若未明确已执行，不得写成实验记录。不得编造、删减、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性；导入文档原文会被另外保存，整理结果必须忠于原意。实验方案记忆只能用于核对术语、样品与步骤，不得作为实验发生的依据。只返回 JSON：{"phenomena":"...","record":"..."}。' },
+      { role: 'user', content: `# 待提取的导入文档\n\n${source}${contextMessage}` }
     ]);
     let parsed;
     try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
@@ -1000,8 +1033,11 @@
 
   function openLogImport() {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
-    openModal(`<div class="modal-header"><div><h2>导入文档生成日志</h2><p>支持 Word（.docx）、Markdown 与文本。Word 中的图片将以文件名、类型和大小记录在日志 Markdown 中。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body"><div class="form-field full"><label>选择文档</label><input id="logImportFile" type="file" accept=".docx,.md,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" /></div><p class="import-tip">导入后会自动生成当前日期日志；若“保存时使用 AI 自动整理与润色”已开启，将调用你配置的 AI 整理文档内容。</p></div>
+    const associationHint = R.log.planId
+      ? `将自动读取当前关联的“${esc(logAssociationText(R.log))}”作为校对上下文。`
+      : '可先在日志页面选择关联实验方案，或在下方直接粘贴方案记忆。';
+    openModal(`<div class="modal-header"><div><h2>导入文档生成日志</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。文档仅在本机转换；原始输入和图片信息会写入实验日志 Markdown。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><div class="form-grid"><div class="form-field full"><label>选择文档</label><input id="logImportFile" type="file" accept=".docx,.pdf,.md,.markdown,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/markdown,text/plain" /><small class="field-note">PDF 需包含可提取的文字；扫描件请先 OCR。Word 目前支持 .docx 格式。</small></div><label class="auto-polish-toggle form-field full"><input id="logImportUseAi" type="checkbox" checked /><span>使用 AI 提取并整理有用实验日志</span><small>只提取明确已执行的实验信息；原始导入内容会完整保留。</small></label><label class="auto-polish-toggle form-field full"><input id="logImportUsePlanMemory" type="checkbox" ${R.log.planId ? 'checked' : 'disabled'} /><span>使用当前关联实验方案进行校对</span><small>${associationHint}</small></label><label class="form-field full"><span>实验方案记忆（可选）</span><textarea id="logImportPlanMemory" style="min-height:120px" placeholder="可粘贴样品编号、变量范围、步骤名称、判定标准或方案摘要；仅供 AI 比对术语，不会作为实验事实写入日志。"></textarea></label></div><p class="import-tip">导入后会生成当前日期的实验日志。仅当勾选 AI 整理时，文档内容和上述方案记忆才会发送给你已配置的模型接口。</p></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="logImportConfirm" type="button" class="primary-button">导入并生成日志</button></div>`,
       () => { $('logImportConfirm').onclick = importLogDocument; });
   }
@@ -1023,17 +1059,9 @@
     const button = $('logImportConfirm');
     button.disabled = true; button.textContent = '正在导入…';
     try {
-      const ext = file.name.split('.').pop().toLowerCase();
-      let imported;
-      if (ext === 'docx') {
-        imported = await api(`${slugPath(R.active.slug)}/logs/${R.date}/import`, {
-          method: 'POST', body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
-        });
-      } else if (ext === 'md' || ext === 'txt') {
-        imported = { source: await file.text(), images: [] };
-      } else {
-        throw new Error('仅支持 .docx、.md 和 .txt 文档。');
-      }
+      const imported = await api(`${slugPath(R.active.slug)}/logs/${R.date}/import`, {
+        method: 'POST', body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
+      });
       const source = (imported.source || '').trim();
       if (!source) throw new Error('文档中没有可导入的文本内容。');
       R.log = {
@@ -1043,8 +1071,11 @@
         images: imported.images || [],
         formattedSource: '',
         planId: R.log.planId || '',
-        subexperimentId: R.log.subexperimentId || ''
+        subexperimentId: R.log.subexperimentId || '',
+        aiContext: $('logImportPlanMemory')?.value.trim() || '',
+        includePlanMemory: Boolean($('logImportUsePlanMemory')?.checked)
       };
+      R.autoPolish = Boolean($('logImportUseAi')?.checked);
       closeModal();
       renderLogsView();
       await saveLog(true);
