@@ -316,14 +316,14 @@
       const subexperiments = plan.subexperiments?.length
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-import-plan-source="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导入方案文件</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看执行方案</button><button class="text-button" data-export-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">导出实验方案</button></div></li>`;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中导入、生成并导出方案。</span>' : `${editable ? `<button class="text-button" data-import-plan-source="${esc(plan.id)}">⇧ 导入方案文件</button>` : ''}<button class="text-button" data-preview-plan="${esc(plan.id)}">查看执行方案</button><button class="text-button" data-export-plan="${esc(plan.id)}">导出实验方案</button>`}</div></div>
+        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
@@ -335,14 +335,8 @@
     $('plansBody').querySelectorAll('[data-add-subexperiment]').forEach(button => {
       button.onclick = () => openSubexperimentDialog(button.dataset.addSubexperiment);
     });
-    $('plansBody').querySelectorAll('[data-import-plan-source]').forEach(button => {
-      button.onclick = () => openPlanSourceImportDialog(button.dataset.importPlanSource, button.dataset.subexperimentId || '');
-    });
     $('plansBody').querySelectorAll('[data-preview-plan]').forEach(button => {
       button.onclick = () => openPlanBookPage(button.dataset.previewPlan, button.dataset.subexperimentId || '');
-    });
-    $('plansBody').querySelectorAll('[data-export-plan]').forEach(button => {
-      button.onclick = () => openPlanExportDialog(button.dataset.exportPlan, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
       button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
@@ -491,9 +485,9 @@
     if (!plan || !R.active) { toast('未找到可导入资料的实验方案'); return; }
     const subexperiment = plan.subexperiments?.find(item => item.id === subexperimentId);
     const importFolder = subexperiment ? `${plan.folder}/${subexperiment.folder}/导入资料/` : `${plan.folder}/导入资料/`;
-    openModal(`<div class="modal-header"><div><h2>导入方案文件</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。系统只会把转换后的 Markdown 保存到 <b>${esc(importFolder)}</b>，不会保留原始二进制文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+    openModal(`<div class="modal-header"><div><h2>导入方案资料</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。系统只会把转换后的 Markdown 保存到 <b>${esc(importFolder)}</b>，不会保留原始二进制文件。</p></div><button class="close-button" data-close-modal>×</button></div>
       <div class="modal-body"><div class="form-field full"><label>选择方案资料</label><input id="planSourceFile" type="file" accept=".docx,.pdf,.md,.markdown,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain" /></div><p class="import-tip">Word 中的图片、PDF 页面中的嵌入图片会以文件/页码信息记录在转换后的 Markdown 中；扫描版 PDF 需要先 OCR。</p></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="planSourceImportConfirm" type="button" class="primary-button">导入并生成方案</button></div>`, () => {
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="planSourceImportConfirm" type="button" class="primary-button">导入资料</button></div>`, () => {
       $('planSourceImportConfirm').onclick = () => importPlanSourceDocument(planId, subexperimentId);
     });
   }
@@ -518,7 +512,7 @@
       toast(`方案文件导入失败：${error.message}`);
     } finally {
       const current = $('planSourceImportConfirm');
-      if (current) { current.disabled = false; current.textContent = '导入并生成方案'; }
+      if (current) { current.disabled = false; current.textContent = '导入资料'; }
     }
   }
 
@@ -714,13 +708,15 @@
     const task = runningPlanTaskFor(book);
     const sourceAction = task
       ? planGenerationMarkup(task)
-      : imported && !content
-      ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
+      : imported
+      ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
         ? `<article class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(content)}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article>`
-        : '<div class="plan-book-empty"><h2>尚未生成实验方案书</h2><p>请先导入方案资料；系统会将资料转换为 Markdown 后，按统一模板生成可执行的实验方案书。</p></div>';
-    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${content ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
+        : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
+    const currentContentReady = Boolean(content && !imported && !task);
+    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
     $('backToPlansButton').onclick = () => window.switchView('plans');
+    $('importPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
     $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId));
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
