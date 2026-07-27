@@ -52,6 +52,7 @@ SUBEXPERIMENT_RE = re.compile(
 PLAN_STYLE_RE = re.compile(r"<!--\s*SCIHUB-PLAN-STYLE:\s*({.*?})\s*-->", re.IGNORECASE | re.DOTALL)
 PLAN_FONT_NAMES = {"Microsoft YaHei", "SimSun", "KaiTi", "Noto Serif SC"}
 PLAN_FONT_SIZES = {9, 10, 11, 12, 13, 14, 16}
+PLAN_LAYOUT_MODES = {"compact", "spacious"}
 
 AUTO_START = "<!-- AUTO-UPDATE:START -->"
 AUTO_END = "<!-- AUTO-UPDATE:END -->"
@@ -1295,7 +1296,7 @@ def markdown_line_text(line: str) -> str:
 def plan_presentation_style(content: str) -> dict:
     """读取方案 Markdown 内的受控版式注释，忽略任何非法值。"""
     match = PLAN_STYLE_RE.search(content)
-    style = {"font": "Microsoft YaHei", "fontSize": 11}
+    style = {"font": "Microsoft YaHei", "fontSize": 11, "layout": "spacious"}
     if not match:
         return style
     try:
@@ -1308,6 +1309,8 @@ def plan_presentation_style(content: str) -> dict:
         style["font"] = font
     if isinstance(font_size, (int, float)) and int(font_size) in PLAN_FONT_SIZES:
         style["fontSize"] = int(font_size)
+    if isinstance(candidate, dict) and one_line(candidate.get("layout")) in PLAN_LAYOUT_MODES:
+        style["layout"] = one_line(candidate.get("layout"))
     return style
 
 
@@ -1316,6 +1319,18 @@ def plan_export_sections(value: str, specified: bool) -> Optional[list[str]]:
     if not specified:
         return None
     return [one_line(item) for item in value.split("|") if one_line(item)][:40]
+
+
+def plan_export_layout(value: str) -> Optional[str]:
+    """仅接收预览页允许的排版模式，避免把查询参数直接用于样式。"""
+    layout = one_line(value)
+    return layout if layout in PLAN_LAYOUT_MODES else None
+
+
+def is_materials_section(title: str) -> bool:
+    """判断三级标题是否为适合紧凑排布的材料/仪器清单。"""
+    normalized = re.sub(r"[*_`]", "", title)
+    return bool(re.search(r"(?:材料|试剂).*(?:仪器|耗材)|(?:仪器|耗材).*(?:材料|试剂)|^(?:材料|仪器|试剂|耗材)$", normalized))
 
 
 def filter_plan_content_sections(content: str, selected_sections: Optional[list[str]]) -> str:
@@ -1337,10 +1352,15 @@ def filter_plan_content_sections(content: str, selected_sections: Optional[list[
     return "\n".join(visible).strip()
 
 
-def exportable_plan_content(project: dict, plan_id: str, subexperiment_id: str, selected_sections: Optional[list[str]]) -> tuple[dict, dict, str]:
+def exportable_plan_content(
+    project: dict, plan_id: str, subexperiment_id: str, selected_sections: Optional[list[str]],
+    layout_override: Optional[str] = None,
+) -> tuple[dict, dict, str]:
     """返回导出所需的方案、版式和经筛选的 Markdown，不改写项目资料。"""
     plan, content = plan_markdown_content(project, plan_id, subexperiment_id)
     style = plan_presentation_style(content)
+    if layout_override in PLAN_LAYOUT_MODES:
+        style["layout"] = layout_override
     content = PLAN_STYLE_RE.sub("", content)
     content = filter_plan_content_sections(content, selected_sections)
     return plan, style, content.strip()
@@ -1363,10 +1383,10 @@ def experiment_record_sheet_markdown() -> str:
 
 def export_plan_markdown(
     project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False,
-    selected_sections: Optional[list[str]] = None,
+    selected_sections: Optional[list[str]] = None, layout_override: Optional[str] = None,
 ) -> bytes:
     """导出供人阅读或复用的原生 Markdown，不修改项目中的源文件。"""
-    _, _, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections)
+    _, _, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
     if include_record_sheet:
         content = content.rstrip() + experiment_record_sheet_markdown()
     return (content.rstrip() + "\n").encode("utf-8")
@@ -1439,7 +1459,7 @@ def append_docx_record_sheet(document, set_font, pt, cm) -> None:
 
 def export_plan_docx(
     project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False,
-    selected_sections: Optional[list[str]] = None,
+    selected_sections: Optional[list[str]] = None, layout_override: Optional[str] = None,
 ) -> bytes:
     """在内存中把 Markdown 方案导出 Word；项目目录仍只保存 Markdown。"""
     try:
@@ -1450,7 +1470,7 @@ def export_plan_docx(
     except ImportError as error:
         raise ApiError("Word 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
-    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections)
+    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
     title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     document = Document()
     section = document.sections[0]
@@ -1461,6 +1481,7 @@ def export_plan_docx(
 
     font_name = presentation["font"]
     body_size = presentation["fontSize"]
+    compact_layout = presentation["layout"] == "compact"
 
     def set_font(target, size: float, color: Optional[str] = None) -> None:
         target.font.name = font_name
@@ -1473,13 +1494,13 @@ def export_plan_docx(
 
     normal = document.styles["Normal"]
     set_font(normal, body_size)
-    normal.paragraph_format.space_after = Pt(6)
-    normal.paragraph_format.line_spacing = 1.25
+    normal.paragraph_format.space_after = Pt(3 if compact_layout else 8)
+    normal.paragraph_format.line_spacing = 1.12 if compact_layout else 1.35
     for style_name, size, color in (("Heading 1", 16, "2E74B5"), ("Heading 2", 13, "2E74B5"), ("Heading 3", 12, "1F4D78")):
         style = document.styles[style_name]
         set_font(style, size, color)
-        style.paragraph_format.space_before = Pt(14 if style_name == "Heading 1" else 10)
-        style.paragraph_format.space_after = Pt(6)
+        style.paragraph_format.space_before = Pt((10 if style_name == "Heading 1" else 7) if compact_layout else (16 if style_name == "Heading 1" else 11))
+        style.paragraph_format.space_after = Pt(4 if compact_layout else 7)
 
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -1496,27 +1517,56 @@ def export_plan_docx(
         description.alignment = WD_ALIGN_PARAGRAPH.CENTER
         description.paragraph_format.space_after = Pt(16)
 
+    current_section = ""
+    compact_material_items: list[str] = []
+
+    def flush_compact_material_items() -> None:
+        if not compact_material_items:
+            return
+        paragraph = document.add_paragraph(" · " + "； ".join(compact_material_items))
+        paragraph.paragraph_format.space_after = Pt(4 if compact_layout else 8)
+        compact_material_items.clear()
+
     for raw_line in content.splitlines():
         line = raw_line.rstrip()
-        if not line or line.startswith("<!--"):
+        if not line:
+            flush_compact_material_items()
+            continue
+        if line.startswith("<!--"):
             continue
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
+            flush_compact_material_items()
             level = len(heading.group(1))
             if level == 1:
                 continue
+            if level == 3:
+                current_section = markdown_line_text(heading.group(2))
             style_name = "Heading 1" if level == 2 else "Heading 2" if level == 3 else "Heading 3"
             document.add_paragraph(markdown_line_text(heading.group(2)), style=style_name)
         elif line.startswith("- ") or line.startswith("* "):
-            document.add_paragraph(markdown_line_text(line[2:]), style="List Bullet")
+            item = markdown_line_text(line[2:])
+            if compact_layout and is_materials_section(current_section):
+                compact_material_items.append(item)
+            else:
+                flush_compact_material_items()
+                document.add_paragraph(item, style="List Bullet")
         elif re.match(r"^\d+[.)]\s+", line):
-            document.add_paragraph(markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line)), style="List Number")
+            item = markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line))
+            if compact_layout and is_materials_section(current_section):
+                compact_material_items.append(item)
+            else:
+                flush_compact_material_items()
+                document.add_paragraph(item, style="List Number")
         elif line.startswith("> "):
+            flush_compact_material_items()
             paragraph = document.add_paragraph(markdown_line_text(line[2:]))
             paragraph.paragraph_format.left_indent = Inches(0.25)
             paragraph.runs[0].italic = True
         elif not re.fullmatch(r"[-*_]{3,}", line):
+            flush_compact_material_items()
             document.add_paragraph(markdown_line_text(line))
+    flush_compact_material_items()
     if include_record_sheet:
         append_docx_record_sheet(document, set_font, Pt, Cm)
     buffer = io.BytesIO()
@@ -1579,7 +1629,7 @@ def append_pdf_record_sheet(story: list, h1, h2, body, font_name, colors, cm, Pa
 
 def export_plan_pdf(
     project: dict, plan_id: str, subexperiment_id: str = "", include_record_sheet: bool = False,
-    selected_sections: Optional[list[str]] = None,
+    selected_sections: Optional[list[str]] = None, layout_override: Optional[str] = None,
 ) -> bytes:
     """在内存中把 Markdown 方案导出 PDF；不在项目中留下 PDF 副本。"""
     try:
@@ -1594,7 +1644,7 @@ def export_plan_pdf(
     except ImportError as error:
         raise ApiError("PDF 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
-    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections)
+    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
     title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     font_name = "STSong-Light"
     try:
@@ -1602,9 +1652,10 @@ def export_plan_pdf(
     except (KeyError, ValueError):
         pass
     styles = getSampleStyleSheet()
+    compact_layout = presentation["layout"] == "compact"
     body = ParagraphStyle(
         "SciHubBody", parent=styles["BodyText"], fontName=font_name,
-        fontSize=presentation["fontSize"], leading=presentation["fontSize"] * 1.58, spaceAfter=6,
+        fontSize=presentation["fontSize"], leading=presentation["fontSize"] * (1.36 if compact_layout else 1.68), spaceAfter=3 if compact_layout else 8,
     )
     title_style = ParagraphStyle(
         "SciHubTitle", parent=body, fontSize=18, leading=26, alignment=TA_CENTER,
@@ -1615,15 +1666,15 @@ def export_plan_pdf(
     )
     h1 = ParagraphStyle(
         "SciHubH1", parent=body, fontSize=15, leading=22, textColor=colors.HexColor("#2E74B5"),
-        spaceBefore=14, spaceAfter=7,
+        spaceBefore=10 if compact_layout else 16, spaceAfter=4 if compact_layout else 7,
     )
     h2 = ParagraphStyle(
         "SciHubH2", parent=body, fontSize=12.5, leading=19, textColor=colors.HexColor("#1F4D78"),
-        spaceBefore=10, spaceAfter=5,
+        spaceBefore=7 if compact_layout else 11, spaceAfter=3 if compact_layout else 5,
     )
     h3 = ParagraphStyle(
         "SciHubH3", parent=body, fontSize=11.5, leading=17, textColor=colors.HexColor("#466C59"),
-        spaceBefore=8, spaceAfter=4,
+        spaceBefore=5 if compact_layout else 8, spaceAfter=2 if compact_layout else 4,
     )
     callout = ParagraphStyle(
         "SciHubCallout", parent=body, leftIndent=18, textColor=colors.HexColor("#526159"),
@@ -1637,28 +1688,57 @@ def export_plan_pdf(
     story = [Paragraph(xml_escape(title_text), title_style)]
     if plan.get("description"):
         story.append(Paragraph(xml_escape(plan["description"]), subtitle_style))
+    current_section = ""
+    compact_material_items: list[str] = []
+
+    def flush_compact_material_items() -> None:
+        if not compact_material_items:
+            return
+        story.append(Paragraph("• " + xml_escape("； ".join(compact_material_items)), body))
+        compact_material_items.clear()
+
     for raw_line in content.splitlines():
         line = raw_line.rstrip()
-        if not line or line.startswith("<!--"):
+        if not line:
+            flush_compact_material_items()
+            continue
+        if line.startswith("<!--"):
             continue
         text = xml_escape(markdown_line_text(line))
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
+            flush_compact_material_items()
             level = len(heading.group(1))
             if level == 1:
                 continue
+            if level == 3:
+                current_section = markdown_line_text(heading.group(2))
             heading_style = h1 if level == 2 else h2 if level == 3 else h3
             story.append(Paragraph(xml_escape(markdown_line_text(heading.group(2))), heading_style))
         elif line.startswith("- ") or line.startswith("* "):
-            story.append(Paragraph("• " + xml_escape(markdown_line_text(line[2:])), body))
+            item = markdown_line_text(line[2:])
+            if compact_layout and is_materials_section(current_section):
+                compact_material_items.append(item)
+            else:
+                flush_compact_material_items()
+                story.append(Paragraph("• " + xml_escape(item), body))
         elif re.match(r"^\d+[.)]\s+", line):
-            story.append(Paragraph(xml_escape(line), body))
+            item = markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line))
+            if compact_layout and is_materials_section(current_section):
+                compact_material_items.append(item)
+            else:
+                flush_compact_material_items()
+                story.append(Paragraph(xml_escape(line), body))
         elif line.startswith("> "):
+            flush_compact_material_items()
             story.append(Paragraph(xml_escape(markdown_line_text(line[2:])), callout))
         elif re.fullmatch(r"[-*_]{3,}", line):
+            flush_compact_material_items()
             story.append(Spacer(1, 6))
         else:
+            flush_compact_material_items()
             story.append(Paragraph(text, body))
+    flush_compact_material_items()
     if include_record_sheet:
         append_pdf_record_sheet(story, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle)
     document.build(story)
@@ -2038,10 +2118,11 @@ class SciHubHandler(BaseHTTPRequestHandler):
             subexperiment_id = one_line(query.get("subexperimentId"))
             include_record_sheet = one_line(query.get("includeRecordSheet")).lower() in {"1", "true", "yes", "on"}
             selected_sections = plan_export_sections(query.get("sections", ""), "sections" in query)
+            layout_override = plan_export_layout(query.get("layout", ""))
             _, subexperiment, _ = plan_content_target(project, segments[4], subexperiment_id)
             filename_base = f"{plan['name']}-{plan['version']}" + (f"-{subexperiment['name']}" if subexperiment else "")
             if export_format == "docx":
-                data = export_plan_docx(project, segments[4], subexperiment_id, include_record_sheet, selected_sections)
+                data = export_plan_docx(project, segments[4], subexperiment_id, include_record_sheet, selected_sections, layout_override)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
@@ -2050,7 +2131,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 )
                 return
             if export_format == "pdf":
-                data = export_plan_pdf(project, segments[4], subexperiment_id, include_record_sheet, selected_sections)
+                data = export_plan_pdf(project, segments[4], subexperiment_id, include_record_sheet, selected_sections, layout_override)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
@@ -2059,7 +2140,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 )
                 return
             if export_format == "md":
-                data = export_plan_markdown(project, segments[4], subexperiment_id, include_record_sheet, selected_sections)
+                data = export_plan_markdown(project, segments[4], subexperiment_id, include_record_sheet, selected_sections, layout_override)
                 self._send_bytes(
                     HTTPStatus.OK,
                     data,
