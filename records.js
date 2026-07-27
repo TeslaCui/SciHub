@@ -54,6 +54,7 @@
     logs: [],
     plans: [],
     planBook: null,
+    planGeneration: null,
     conversations: [],
     conversation: null,
     agents: '',
@@ -620,6 +621,79 @@
     window.switchView('planBook');
   }
 
+  function planTaskElapsed(task) {
+    const seconds = Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  function runningPlanTaskFor(book) {
+    const task = R.planGeneration;
+    if (!task || task.status !== 'running' || task.projectSlug !== R.active?.slug) return null;
+    return task.planId === book.planId && task.subexperimentId === book.subexperimentId ? task : null;
+  }
+
+  function planGenerationMarkup(task) {
+    return `<div class="plan-book-generating" role="status" aria-live="polite"><div class="plan-book-generating-orbit" aria-hidden="true"></div><p class="eyebrow">AI 任务正在运行</p><h2>正在生成实验方案书</h2><p>正在按统一模板整理实验目的、设计、材料、步骤、记录与风险。你可以切换页面，任务会继续在当前网站中运行。</p><div class="plan-book-task-time">已运行 <b data-plan-task-elapsed>${planTaskElapsed(task)}</b></div><div class="plan-book-task-progress" aria-hidden="true"><span></span></div><p class="plan-book-task-note">请保持本网站打开；关闭或刷新页面会中断本次生成。</p></div>`;
+  }
+
+  function renderPlanTaskBanner() {
+    const task = R.planGeneration;
+    const isHome = currentView() === 'home';
+    [$('planTaskBanner'), $('planTaskFloatingBanner')].filter(Boolean).forEach(banner => {
+      const isFloating = banner.id === 'planTaskFloatingBanner';
+      const show = Boolean(task?.status === 'running') && (isFloating ? isHome : !isHome);
+      if (!show) {
+        banner.hidden = true;
+        banner.innerHTML = '';
+        return;
+      }
+      banner.hidden = false;
+      banner.title = `正在生成：${task.title}。点击返回任务。`;
+      banner.innerHTML = `<span class="plan-task-spinner" aria-hidden="true"></span><span class="plan-task-banner-copy"><span>正在生成实验方案书</span><small>${esc(task.title)} · 已运行 <b data-plan-task-elapsed>${planTaskElapsed(task)}</b></small></span><span class="plan-task-open" aria-hidden="true">↗</span>`;
+      banner.onclick = () => { openPlanGenerationTask(); };
+    });
+  }
+
+  function refreshPlanTaskStatus() {
+    const task = R.planGeneration;
+    if (!task || task.status !== 'running') return;
+    document.querySelectorAll('[data-plan-task-elapsed]').forEach(node => { node.textContent = planTaskElapsed(task); });
+  }
+
+  function startPlanTaskTicker(task) {
+    renderPlanTaskBanner();
+    refreshPlanTaskStatus();
+    task.timerId = window.setInterval(refreshPlanTaskStatus, 1000);
+  }
+
+  function stopPlanTask(task) {
+    if (task?.timerId) window.clearInterval(task.timerId);
+    if (R.planGeneration === task) R.planGeneration = null;
+    renderPlanTaskBanner();
+  }
+
+  async function openPlanGenerationTask() {
+    const task = R.planGeneration;
+    if (!task || task.status !== 'running') return;
+    R.planBook = { planId: task.planId, subexperimentId: task.subexperimentId, imported: task.imported };
+    if (R.active?.slug !== task.projectSlug) {
+      await loadProject(task.projectSlug);
+      renderProjectSidebar();
+    }
+    if (!R.active) { toast('无法打开正在生成的实验方案书。'); return; }
+    window.switchView('planBook');
+  }
+
+  function notifyPlanGenerationFinished(task) {
+    const message = `实验方案书已生成：${task.title}`;
+    toast(message);
+    document.title = `已完成 · ${task.title} · SciHub`;
+    if (window.Notification && window.Notification.permission === 'granted') {
+      new window.Notification('SciHub 实验方案书已生成', { body: task.title });
+    }
+  }
+
   async function renderPlanBookView() {
     const book = R.planBook;
     const host = $('planBookBody');
@@ -637,7 +711,10 @@
       return;
     }
     const imported = book.imported;
-    const sourceAction = imported && !content
+    const task = runningPlanTaskFor(book);
+    const sourceAction = task
+      ? planGenerationMarkup(task)
+      : imported && !content
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
         ? `<article class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(content)}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article>`
@@ -649,29 +726,52 @@
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
   }
 
-  async function generatePlanBook(book, scope) {
+  function generatePlanBook(book, scope) {
     const imported = book.imported;
     if (!imported) { toast('请先导入方案资料'); return; }
-    const button = $('generatePlanBookButton');
-    if (!button) return;
-    button.disabled = true;
-    button.textContent = '正在生成实验方案书…';
+    if (R.planGeneration?.status === 'running') {
+      toast('已有实验方案书正在生成；已为你保留任务。');
+      openPlanGenerationTask();
+      return;
+    }
+    const task = {
+      status: 'running',
+      projectSlug: R.active.slug,
+      planId: book.planId,
+      subexperimentId: book.subexperimentId,
+      imported,
+      title: scope.title,
+      startedAt: Date.now(),
+      timerId: null,
+    };
+    R.planGeneration = task;
+    startPlanTaskTicker(task);
+    renderPlanBookView();
+    runPlanGeneration(task);
+  }
+
+  async function runPlanGeneration(task) {
     try {
-      const content = (await askModel(standardPlanPrompt(imported.markdown || imported.source || ''))).trim();
+      const content = (await askModel(standardPlanPrompt(task.imported.markdown || task.imported.source || ''))).trim();
       if (!content) throw new Error('AI 未返回可保存的方案内容');
-      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content`, {
-        method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId: book.subexperimentId })
+      const response = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(task.planId)}/content`, {
+        method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId: task.subexperimentId })
       });
-      R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
-      R.planBook = { ...book, imported: null };
-      await loadAgents();
-      renderPlansView();
-      await renderPlanBookView();
-      toast('实验方案书已按统一模板生成');
+      task.status = 'completed';
+      stopPlanTask(task);
+      if (R.active?.slug === task.projectSlug) {
+        R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+        if (R.planBook?.planId === task.planId && R.planBook?.subexperimentId === task.subexperimentId) R.planBook = { ...R.planBook, imported: null };
+        await loadAgents();
+        renderPlansView();
+        if (currentView() === 'planBook' && R.planBook?.planId === task.planId && R.planBook?.subexperimentId === task.subexperimentId) await renderPlanBookView();
+      }
+      notifyPlanGenerationFinished(task);
     } catch (error) {
+      task.status = 'failed';
+      stopPlanTask(task);
+      if (R.active?.slug === task.projectSlug && currentView() === 'planBook') renderPlanBookView();
       toast(`生成实验方案书失败：${error.message}`);
-      button.disabled = false;
-      button.textContent = '生成实验方案书';
     }
   }
 
@@ -1470,6 +1570,7 @@
 
   function onViewActivated(view) {
     updateTopbarActions(view);
+    renderPlanTaskBanner();
     if (view === 'home') renderHomeView();
     else if (view === 'plans') renderPlansView();
     else if (view === 'planBook') renderPlanBookView();
@@ -1480,12 +1581,21 @@
 
   // 事件绑定
   document.addEventListener('DOMContentLoaded', () => {
+    renderPlanTaskBanner();
     $('apiSettingsButton')?.addEventListener('click', openApiDialog);
     $('exportProjectButton')?.addEventListener('click', exportProject);
     $('newPlanButton')?.addEventListener('click', openPlanDialog);
     $('homeNewProjectButton')?.addEventListener('click', openProjectDialog);
     $('viewAgentsButton')?.addEventListener('click', showAgents);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
+    window.addEventListener('beforeunload', event => {
+      if (R.planGeneration?.status === 'running') {
+        event.preventDefault();
+        event.returnValue = '实验方案书仍在生成，关闭或刷新页面会中断任务。';
+        return event.returnValue;
+      }
+      return undefined;
+    });
     $('recordImportButton')?.addEventListener('click', openRecordImport);
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && ['logs'].includes(currentView())) { e.preventDefault(); saveLog(true); }
