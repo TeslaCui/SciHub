@@ -243,7 +243,7 @@
     const list = $('projectList');
     if (!list) return;
     if (!R.projects.length) {
-      list.innerHTML = '<div style="padding:8px;color:#89958e;font-size:11px;line-height:1.6">还没有项目。<br>点击右上角 + 新建，可选择本地项目文件夹。</div>';
+      list.innerHTML = '<div style="padding:8px;color:#89958e;font-size:11px;line-height:1.6">还没有项目。<br>点击右上角 + 新建，资料会保存在 SciHub 的科研项目目录。</div>';
       return;
     }
     list.innerHTML = R.projects.map(p => `
@@ -279,7 +279,7 @@
         <div><p class="eyebrow">研究项目</p><h2>${esc(project.name)}</h2></div>
         <p>${esc(project.description || '尚未填写项目说明。')}</p>
         <div class="home-project-meta"><span>${project.logCount || 0} 条实验日志</span><span>${project.conversationCount || 0} 段对话</span></div>
-        <div class="home-project-footer"><span title="${esc(project.storagePath || `科研项目/${project.slug}/`)}">${esc(project.storagePath || `科研项目/${project.slug}/`)}</span><div class="home-project-actions"><button class="text-button" data-edit-project="${esc(project.slug)}">编辑项目</button>${project.canDeleteFolder === false ? '' : `<button class="text-button danger-button" data-delete-project="${esc(project.slug)}">删除项目</button>`}<button class="primary-button" data-enter-project="${esc(project.slug)}">进入项目</button></div></div>
+        <div class="home-project-footer"><span title="科研项目/${esc(project.slug)}/">科研项目/${esc(project.slug)}/</span><div class="home-project-actions"><button class="text-button" data-edit-project="${esc(project.slug)}">编辑项目</button><button class="text-button danger-button" data-delete-project="${esc(project.slug)}">删除项目</button><button class="primary-button" data-enter-project="${esc(project.slug)}">进入项目</button></div></div>
       </article>`).join('')}</div>`;
     body.querySelectorAll('[data-enter-project]').forEach(button => {
       button.onclick = () => selectProject(button.dataset.enterProject);
@@ -306,8 +306,7 @@
   }
 
   function projectPath(...parts) {
-    const root = String(R.active?.storagePath || `科研项目/${R.active?.slug || '当前项目'}`).replace(/[\\/]+$/, '');
-    return [root, ...parts.filter(Boolean).map(String)].join('/');
+    return ['科研项目', R.active?.slug || '当前项目', ...parts.filter(Boolean).map(String)].join('/');
   }
 
   function logStoragePath(log = R.log, date = R.date) {
@@ -1895,13 +1894,41 @@
 
   function exportProject() {
     if (!R.active) { toast('请先选择项目'); return; }
-    const link = document.createElement('a');
-    link.href = `${slugPath(R.active.slug)}/export`;
-    link.download = `${R.active.name}-项目记忆.md`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    toast('正在更新 sciMemory/项目记忆.md，并下载同一份项目记忆');
+    openModal(`<div class="modal-header"><div><h2>导出项目记忆 Markdown</h2><p>项目原始资料仍保存在 SciHub 的科研项目目录；此操作只将汇总后的项目记忆复制到你选择的位置。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="exportProjectForm"><div class="modal-body"><label class="form-field full"><span>导出文件夹</span><div class="inline-file-actions"><input id="exportProjectPath" required placeholder="例如：D:\\科研资料\\导出" /><button id="chooseExportFolder" type="button" class="secondary-button">选择导出文件夹</button></div><small class="field-note">若同名文件已存在，会自动使用新的文件名，不会覆盖原文件。</small></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">导出 Markdown</button></div></form>`, () => {
+      $('chooseExportFolder').onclick = async () => {
+        const button = $('chooseExportFolder');
+        button.disabled = true;
+        button.textContent = '正在打开…';
+        try {
+          const response = await api('/api/choose-export-folder', { method: 'POST', body: JSON.stringify({}) });
+          if (response.path) $('exportProjectPath').value = response.path;
+        } catch (error) {
+          toast(`无法选择导出文件夹：${error.message}`);
+        } finally {
+          const current = $('chooseExportFolder');
+          if (current) { current.disabled = false; current.textContent = '选择导出文件夹'; }
+        }
+      };
+      $('exportProjectForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('exportProjectForm').querySelector('[type=submit]');
+        button.disabled = true;
+        button.textContent = '导出中…';
+        try {
+          const response = await api(`${slugPath(R.active.slug)}/export`, {
+            method: 'POST',
+            body: JSON.stringify({ exportPath: $('exportProjectPath').value.trim() })
+          });
+          closeModal();
+          toast(`项目记忆已导出：${response.path}`);
+        } catch (error) {
+          toast(`导出失败：${error.message}`);
+          button.disabled = false;
+          button.textContent = '导出 Markdown';
+        }
+      });
+    });
   }
 
   // ------------------------------------------------------- 视图：对话记录 --
@@ -1978,7 +2005,7 @@
         <div class="form-field full"><label>项目名称</label><input id="memName" maxlength="80" value="${esc(p.name)}" /></div>
         <div class="form-field full"><label>项目说明</label><textarea id="memDesc" style="min-height:70px" maxlength="800">${esc(p.description || '')}</textarea></div>
         <div class="form-field full"><label>重要信息</label><textarea id="memImportant" style="min-height:110px" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。">${esc(p.importantInfo || '')}</textarea></div>
-        <div class="record-foot"><span class="record-hint">项目路径：${esc(p.storagePath || `科研项目/${p.slug}/`)}</span><button id="saveMemBtn" class="primary-button">保存项目记忆</button></div>
+        <div class="record-foot"><span class="record-hint">项目路径：科研项目/${esc(p.slug)}/</span><button id="saveMemBtn" class="primary-button">保存项目记忆</button></div>
         <div class="record-agents"><div class="record-field-head"><span>AGENTS.md（自动更新）</span></div><pre class="agents-preview">${esc(R.agents || '正在读取 AGENTS.md…')}</pre></div>
       </div>`;
     $('saveMemBtn').onclick = saveProjectInfo;
@@ -2006,33 +2033,15 @@
   }
   function closeModal() { $('modalRoot').innerHTML = ''; }
 
-  async function chooseProjectFolder(inputId, buttonId) {
-    const button = $(buttonId);
-    if (button) { button.disabled = true; button.textContent = '正在打开…'; }
-    try {
-      const response = await api('/api/projects/choose-folder', { method: 'POST', body: JSON.stringify({}) });
-      if (response.path) $(inputId).value = response.path;
-    } catch (error) {
-      toast(`无法选择本地文件夹：${error.message}`);
-    } finally {
-      const current = $(buttonId);
-      if (current) { current.disabled = false; current.textContent = '选择本地文件夹'; }
-    }
-  }
-
   function openProjectEditDialog(slug) {
     const project = R.projects.find(item => item.slug === slug);
     if (!project) { toast('未找到项目'); return; }
-    const storagePath = project.storagePath || `科研项目/${project.slug}`;
-    openModal(`<div class="modal-header"><div><h2>编辑项目</h2><p>可修改项目说明和关联的本地项目文件夹。变更文件夹时可选择复制现有资料；旧文件夹不会被删除。</p></div><button class="close-button" data-close-modal>×</button></div>
+    openModal(`<div class="modal-header"><div><h2>编辑项目</h2><p>项目资料固定保存在 SciHub 的科研项目目录；可在此修改项目名称、说明与重要信息。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="editProjectForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field full"><span>项目名称</span><input id="editProjectName" required maxlength="80" value="${esc(project.name)}" /></label>
         <label class="form-field full"><span>项目说明</span><textarea id="editProjectDescription" maxlength="800" placeholder="研究目标、样品信息或范围">${esc(project.description || '')}</textarea></label>
         <label class="form-field full"><span>重要信息</span><textarea id="editProjectImportant" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。">${esc(project.importantInfo || '')}</textarea></label>
-        <label class="form-field full"><span>本地项目文件夹</span><div class="inline-file-actions"><input id="editProjectStoragePath" value="${esc(storagePath)}" placeholder="例如：D:\\科研项目\\ORR-001" /><button id="editProjectChooseFolder" type="button" class="secondary-button">选择本地文件夹</button></div><small class="field-note">项目日志、方案、对话和 sciMemory/项目记忆.md 都保存在此文件夹。</small></label>
-        <label class="project-copy-toggle full"><input id="editProjectCopyExisting" type="checkbox" checked /><span><b>复制现有项目资料到新的文件夹</b><small>仅在路径确实变更时生效；新文件夹必须为空。旧文件夹会完整保留，不会被删除或覆盖。</small></span></label>
       </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存项目信息</button></div></form>`, () => {
-      $('editProjectChooseFolder').onclick = () => chooseProjectFolder('editProjectStoragePath', 'editProjectChooseFolder');
       $('editProjectForm').addEventListener('submit', async event => {
         event.preventDefault();
         const button = $('editProjectForm').querySelector('[type=submit]');
@@ -2044,9 +2053,7 @@
             body: JSON.stringify({
               name: $('editProjectName').value.trim(),
               description: $('editProjectDescription').value.trim(),
-              importantInfo: $('editProjectImportant').value.trim(),
-              storagePath: $('editProjectStoragePath').value.trim(),
-              copyExistingFolder: $('editProjectCopyExisting').checked
+              importantInfo: $('editProjectImportant').value.trim()
             })
           });
           if (R.active?.slug === slug) {
@@ -2113,20 +2120,19 @@
   }
 
   function openProjectDialog() {
-    openModal(`<div class="modal-header"><div><h2>新建研究项目</h2><p>可指定项目的本地文件夹。SciHub 会在该文件夹创建 Markdown 项目资料、AGENTS.md 与 sciMemory/。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <form id="newProjectForm"><div class="modal-body"><div class="form-grid"><div class="form-field full"><label>项目名称</label><input id="npName" required maxlength="80" placeholder="如：电催化 ORR 活性优化" /></div><div class="form-field full"><label>项目说明</label><textarea id="npDesc" maxlength="800" placeholder="研究目标、样品信息或范围"></textarea></div><div class="form-field full"><label>重要信息</label><textarea id="npImportant" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。"></textarea></div><label class="form-field full"><span>本地项目文件夹（可选）</span><div class="inline-file-actions"><input id="npStoragePath" placeholder="例如：D:\\科研项目\\ORR-001；留空则存入 SciHub/科研项目/" /><button id="npChooseFolder" type="button" class="secondary-button">选择本地文件夹</button></div><small class="field-note">可关联已有文件夹；SciHub 不会覆盖其中已有 README.md，而会新建专用项目元数据 Markdown。</small></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建项目</button></div></form>`,
+    openModal(`<div class="modal-header"><div><h2>新建研究项目</h2><p>项目资料将以 Markdown 形式保存在 SciHub 的「科研项目」目录中。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="newProjectForm"><div class="modal-body"><div class="form-grid"><div class="form-field full"><label>项目名称</label><input id="npName" required maxlength="80" placeholder="如：电催化 ORR 活性优化" /></div><div class="form-field full"><label>项目说明</label><textarea id="npDesc" maxlength="800" placeholder="研究目标、样品信息或范围"></textarea></div><div class="form-field full"><label>重要信息</label><textarea id="npImportant" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。"></textarea></div></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建项目</button></div></form>`,
       () => {
         $('npName').focus();
-        $('npChooseFolder').onclick = () => chooseProjectFolder('npStoragePath', 'npChooseFolder');
         $('newProjectForm').addEventListener('submit', async e => {
           e.preventDefault();
-          const payload = { name: $('npName').value.trim(), description: $('npDesc').value.trim(), importantInfo: $('npImportant').value.trim(), storagePath: $('npStoragePath').value.trim() };
+          const payload = { name: $('npName').value.trim(), description: $('npDesc').value.trim(), importantInfo: $('npImportant').value.trim() };
           try {
             const d = await api('/api/projects', { method: 'POST', body: JSON.stringify(payload) });
             closeModal();
             await refreshProjects(false);
             selectProject(d.project.slug);
-            toast('项目文件夹、初始 Markdown 与 sciMemory 已创建');
+            toast('项目文件夹与初始 Markdown 已创建');
           } catch (err) { toast(`创建失败：${err.message}`); }
         });
       });

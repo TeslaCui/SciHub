@@ -1,7 +1,7 @@
 """SciHub 本地服务：把科研项目、实验日志、对话记录保存为 Markdown 文件。
 
 - 仅监听回环地址 127.0.0.1，不会把项目文件上传到网络。
-- 项目默认保存在 `科研项目/项目名-时间戳/`；也可关联用户选择的本地项目文件夹，均为可读的 .md 文件。
+- 每个项目保存在 `科研项目/项目名-时间戳/` 下，均为可读的 .md 文件。
 - 每次保存都会实时更新该项目的 AGENTS.md（自动区块），供 AI 作为项目记忆使用。
 - `/api/proxy` 只把用户显式发送的对话转发给你自己配置的 HTTPS 模型接口。
 
@@ -17,7 +17,6 @@ import io
 import json
 import mimetypes
 import re
-import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,8 +31,6 @@ from xml.sax.saxutils import escape as xml_escape
 
 ROOT = Path(__file__).resolve().parent
 PROJECTS_ROOT = ROOT / "科研项目"
-PROJECT_REGISTRY_FILE = PROJECTS_ROOT / "SciHub项目位置索引.md"
-PROJECT_METADATA_FILE = "SCIHUB_PROJECT.md"
 HOST = "127.0.0.1"
 PORT = 8770
 MAX_BODY_SIZE = 24 * 1024 * 1024
@@ -53,7 +50,6 @@ SUBEXPERIMENT_RE = re.compile(
     r"(?ms)^### \[([A-Za-z0-9_-]+)\] ([^\r\n]+)\r?\n(.*?)(?=^### \[|\Z)"
 )
 PLAN_STYLE_RE = re.compile(r"<!--\s*SCIHUB-PLAN-STYLE:\s*({.*?})\s*-->", re.IGNORECASE | re.DOTALL)
-PROJECT_REGISTRY_ENTRY_RE = re.compile(r"<!--\s*SCIHUB-PROJECT:\s*({.*?})\s*-->")
 PLAN_FONT_NAMES = {"Microsoft YaHei", "SimSun", "KaiTi", "Noto Serif SC"}
 PLAN_FONT_SIZES = {9, 10, 11, 12, 13, 14, 16}
 PLAN_LAYOUT_MODES = {"compact", "spacious"}
@@ -164,96 +160,15 @@ def make_slug(name: str) -> str:
     return f"{base}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
 
-def project_registry() -> dict[str, Path]:
-    """读取外部项目位置索引；索引本身也是可读的 Markdown 文件。"""
-    if not PROJECT_REGISTRY_FILE.is_file():
-        return {}
-    result: dict[str, Path] = {}
-    raw = PROJECT_REGISTRY_FILE.read_text(encoding="utf-8")
-    for match in PROJECT_REGISTRY_ENTRY_RE.finditer(raw):
-        try:
-            item = json.loads(match.group(1))
-            slug = safe_slug(one_line(item.get("slug")))
-            path = Path(one_line(item.get("path"))).expanduser()
-            if not path.is_absolute():
-                continue
-            resolved = path.resolve()
-            if resolved == resolved.parent:
-                continue
-            result[slug] = resolved
-        except (ApiError, TypeError, ValueError, OSError):
-            continue
-    return result
-
-
-def write_project_registry(entries: dict[str, Path]) -> None:
-    """写入项目位置索引，不保存 JSON 或二进制配置文件。"""
-    lines = [
-        "# SciHub 项目位置索引",
-        "",
-        "> 此文件用于让 SciHub 在重启后继续找到用户选择的本地项目文件夹。",
-        "> 项目资料始终保存在各项目目录的 Markdown 文件中。",
-        "",
-        "<!-- SCIHUB-PROJECT-REGISTRY:START -->",
-    ]
-    for slug, path in sorted(entries.items(), key=lambda item: item[0].casefold()):
-        lines.append(f"<!-- SCIHUB-PROJECT: {json.dumps({'slug': slug, 'path': str(path)}, ensure_ascii=False)} -->")
-    lines.extend(["<!-- SCIHUB-PROJECT-REGISTRY:END -->", ""])
-    write_markdown(PROJECT_REGISTRY_FILE, "\n".join(lines))
-
-
-def is_internal_project_dir(path: Path) -> bool:
-    root = PROJECTS_ROOT.resolve()
-    return path.resolve().parent == root
-
-
-def register_project_location(slug: str, directory: Path) -> None:
-    """登记外部项目；默认项目目录仍可直接由 科研项目/ 扫描发现。"""
-    entries = project_registry()
-    resolved = directory.resolve()
-    if is_internal_project_dir(resolved):
-        entries.pop(slug, None)
-    else:
-        entries[slug] = resolved
-    write_project_registry(entries)
-
-
-def validate_project_storage_path(value: Any, fallback: Path) -> Path:
-    """只接受明确的本地目录，避免把应用目录或磁盘根目录当成项目目录。"""
-    raw = one_line(value)
-    if not raw:
-        return fallback.resolve()
-    candidate = Path(raw).expanduser()
-    if not candidate.is_absolute():
-        raise ApiError("项目文件夹路径必须是本机绝对路径，例如 D:\\科研项目\\ORR-001。")
-    try:
-        resolved = candidate.resolve()
-    except OSError as error:
-        raise ApiError(f"无法读取项目文件夹路径：{error}") from error
-    if resolved == resolved.parent or resolved == ROOT.resolve():
-        raise ApiError("不能将磁盘根目录或 SciHub 程序目录设为项目文件夹。")
-    return resolved
-
-
-def project_metadata_path(directory: Path) -> Path:
-    """外部项目使用专用元数据文件，绝不覆盖用户原有 README.md。"""
-    external_metadata = directory / PROJECT_METADATA_FILE
-    if external_metadata.is_file():
-        return external_metadata
-    return directory / "README.md"
-
-
 # --------------------------------------------------------------------------- #
 # 项目文件读写
 # --------------------------------------------------------------------------- #
 def project_dir(slug: str) -> Path:
     slug = safe_slug(slug)
-    path = project_registry().get(slug)
-    if path is None:
-        root = PROJECTS_ROOT.resolve()
-        path = (PROJECTS_ROOT / slug).resolve()
-        if root not in path.parents or path == root:
-            raise ApiError("项目路径无效。")
+    root = PROJECTS_ROOT.resolve()
+    path = (PROJECTS_ROOT / slug).resolve()
+    if path.parent != root:
+        raise ApiError("项目路径无效。")
     if not path.is_dir():
         raise ApiError("未找到该项目。", HTTPStatus.NOT_FOUND)
     return path
@@ -261,13 +176,12 @@ def project_dir(slug: str) -> Path:
 
 def load_project(slug: str) -> dict:
     directory = project_dir(slug)
-    metadata_path = project_metadata_path(directory)
-    doc = read_markdown_document(metadata_path)
+    doc = read_markdown_document(directory / "README.md")
     if doc["meta"].get("kind") != "research_project":
         raise ApiError("项目元数据无效。")
     if meta_value(doc["meta"], "slug", slug) != slug:
         raise ApiError("项目标识与项目文件夹不一致。")
-    return {"slug": slug, "dir": directory, "meta_path": metadata_path, "meta": doc["meta"], "content": doc["content"]}
+    return {"slug": slug, "dir": directory, "meta": doc["meta"], "content": doc["content"]}
 
 
 def write_project_readme(project: dict, name: str, description: str, important: str) -> None:
@@ -279,12 +193,11 @@ def write_project_readme(project: dict, name: str, description: str, important: 
         "name": name,
         "description": description,
         "important_info": important,
-        "storage_path": str(project["dir"]),
         "created_at": created,
         "updated_at": now,
     }
     body = f"# {name}\n\n{description}\n\n## 项目重要信息\n\n{important}\n"
-    write_markdown(project.get("meta_path") or project_metadata_path(project["dir"]), front_matter(meta) + body)
+    write_markdown(project["dir"] / "README.md", front_matter(meta) + body)
     project["meta"] = meta
 
 
@@ -302,14 +215,26 @@ def project_summary(project: dict) -> dict:
         "updatedAt": meta_value(meta, "updated_at"),
         "logCount": len(logs),
         "conversationCount": len(conversations),
-        "storagePath": str(project["dir"]),
-        "metadataPath": str(project.get("meta_path") or project_metadata_path(project["dir"])),
-        "canDeleteFolder": is_internal_project_dir(project["dir"]),
     }
 
 
-def choose_local_project_folder() -> str:
-    """使用本机目录选择器；取消时返回空字符串，不会写入任何文件。"""
+def validate_export_directory(value: Any) -> Path:
+    """验证用户明确选择的导出目录；项目资料本身不会写到这里。"""
+    raw = one_line(value)
+    if not raw:
+        raise ApiError("请选择项目记忆的导出文件夹。")
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise ApiError("导出文件夹必须是本机绝对路径，例如 D:\\导出资料。")
+    try:
+        return candidate.resolve()
+    except OSError as error:
+        raise ApiError(f"无法读取导出文件夹：{error}") from error
+
+
+def choose_export_directory() -> str:
+    """只返回用户选择的导出目录，不会修改项目内容。"""
+    root = None
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -318,62 +243,13 @@ def choose_local_project_folder() -> str:
         root.withdraw()
         root.attributes("-topmost", True)
         root.update()
-        selected = filedialog.askdirectory(title="选择 SciHub 项目文件夹")
-        root.destroy()
+        selected = filedialog.askdirectory(title="选择项目记忆导出文件夹")
     except Exception as error:
         raise ApiError(f"无法打开本机文件夹选择器：{error}") from error
-    if not selected:
-        return ""
-    return str(validate_project_storage_path(selected, PROJECTS_ROOT / "placeholder"))
-
-
-def ensure_project_directory(directory: Path) -> None:
-    if directory.exists() and not directory.is_dir():
-        raise ApiError("项目文件夹路径指向的是文件，请重新选择文件夹。")
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-    except OSError as error:
-        raise ApiError(f"无法创建项目文件夹：{error}") from error
-    if directory.is_symlink():
-        raise ApiError("项目文件夹不能是链接目录。")
-
-
-def copy_project_contents(source: Path, target: Path) -> None:
-    """只复制到空目录，保留旧项目目录，避免覆盖或删除任何原文件。"""
-    if source.resolve() in target.resolve().parents or target.resolve() in source.resolve().parents:
-        raise ApiError("新项目文件夹不能位于当前项目文件夹内部，也不能作为其上级目录。")
-    if any(target.iterdir()):
-        raise ApiError("复制现有资料时，新的项目文件夹必须为空，避免覆盖其中已有文件。")
-    for item in source.iterdir():
-        if item.is_symlink():
-            raise ApiError("当前项目包含链接文件，为避免误复制已停止变更文件夹。")
-        destination = target / item.name
-        try:
-            if item.is_dir():
-                shutil.copytree(item, destination, copy_function=shutil.copy2)
-            elif item.is_file():
-                shutil.copy2(item, destination)
-            else:
-                raise ApiError("当前项目包含无法安全识别的条目，已停止变更文件夹。")
-        except OSError as error:
-            raise ApiError(f"复制项目资料失败：{error}") from error
-
-
-def change_project_storage(project: dict, storage_path: Any, copy_existing: bool) -> dict:
-    """切换项目目录；迁移采用复制，旧目录始终保留且不会被自动删除。"""
-    target = validate_project_storage_path(storage_path, project["dir"])
-    if target == project["dir"].resolve():
-        return project
-    ensure_project_directory(target)
-    metadata_path = target / PROJECT_METADATA_FILE
-    if metadata_path.is_file():
-        doc = read_markdown_document(metadata_path)
-        if doc["meta"].get("kind") != "research_project" or meta_value(doc["meta"], "slug") != project["slug"]:
-            raise ApiError("所选文件夹已关联其他 SciHub 项目，不能覆盖其项目元数据。")
-        return {"slug": project["slug"], "dir": target, "meta_path": metadata_path, "meta": doc["meta"], "content": doc["content"]}
-    if copy_existing:
-        copy_project_contents(project["dir"], target)
-    return {**project, "dir": target, "meta_path": metadata_path}
+    finally:
+        if root is not None:
+            root.destroy()
+    return str(validate_export_directory(selected)) if selected else ""
 
 
 def project_deletion_paths(project: dict) -> tuple[Path, list[Path], list[Path]]:
@@ -419,7 +295,7 @@ def delete_project(project: dict, confirmation: str) -> None:
 
 def update_agents(project: dict) -> None:
     """实时更新项目 AGENTS.md 的自动区块。"""
-    readme = read_markdown_document(project.get("meta_path") or project_metadata_path(project["dir"]))
+    readme = read_markdown_document(project["dir"] / "README.md")
     conversations_dir = project["dir"] / "对话记录"
 
     recent_logs = sorted(
@@ -487,8 +363,6 @@ def update_agents(project: dict) -> None:
             "",
             f"- 项目名称：{meta_value(readme['meta'], 'name')}",
             f"- 项目说明：{meta_value(readme['meta'], 'description')}",
-            f"- 本地项目文件夹：{project['dir']}",
-            f"- 项目记忆导出位置：{SCIHUB_MEMORY_FOLDER}/{SCIHUB_MEMORY_FILE}",
             f"- 最近同步：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "## 项目重要信息",
@@ -539,9 +413,7 @@ SUBEXPERIMENT_FILE_NAME = "README.md"
 SUBEXPERIMENT_PLAN_FILE_NAME = "实验方案.md"
 LOGS_FOLDER = "实验日志"
 PLAN_IMPORTS_FOLDER = "导入资料"
-SCIHUB_MEMORY_FOLDER = "sciMemory"
-SCIHUB_MEMORY_FILE = "项目记忆.md"
-LEGACY_MEMORY_FOLDERS = {"scihub-memory", SCIHUB_MEMORY_FOLDER}
+LEGACY_MEMORY_FOLDERS = {"scihub-memory", "sciMemory"}
 RESERVED_PLAN_FOLDERS = {"实验日志", "对话记录", "实验方案", *LEGACY_MEMORY_FOLDERS, "__pycache__"}
 INVALID_FOLDER_CHARS = re.compile(r'[\\/:*?"<>|]+')
 
@@ -1245,8 +1117,8 @@ def export_project_markdown(project: dict) -> bytes:
         f"# {name} · 项目记忆",
         "",
         f"> 导出时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"> 此文件保存于 `{SCIHUB_MEMORY_FOLDER}/{SCIHUB_MEMORY_FILE}`，按项目目录层级汇总全部源 `.md` 文件。",
-        "> 为避免递归嵌套，汇总时会排除 `sciMemory/`（及旧版 `scihub-memory/`）自身。",
+        "> 按项目目录层级汇总全部源 `.md` 文件；导出时由用户选择保存位置。",
+        "> 为避免把历史导出再次汇总，汇总时会排除旧版 `sciMemory/` 与 `scihub-memory/` 目录。",
         "",
         "## 文件目录",
         "",
@@ -1270,15 +1142,26 @@ def export_project_markdown(project: dict) -> bytes:
     return "\n".join(lines).encode("utf-8")
 
 
-def project_memory_path(project: dict) -> Path:
-    return project["dir"] / SCIHUB_MEMORY_FOLDER / SCIHUB_MEMORY_FILE
-
-
-def write_project_memory(project: dict) -> bytes:
-    """更新项目内供 Codex 或其他 AI 读取的单一项目记忆 Markdown。"""
+def export_project_to_directory(project: dict, directory_value: Any) -> tuple[Path, bytes]:
+    """将项目记忆导出到用户明确选择的目录，始终避免覆盖既有文件。"""
+    directory = validate_export_directory(directory_value)
+    if directory.exists() and not directory.is_dir():
+        raise ApiError("导出路径指向的是文件，请选择文件夹。")
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise ApiError(f"无法创建导出文件夹：{error}") from error
+    if directory.is_symlink():
+        raise ApiError("导出文件夹不能是链接目录。")
+    base = re.sub(r'[\\/:*?"<>|]+', "-", meta_value(project["meta"], "name", project["slug"])).strip(" .-") or project["slug"]
     content = export_project_markdown(project)
-    write_markdown(project_memory_path(project), content.decode("utf-8"))
-    return content
+    path = directory / f"{base}-项目记忆.md"
+    index = 2
+    while path.exists():
+        path = directory / f"{base}-项目记忆-{index}.md"
+        index += 1
+    write_markdown(path, content.decode("utf-8"))
+    return path, content
 
 
 def decode_import_payload(payload: dict, allowed_extensions: set[str]) -> tuple[str, bytes, str]:
@@ -2079,6 +1962,10 @@ class SciHubHandler(BaseHTTPRequestHandler):
             if path == "/api/proxy":
                 self._handle_proxy()
                 return
+            if path == "/api/choose-export-folder":
+                self._read_json()
+                self._send_json(HTTPStatus.OK, {"path": choose_export_directory()})
+                return
             segments = self._segments()
             if segments[:2] == ["api", "projects"]:
                 self._handle_projects(segments)
@@ -2138,21 +2025,15 @@ class SciHubHandler(BaseHTTPRequestHandler):
     def _handle_projects(self, segments: list):
         method = self.command
         if method == "GET" and len(segments) == 2:
-            projects_by_slug: dict[str, dict] = {}
+            projects: list[dict] = []
             if PROJECTS_ROOT.is_dir():
                 for child in PROJECTS_ROOT.iterdir():
                     if not child.is_dir():
                         continue
                     try:
-                        projects_by_slug[child.name] = project_summary(load_project(child.name))
+                        projects.append(project_summary(load_project(child.name)))
                     except ApiError:
                         continue
-            for slug in project_registry():
-                try:
-                    projects_by_slug[slug] = project_summary(load_project(slug))
-                except ApiError:
-                    continue
-            projects = list(projects_by_slug.values())
             projects.sort(key=lambda p: p.get("updatedAt", ""), reverse=True)
             self._send_json(HTTPStatus.OK, {"projects": projects})
             return
@@ -2163,12 +2044,15 @@ class SciHubHandler(BaseHTTPRequestHandler):
             if not name:
                 raise ApiError("请填写项目名称。")
             slug = make_slug(name)
-            directory = validate_project_storage_path(payload.get("storagePath"), PROJECTS_ROOT / slug)
-            ensure_project_directory(directory)
-            metadata_path = directory / ("README.md" if is_internal_project_dir(directory) else PROJECT_METADATA_FILE)
+            directory = PROJECTS_ROOT / slug
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise ApiError(f"无法创建项目文件夹：{error}") from error
+            metadata_path = directory / "README.md"
             if metadata_path.exists():
-                raise ApiError("所选文件夹已包含 SciHub 项目元数据，请选择其他文件夹或在主页中编辑已有项目。")
-            project = {"slug": slug, "dir": directory, "meta_path": metadata_path, "meta": {}}
+                raise ApiError("新项目目录已包含 README.md，请重试。")
+            project = {"slug": slug, "dir": directory, "meta": {}}
             write_project_readme(
                 project,
                 name,
@@ -2176,13 +2060,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 str(payload.get("importantInfo", "")),
             )
             update_agents(project)
-            write_project_memory(project)
-            register_project_location(slug, directory)
             self._send_json(HTTPStatus.CREATED, {"project": project_summary(project)})
-            return
-
-        if method == "POST" and segments == ["api", "projects", "choose-folder"]:
-            self._send_json(HTTPStatus.OK, {"path": choose_local_project_folder()})
             return
 
         if len(segments) < 3:
@@ -2192,21 +2070,14 @@ class SciHubHandler(BaseHTTPRequestHandler):
 
         if method == "POST" and len(segments) == 3:
             payload = self._read_json()
-            updated_project = change_project_storage(
-                project,
-                payload.get("storagePath"),
-                bool(payload.get("copyExistingFolder")),
-            ) if one_line(payload.get("storagePath")) else project
             write_project_readme(
-                updated_project,
+                project,
                 one_line(payload.get("name")),
                 str(payload.get("description", "")),
                 str(payload.get("importantInfo", "")),
             )
-            update_agents(updated_project)
-            write_project_memory(updated_project)
-            register_project_location(updated_project["slug"], updated_project["dir"])
-            self._send_json(HTTPStatus.OK, {"project": project_summary(updated_project)})
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"project": project_summary(project)})
             return
 
         if method == "GET" and len(segments) == 4 and segments[3] == "delete-preview":
@@ -2219,18 +2090,10 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"deleted": True})
             return
 
-        if method == "GET" and len(segments) == 4 and segments[3] == "export":
-            filename = f"{meta_value(project['meta'], 'name', project['slug'])}-项目记忆.md"
-            disposition = (
-                'attachment; filename="scihub-project-memory.md"; '
-                f"filename*=UTF-8''{urllib.parse.quote(filename)}"
-            )
-            self._send_bytes(
-                HTTPStatus.OK,
-                write_project_memory(project),
-                "text/markdown; charset=utf-8",
-                {"Content-Disposition": disposition},
-            )
+        if method == "POST" and len(segments) == 4 and segments[3] == "export":
+            payload = self._read_json()
+            path, _ = export_project_to_directory(project, payload.get("exportPath"))
+            self._send_json(HTTPStatus.OK, {"path": str(path), "filename": path.name})
             return
 
         if method == "GET" and len(segments) == 4 and segments[3] == "agents":
