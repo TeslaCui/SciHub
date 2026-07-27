@@ -574,7 +574,7 @@
     const sizeOptions = [9, 10, 11, 12, 13, 14, 16].map(size => `<option value="${size}" ${size === presentation.fontSize ? 'selected' : ''}>${size} pt</option>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === presentation.layout ? 'selected' : ''}>${label}</option>`).join('');
     openModal(`<div class="modal-header"><div><h2>编辑实验方案书</h2><p>可直接输入、删除和调整结构。格式会保存为 Markdown；字体与字号作为方案书的版式设置保存，不会留下 HTML 文件。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body plan-editor-modal"><div class="plan-editor-toolbar" role="toolbar" aria-label="方案书编辑工具"><label>全文字体 <select id="planEditorFont">${fontOptions}</select></label><label>全文字号 <select id="planEditorSize">${sizeOptions}</select></label><label>排版 <select id="planEditorLayout">${layoutOptions}</select></label><span class="plan-editor-divider"></span><button type="button" data-plan-editor-command="bold" title="加粗"><b>B</b></button><button type="button" data-plan-editor-command="italic" title="斜体"><i>I</i></button><button type="button" data-plan-editor-command="insertUnorderedList" title="无序列表">• 列表</button><button type="button" data-plan-editor-command="insertOrderedList" title="有序列表">1. 列表</button><button type="button" data-plan-editor-command="undo" title="撤销">↶</button><button type="button" data-plan-editor-command="redo" title="重做">↷</button></div><p class="plan-editor-hint">紧凑排布会把“材料与仪器”等清单压缩为多列；宽松排布保留逐项结构。粘贴内容会以纯文本写入，避免把外部 Word 格式混入项目 Markdown。</p><div id="planContentEditor" class="plan-rich-editor execution-document-body" data-layout="${presentation.layout}" contenteditable="true" role="textbox" aria-multiline="true" style="${editorStyle}">${executionPlanHtml(existing)}</div></div>
+      <div class="modal-body plan-editor-modal"><div class="plan-editor-toolbar" role="toolbar" aria-label="方案书编辑工具"><label>全文字体 <select id="planEditorFont">${fontOptions}</select></label><label>全文字号 <select id="planEditorSize">${sizeOptions}</select></label><label>排版 <select id="planEditorLayout">${layoutOptions}</select></label><span class="plan-editor-divider"></span><button type="button" data-plan-editor-command="bold" title="加粗"><b>B</b></button><button type="button" data-plan-editor-command="italic" title="斜体"><i>I</i></button><button type="button" data-plan-editor-command="insertUnorderedList" title="无序列表">• 列表</button><button type="button" data-plan-editor-command="insertOrderedList" title="有序列表">1. 列表</button><button type="button" data-plan-editor-command="undo" title="撤销">↶</button><button type="button" data-plan-editor-command="redo" title="重做">↷</button></div><p class="plan-editor-hint">紧凑排布会把“材料与仪器”等清单压缩为多列；宽松排布保留逐项结构。粘贴内容会以纯文本写入，避免把外部 Word 格式混入项目 Markdown。选中文字后右键，可保留复制、剪切、粘贴，并按你的要求让 AI 修改该段。</p><div id="planContentEditor" class="plan-rich-editor execution-document-body" data-layout="${presentation.layout}" contenteditable="true" role="textbox" aria-multiline="true" style="${editorStyle}">${executionPlanHtml(existing)}</div></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="savePlanContentButton" type="button" class="primary-button">保存并查看方案书</button></div>`, () => {
       const editor = $('planContentEditor');
       const applyPresentation = () => {
@@ -593,6 +593,169 @@
         event.preventDefault();
         const text = event.clipboardData?.getData('text/plain') || '';
         document.execCommand('insertText', false, text);
+      });
+      const modal = editor.closest('.modal');
+      let savedRange = null;
+      let savedText = '';
+      let aiBusy = false;
+      const contextMenu = document.createElement('div');
+      contextMenu.className = 'plan-editor-context-menu';
+      contextMenu.hidden = true;
+      contextMenu.innerHTML = `<button type="button" data-plan-context-action="copy">复制</button><button type="button" data-plan-context-action="cut">剪切</button><button type="button" data-plan-context-action="paste">粘贴</button><div class="plan-editor-context-divider"></div><button type="button" class="plan-context-ai-action" data-plan-context-action="ai">✦ AI 修改选中内容</button>`;
+      modal.append(contextMenu);
+      const aiPopover = document.createElement('section');
+      aiPopover.className = 'plan-editor-ai-popover';
+      aiPopover.hidden = true;
+      aiPopover.innerHTML = `<div class="plan-editor-ai-popover-head"><div><b>AI 修改选中内容</b><small>只会替换下方这段文字；实验事实、数据与条件不会被擅自改写。</small></div><button type="button" class="close-button" data-plan-ai-close aria-label="关闭">×</button></div><div class="plan-editor-ai-selection"></div><label class="plan-editor-ai-request"><span>修改要求</span><textarea maxlength="600" placeholder="例如：让表述更专业、条理更清晰，但不要改变实验条件和数据"></textarea></label><div class="plan-editor-ai-actions"><button type="button" class="secondary-button" data-plan-ai-close>取消</button><button type="button" class="primary-button" data-plan-ai-submit>开始修改</button></div>`;
+      modal.append(aiPopover);
+      const aiRequest = aiPopover.querySelector('textarea');
+      const aiSubmit = aiPopover.querySelector('[data-plan-ai-submit]');
+
+      const selectionInEditor = (allowCollapsed = false) => {
+        const selection = window.getSelection();
+        if (!selection?.rangeCount || (!allowCollapsed && selection.isCollapsed)) return null;
+        const range = selection.getRangeAt(0);
+        return editor.contains(range.commonAncestorContainer) ? range.cloneRange() : null;
+      };
+      const restoreSavedRange = () => {
+        if (!savedRange || !editor.contains(savedRange.commonAncestorContainer)) return false;
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+        editor.focus({ preventScroll: true });
+        return true;
+      };
+      const hideContextMenu = () => { contextMenu.hidden = true; };
+      const hideAiPopover = () => {
+        aiPopover.hidden = true;
+        aiRequest.value = '';
+      };
+      const insertPlainTextAtSavedRange = text => {
+        if (!restoreSavedRange()) return false;
+        const range = savedRange;
+        const fragment = document.createDocumentFragment();
+        const tail = document.createTextNode('');
+        const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+        lines.forEach((line, index) => {
+          if (index) fragment.append(document.createElement('br'));
+          fragment.append(document.createTextNode(line));
+        });
+        fragment.append(tail);
+        range.deleteContents();
+        range.insertNode(fragment);
+        const nextRange = document.createRange();
+        nextRange.setStartAfter(tail);
+        nextRange.collapse(true);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(nextRange);
+        savedRange = nextRange.cloneRange();
+        savedText = String(text || '');
+        editor.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      };
+      const showContextMenu = event => {
+        const range = selectionInEditor();
+        savedRange = range || selectionInEditor(true);
+        savedText = range ? range.toString().trim() : '';
+        event.preventDefault();
+        contextMenu.querySelector('[data-plan-context-action="copy"]').disabled = !savedText;
+        contextMenu.querySelector('[data-plan-context-action="cut"]').disabled = !savedText;
+        contextMenu.querySelector('[data-plan-context-action="ai"]').disabled = !savedText || aiBusy;
+        contextMenu.hidden = false;
+        contextMenu.style.left = `${event.clientX}px`;
+        contextMenu.style.top = `${event.clientY}px`;
+        requestAnimationFrame(() => {
+          const box = contextMenu.getBoundingClientRect();
+          contextMenu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - box.width - 8))}px`;
+          contextMenu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - box.height - 8))}px`;
+        });
+      };
+      const openAiPopover = () => {
+        if (!savedRange || !savedText) { toast('请先选中需要修改的文字'); return; }
+        hideContextMenu();
+        aiPopover.querySelector('.plan-editor-ai-selection').textContent = savedText.length > 360 ? `${savedText.slice(0, 360)}…` : savedText;
+        aiPopover.hidden = false;
+        aiRequest.focus();
+      };
+      const copySelectedText = async () => {
+        if (!savedText || !restoreSavedRange()) { toast('请先选中需要复制的文字'); return; }
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) { /* 尝试现代剪贴板 API */ }
+        if (!copied && navigator.clipboard?.writeText) {
+          try { await navigator.clipboard.writeText(savedText); copied = true; } catch (_) { /* 浏览器可能禁止读取剪贴板 */ }
+        }
+        hideContextMenu();
+        if (!copied) toast('浏览器未允许复制，请使用 Ctrl+C');
+      };
+      const cutSelectedText = async () => {
+        if (!savedText || !restoreSavedRange()) { toast('请先选中需要剪切的文字'); return; }
+        let cut = false;
+        try { cut = document.execCommand('cut'); } catch (_) { /* 尝试现代剪贴板 API */ }
+        if (!cut && navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(savedText);
+            cut = insertPlainTextAtSavedRange('');
+          } catch (_) { /* 浏览器可能禁止写入剪贴板 */ }
+        }
+        hideContextMenu();
+        if (!cut) toast('浏览器未允许剪切，请使用 Ctrl+X');
+      };
+      const pastePlainText = async () => {
+        let text = '';
+        try { text = await navigator.clipboard?.readText(); } catch (_) { /* 浏览器可能拒绝读取剪贴板 */ }
+        if (!text) { toast('浏览器未允许读取剪贴板，请使用 Ctrl+V'); hideContextMenu(); return; }
+        if (!savedRange) savedRange = selectionInEditor(true);
+        if (!savedRange || !insertPlainTextAtSavedRange(text)) toast('请先在方案正文中放置光标或选中文字');
+        hideContextMenu();
+      };
+      editor.addEventListener('contextmenu', showContextMenu);
+      editor.addEventListener('scroll', hideContextMenu);
+      contextMenu.addEventListener('mousedown', event => event.preventDefault());
+      contextMenu.addEventListener('click', event => {
+        const action = event.target.closest('[data-plan-context-action]')?.dataset.planContextAction;
+        if (action === 'copy') copySelectedText();
+        if (action === 'cut') cutSelectedText();
+        if (action === 'paste') pastePlainText();
+        if (action === 'ai') openAiPopover();
+      });
+      aiPopover.querySelectorAll('[data-plan-ai-close]').forEach(button => button.addEventListener('click', () => {
+        if (!aiBusy) hideAiPopover();
+      }));
+      aiSubmit.addEventListener('click', async () => {
+        const request = aiRequest.value.trim();
+        if (!request) { toast('请先输入希望 AI 如何修改'); aiRequest.focus(); return; }
+        if (!savedRange || !savedText) { toast('原选中文字已失效，请重新选中后再试'); hideAiPopover(); return; }
+        aiBusy = true;
+        aiSubmit.disabled = true;
+        aiSubmit.textContent = 'AI 修改中…';
+        editor.setAttribute('contenteditable', 'false');
+        try {
+          const result = (await askModel([
+            { role: 'system', content: '你是严谨的中文科研实验方案编辑。只根据用户的修改要求改善所给选中文字的表达、结构或清晰度。绝对不得虚构、删除、替换或改变实验事实、数据、单位、条件、观察现象、样品编号、时间、结论、风险、限制或不确定性；信息不足时保留原样。仅返回可直接替换选中文字的纯文本；可保留必要换行，不要添加 Markdown 标记、代码块、标题、说明或引号。' },
+            { role: 'user', content: `修改要求：${request}\n\n选中文字：\n${savedText}` }
+          ])).trim();
+          if (!result) throw new Error('AI 未返回可替换的内容');
+          if (!insertPlainTextAtSavedRange(result)) throw new Error('选中文字已失效，请重新选中后重试');
+          hideAiPopover();
+          toast('AI 已按要求替换选中文字；保存后会写入 Markdown 方案书');
+        } catch (error) {
+          toast(`AI 修改失败：${error.message}`);
+        } finally {
+          aiBusy = false;
+          editor.setAttribute('contenteditable', 'true');
+          aiSubmit.disabled = false;
+          aiSubmit.textContent = '开始修改';
+        }
+      });
+      modal.addEventListener('pointerdown', event => {
+        if (!contextMenu.contains(event.target) && event.target !== editor) hideContextMenu();
+      });
+      modal.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          hideContextMenu();
+          if (!aiBusy) hideAiPopover();
+        }
       });
       $('savePlanContentButton').addEventListener('click', async () => {
         const content = richPlanEditorToMarkdown(editor);
