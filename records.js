@@ -228,7 +228,12 @@
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
       const v = ['plans', 'logs', 'records', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'logs';
-      window.switchView(v);
+      if (typeof window.switchView === 'function') window.switchView(v);
+      else {
+        const target = document.getElementById(`${v}View`);
+        document.querySelectorAll('.view').forEach(item => item.classList.toggle('active-view', item === target));
+        document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === v));
+      }
       renderActiveView();
     });
   }
@@ -1251,7 +1256,7 @@
   function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode) {
     const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === layoutMode ? 'selected' : ''}>${label}</option>`).join('');
-    return `<aside class="plan-display-controls"><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
+    return `<aside class="plan-display-controls"><div class="plan-controls-drag-handle" title="拖动此处移动面板；双击恢复默认位置"><span>⠿</span><small>拖动</small></div><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
   }
 
   function openPlanBookPage(planId, subexperimentId = '', imported = null) {
@@ -1336,6 +1341,71 @@
     }
   }
 
+  function enablePlanControlsDragging(book) {
+    const canvas = document.querySelector('.plan-a4-preview-wrap.has-floating-controls');
+    const layer = $('planControlsLayer');
+    const handle = layer?.querySelector('.plan-controls-drag-handle');
+    if (!canvas || !layer || !handle || !window.matchMedia('(min-width: 1180px)').matches) return;
+
+    const storageKey = `scihub-plan-controls:${R.active?.slug || ''}:${book.planId}:${book.subexperimentId || 'plan'}`;
+    const clampPosition = (left, top) => {
+      const maxLeft = Math.max(12, canvas.clientWidth - layer.offsetWidth - 12);
+      const maxTop = Math.max(12, canvas.scrollHeight - layer.offsetHeight - 12);
+      return { left: Math.max(12, Math.min(left, maxLeft)), top: Math.max(12, Math.min(top, maxTop)) };
+    };
+    const applyPosition = (left, top, persist = true) => {
+      const position = clampPosition(left, top);
+      layer.style.left = `${position.left}px`;
+      layer.style.right = 'auto';
+      layer.style.top = `${position.top}px`;
+      if (persist) {
+        try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* 存储不可用时只保留本次位置 */ }
+      }
+    };
+    const currentPosition = () => {
+      const canvasBox = canvas.getBoundingClientRect();
+      const layerBox = layer.getBoundingClientRect();
+      return { left: layerBox.left - canvasBox.left + canvas.scrollLeft, top: layerBox.top - canvasBox.top + canvas.scrollTop };
+    };
+
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) applyPosition(saved.left, saved.top, false);
+    } catch { /* 无效的历史位置将使用默认位置 */ }
+
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      const layerBox = layer.getBoundingClientRect();
+      const start = currentPosition();
+      const pointerOffset = { x: event.clientX - layerBox.left, y: event.clientY - layerBox.top };
+      layer.classList.add('is-dragging');
+      handle.setPointerCapture?.(event.pointerId);
+      const move = moveEvent => applyPosition(
+        moveEvent.clientX - canvas.getBoundingClientRect().left + canvas.scrollLeft - pointerOffset.x,
+        moveEvent.clientY - canvas.getBoundingClientRect().top + canvas.scrollTop - pointerOffset.y,
+      );
+      const finish = finishEvent => {
+        if (finishEvent.pointerId !== event.pointerId) return;
+        layer.classList.remove('is-dragging');
+        handle.releasePointerCapture?.(event.pointerId);
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', finish);
+        handle.removeEventListener('pointercancel', finish);
+      };
+      applyPosition(start.left, start.top, false);
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', finish);
+      handle.addEventListener('pointercancel', finish);
+    });
+    handle.addEventListener('dblclick', () => {
+      layer.style.removeProperty('left');
+      layer.style.removeProperty('right');
+      layer.style.removeProperty('top');
+      try { localStorage.removeItem(storageKey); } catch { /* 存储不可用时无需清理 */ }
+    });
+  }
+
   async function renderPlanBookView() {
     const book = R.planBook;
     const host = $('planBookBody');
@@ -1372,7 +1442,7 @@
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
-        ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap"><div id="executionPlanPages" class="execution-a4-pages"></div></div>${isEditing ? planEditorSidePanelMarkup(editorState) : planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div>`
+        ? `<div class="plan-book-preview-layout${isEditing ? ' is-editing' : ''}"><div class="plan-a4-preview-wrap${isEditing ? '' : ' has-floating-controls'}">${isEditing ? '' : `<div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div>`}<div id="executionPlanPages" class="execution-a4-pages"></div></div>${isEditing ? planEditorSidePanelMarkup(editorState) : ''}</div>`
         : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
     const currentContentReady = Boolean(content && !imported && !task);
     host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isEditing ? '正在页内编辑：左侧预览会随输入同步更新。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? `${isEditing ? '' : '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button>'}<button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>` : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
@@ -1417,6 +1487,7 @@
         book.layoutMode = event.target.value;
         refreshA4Pages();
       });
+      enablePlanControlsDragging(book);
     }
   }
 

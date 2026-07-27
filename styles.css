@@ -43,13 +43,17 @@ button, input, select, textarea { font:inherit; } button { color:inherit; cursor
 
 /* 方案书排版模式：仅压缩材料/仪器类清单，不牺牲步骤与风险说明的可读性。 */
 
-/* 阅览页面：A4 在整个工作区的视觉中心，输出控制贴在右侧而不参与居中计算。 */
+/* 阅览页面：控制面板是灰色画布上的可移动图层，A4 会为其预留空间。 */
 .app-shell{--scihub-sidebar-width:248px}.app-shell.sidebar-collapsed{--scihub-sidebar-width:76px}
 @media(min-width:1180px){
-  .plan-book-preview-layout{position:relative;display:block;flex:0 0 100%;width:100%;min-height:297mm}
-  .plan-a4-preview-wrap{box-sizing:border-box;position:relative;left:calc(50vw - var(--scihub-sidebar-width) - 82px);transform:translateX(-50%);width:calc(100% - 358px);max-width:none;margin:0}
-  .plan-display-controls{position:absolute;top:0;right:0;left:auto;width:320px;box-sizing:border-box}
+  .plan-book-preview-layout:not(.is-editing){position:relative;display:block;flex:0 0 100%;width:100%;min-height:297mm}
+  .plan-book-preview-layout:not(.is-editing) .plan-a4-preview-wrap{box-sizing:border-box;position:relative;left:0;transform:none;width:100%;max-width:none;margin:0}
+  .plan-a4-preview-wrap.has-floating-controls .execution-a4-pages{box-sizing:border-box;justify-items:center;padding-right:344px}
+  .plan-controls-layer{position:absolute;top:20px;right:20px;z-index:5;width:320px}
+  .plan-controls-layer .plan-display-controls{position:relative;top:auto;right:auto;left:auto;width:100%;box-sizing:border-box}
 }
+.plan-a4-preview-wrap.has-floating-controls{position:relative}.plan-controls-layer{z-index:5}.plan-controls-drag-handle{position:absolute;top:8px;right:9px;display:flex;align-items:center;gap:3px;color:#789087;font-size:10px;line-height:1;cursor:grab;user-select:none;touch-action:none}.plan-controls-drag-handle span{font-size:17px;letter-spacing:-3px;transform:rotate(90deg)}.plan-controls-drag-handle small{font-size:9px}.plan-controls-layer.is-dragging .plan-controls-drag-handle{cursor:grabbing}.plan-controls-layer.is-dragging .plan-display-controls{box-shadow:0 14px 32px rgba(32,56,42,.2)}
+@media(max-width:1179px){.plan-book-preview-layout:not(.is-editing){display:block}.plan-a4-preview-wrap.has-floating-controls{width:100%;box-sizing:border-box}.plan-controls-layer{position:relative;top:auto;right:auto;left:auto;width:auto;margin:0 0 14px}.plan-controls-layer .plan-display-controls{position:relative;top:auto;width:100%;box-sizing:border-box}.plan-a4-preview-wrap.has-floating-controls .execution-a4-pages{justify-items:center}}
 
 /* 紧凑模式仅压缩材料、试剂和仪器清单；A4 预览可一行显示四项。 */
 .execution-a4-page[data-layout="compact"] .execution-list.materials-list{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:4px 6px}
