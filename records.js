@@ -466,11 +466,44 @@
     });
   }
 
+  const PLAN_STYLE_RE = /<!--\s*SCIHUB-PLAN-STYLE:\s*({[\s\S]*?})\s*-->/i;
+  const PLAN_STYLE_DEFAULT = { font: 'Microsoft YaHei', fontSize: 11 };
+  const PLAN_FONT_OPTIONS = [
+    ['Microsoft YaHei', '微软雅黑'],
+    ['SimSun', '宋体'],
+    ['KaiTi', '楷体'],
+    ['Noto Serif SC', '思源宋体']
+  ];
+
+  function planPresentationStyle(content = '') {
+    const match = String(content).match(PLAN_STYLE_RE);
+    if (!match) return { ...PLAN_STYLE_DEFAULT };
+    try {
+      const stored = JSON.parse(match[1]);
+      const font = PLAN_FONT_OPTIONS.some(([value]) => value === stored.font) ? stored.font : PLAN_STYLE_DEFAULT.font;
+      const fontSize = Number(stored.fontSize);
+      return { font, fontSize: [9, 10, 11, 12, 13, 14, 16].includes(fontSize) ? fontSize : PLAN_STYLE_DEFAULT.fontSize };
+    } catch {
+      return { ...PLAN_STYLE_DEFAULT };
+    }
+  }
+
+  function planContentWithStyle(content, style) {
+    const clean = String(content || '').replace(PLAN_STYLE_RE, '').trim();
+    const safe = {
+      font: PLAN_FONT_OPTIONS.some(([value]) => value === style?.font) ? style.font : PLAN_STYLE_DEFAULT.font,
+      fontSize: [9, 10, 11, 12, 13, 14, 16].includes(Number(style?.fontSize)) ? Number(style.fontSize) : PLAN_STYLE_DEFAULT.fontSize
+    };
+    return `<!-- SCIHUB-PLAN-STYLE: ${JSON.stringify(safe)} -->\n\n${clean}`.trim();
+  }
+
   function editablePlanContent(content = '') {
     const marked = content.match(/<!-- PLAN-CONTENT:START -->\s*([\s\S]*?)\s*<!-- PLAN-CONTENT:END -->/);
-    if (marked) return marked[1].trim();
-    const legacy = content.match(/(?:^|\n)## 实验方案\s*\n([\s\S]*?)(?=\n## 子实验\s*$|$)/m);
-    return legacy ? legacy[1].trim() : content.trim();
+    const source = marked ? marked[1] : (() => {
+      const legacy = content.match(/(?:^|\n)## 实验方案\s*\n([\s\S]*?)(?=\n## 子实验\s*$|$)/m);
+      return legacy ? legacy[1] : content;
+    })();
+    return String(source).replace(PLAN_STYLE_RE, '').trim();
   }
 
   function standardPlanPrompt(sourceMarkdown) {
@@ -521,25 +554,46 @@
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
     const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
     let existing = '';
+    let presentation = { ...PLAN_STYLE_DEFAULT };
     try {
       const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scopeQuery}`);
       existing = editablePlanContent(response.content || '');
+      presentation = planPresentationStyle(response.content || '');
     } catch (error) {
       toast(`读取方案正文失败：${error.message}`);
       return;
     }
-    openModal(`<div class="modal-header"><div><h2>编辑实验方案书</h2><p>这里用于手动修订已生成的方案。保存后会回到排版好的实验方案书页面。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body"><label class="form-field full"><span>方案正文</span><textarea id="planContentEditor" style="min-height:340px" placeholder="输入需要修订的方案内容…">${esc(existing)}</textarea></label></div>
+    const editorStyle = `font-family:${esc(presentation.font)},sans-serif;font-size:${presentation.fontSize}pt`;
+    const fontOptions = PLAN_FONT_OPTIONS.map(([value, label]) => `<option value="${esc(value)}" ${value === presentation.font ? 'selected' : ''}>${esc(label)}</option>`).join('');
+    const sizeOptions = [9, 10, 11, 12, 13, 14, 16].map(size => `<option value="${size}" ${size === presentation.fontSize ? 'selected' : ''}>${size} pt</option>`).join('');
+    openModal(`<div class="modal-header"><div><h2>编辑实验方案书</h2><p>可直接输入、删除和调整结构。格式会保存为 Markdown；字体与字号作为方案书的版式设置保存，不会留下 HTML 文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body plan-editor-modal"><div class="plan-editor-toolbar" role="toolbar" aria-label="方案书编辑工具"><label>全文字体 <select id="planEditorFont">${fontOptions}</select></label><label>全文字号 <select id="planEditorSize">${sizeOptions}</select></label><span class="plan-editor-divider"></span><button type="button" data-plan-editor-command="bold" title="加粗"><b>B</b></button><button type="button" data-plan-editor-command="italic" title="斜体"><i>I</i></button><button type="button" data-plan-editor-command="insertUnorderedList" title="无序列表">• 列表</button><button type="button" data-plan-editor-command="insertOrderedList" title="有序列表">1. 列表</button><button type="button" data-plan-editor-command="undo" title="撤销">↶</button><button type="button" data-plan-editor-command="redo" title="重做">↷</button></div><p class="plan-editor-hint">可直接编辑排版后的内容；粘贴内容会以纯文本写入，避免把外部 Word 格式混入项目 Markdown。</p><div id="planContentEditor" class="plan-rich-editor execution-document-body" contenteditable="true" role="textbox" aria-multiline="true" style="${editorStyle}">${executionPlanHtml(existing)}</div></div>
       <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="savePlanContentButton" type="button" class="primary-button">保存并查看方案书</button></div>`, () => {
+      const editor = $('planContentEditor');
+      const applyPresentation = () => {
+        editor.style.fontFamily = $('planEditorFont').value;
+        editor.style.fontSize = `${$('planEditorSize').value}pt`;
+      };
+      $('planEditorFont').addEventListener('change', applyPresentation);
+      $('planEditorSize').addEventListener('change', applyPresentation);
+      document.querySelectorAll('[data-plan-editor-command]').forEach(button => button.addEventListener('click', () => {
+        editor.focus();
+        document.execCommand(button.dataset.planEditorCommand, false);
+      }));
+      editor.addEventListener('paste', event => {
+        event.preventDefault();
+        const text = event.clipboardData?.getData('text/plain') || '';
+        document.execCommand('insertText', false, text);
+      });
       $('savePlanContentButton').addEventListener('click', async () => {
-        const content = $('planContentEditor').value.trim();
+        const content = richPlanEditorToMarkdown(editor);
         if (!content) { toast('请填写实验方案正文'); return; }
         const button = $('savePlanContentButton');
         button.disabled = true;
         button.textContent = '保存中…';
         try {
           const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content`, {
-            method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId })
+            method: 'PUT', body: JSON.stringify({ planContent: planContentWithStyle(content, { font: $('planEditorFont').value, fontSize: Number($('planEditorSize').value) }), subexperimentId })
           });
           R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
           await loadAgents();
@@ -576,10 +630,10 @@
       const line = raw.trim();
       if (!line || line.startsWith('<!--')) { flushList(); return; }
       if (line === '---' || line === '***') { flushList(); blocks.push('<hr />'); return; }
-      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      const heading = line.match(/^(#{1,6})\s+(.+)$/);
       if (heading) {
         flushList();
-        const level = Math.min(heading[1].length + 1, 4);
+        const level = Math.min(heading[1].length + 1, 6);
         blocks.push(`<h${level}>${inlineExecutionHtml(heading[2])}</h${level}>`);
         return;
       }
@@ -599,6 +653,34 @@
     return blocks.join('') || '<div class="execution-empty">尚未生成实验执行方案。请先导入资料并使用 AI 生成，或编辑方案正文后保存。</div>';
   }
 
+  function richPlanInlineToMarkdown(node) {
+    if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+    if (node.nodeType !== Node.ELEMENT_NODE) return '';
+    const children = [...node.childNodes].map(richPlanInlineToMarkdown).join('');
+    if (node.tagName === 'STRONG' || node.tagName === 'B') return `**${children}**`;
+    if (node.tagName === 'EM' || node.tagName === 'I') return `_${children}_`;
+    if (node.tagName === 'CODE') return `\`${children}\``;
+    if (node.tagName === 'BR') return '\n';
+    return children;
+  }
+
+  function richPlanEditorToMarkdown(editor) {
+    const blockToMarkdown = node => {
+      if (node.nodeType === Node.TEXT_NODE) return (node.nodeValue || '').trim();
+      if (node.nodeType !== Node.ELEMENT_NODE) return '';
+      const inline = richPlanInlineToMarkdown(node).replace(/\u00a0/g, ' ').trim();
+      const tag = node.tagName;
+      if (/^H[2-6]$/.test(tag)) return `${'#'.repeat(Number(tag.slice(1)) - 1)} ${inline}`;
+      if (tag === 'P') return inline;
+      if (tag === 'ASIDE') return inline ? `> ${inline}` : '';
+      if (tag === 'HR') return '---';
+      if (tag === 'UL' || tag === 'OL') return [...node.children].filter(item => item.tagName === 'LI').map((item, index) => `${tag === 'OL' ? `${index + 1}.` : '-'} ${richPlanInlineToMarkdown(item).replace(/\u00a0/g, ' ').trim()}`).join('\n');
+      if (tag === 'DIV') return [...node.childNodes].map(blockToMarkdown).filter(Boolean).join('\n\n') || inline;
+      return inline;
+    };
+    return [...editor.childNodes].map(blockToMarkdown).filter(Boolean).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function planScopeDetails(plan, subexperimentId = '') {
     const subexperiment = plan?.subexperiments?.find(item => item.id === subexperimentId);
     return {
@@ -608,10 +690,57 @@
     };
   }
 
+  function planDisplaySections(content) {
+    const seen = new Set();
+    return editablePlanContent(content).split(/\r?\n/).map(line => line.trim().match(/^###\s+(.+)$/)).filter(Boolean).map(match => {
+      const title = match[1].replace(/[*_`]/g, '').trim();
+      return { key: title, title };
+    }).filter(section => section.key && !seen.has(section.key) && (seen.add(section.key) || true));
+  }
+
+  function selectedPlanSections(book, sections) {
+    const available = new Set(sections.map(section => section.key));
+    if (!Array.isArray(book.selectedSections)) book.selectedSections = sections.map(section => section.key);
+    else book.selectedSections = book.selectedSections.filter(section => available.has(section));
+    return book.selectedSections;
+  }
+
+  function visiblePlanContent(content, selectedSections) {
+    const lines = editablePlanContent(content).split(/\r?\n/);
+    const hasSections = lines.some(line => /^###\s+/.test(line.trim()));
+    if (!hasSections) return editablePlanContent(content);
+    let current = null;
+    const visible = [];
+    for (const line of lines) {
+      const heading = line.trim().match(/^###\s+(.+)$/);
+      if (heading) current = heading[1].replace(/[*_`]/g, '').trim();
+      if (current && selectedSections.includes(current)) visible.push(line);
+    }
+    return visible.join('\n').replace(/^\s+|\s+$/g, '');
+  }
+
+  function planStyleAttribute(style) {
+    const font = PLAN_FONT_OPTIONS.find(([value]) => value === style.font)?.[0] || PLAN_STYLE_DEFAULT.font;
+    const fontSize = [9, 10, 11, 12, 13, 14, 16].includes(Number(style.fontSize)) ? Number(style.fontSize) : PLAN_STYLE_DEFAULT.fontSize;
+    return `--execution-font:${esc(font)},sans-serif;--execution-size:${fontSize}pt`;
+  }
+
+  function planRecordSheetHtml() {
+    const rows = Array.from({ length: 7 }, () => '<tr><td></td><td></td><td></td><td></td></tr>').join('');
+    return `<section class="execution-record-sheet"><h2>实验记录表</h2><p>用于执行本方案时同步记录关键参数、现象和原始数据。</p><table><tbody><tr><th>实验日期</th><td></td></tr><tr><th>执行人</th><td></td></tr><tr><th>样品 / 批次</th><td></td></tr><tr><th>仪器 / 设备</th><td></td></tr></tbody></table><h3>步骤与数据记录</h3><table class="execution-record-table"><thead><tr><th>步骤</th><th>执行时间</th><th>关键参数、现象与原始数据</th><th>签名</th></tr></thead><tbody>${rows}</tbody></table><h3>偏差与处理</h3><table class="execution-record-table"><thead><tr><th>发现时间</th><th colspan="2">偏差或异常与处理措施</th><th>复核人</th></tr></thead><tbody><tr><td></td><td colspan="2"></td><td></td></tr><tr><td></td><td colspan="2"></td><td></td></tr></tbody></table></section>`;
+  }
+
+  function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet) {
+    const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
+    return `<aside class="plan-display-controls"><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在右侧预览，并随导出方案一同保留。</p></div><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
+  }
+
   function openPlanBookPage(planId, subexperimentId = '', imported = null) {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
-    R.planBook = { planId, subexperimentId, imported };
+    const previous = R.planBook;
+    const sameBook = previous?.planId === planId && previous?.subexperimentId === subexperimentId;
+    R.planBook = { planId, subexperimentId, imported, selectedSections: sameBook ? previous.selectedSections : null, includeRecordSheet: sameBook ? Boolean(previous.includeRecordSheet) : false };
     window.switchView('planBook');
   }
 
@@ -697,29 +826,45 @@
     const scope = planScopeDetails(plan, book.subexperimentId);
     host.innerHTML = '<div class="empty-state"><span>◌</span><strong>正在载入实验方案书…</strong></div>';
     let content = '';
+    let rawContent = '';
     try {
       const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content${scope.query}`);
-      content = editablePlanContent(response.content || '');
+      rawContent = response.content || '';
+      content = editablePlanContent(rawContent);
     } catch (error) {
       host.innerHTML = `<div class="empty-state"><span>!</span><strong>无法读取实验方案书</strong><p>${esc(error.message)}</p></div>`;
       return;
     }
     const imported = book.imported;
     const task = runningPlanTaskFor(book);
+    const sections = planDisplaySections(content);
+    const selectedSections = selectedPlanSections(book, sections);
+    const presentation = planPresentationStyle(rawContent);
+    const displayContent = visiblePlanContent(content, selectedSections);
     const sourceAction = task
       ? planGenerationMarkup(task)
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
-        ? `<article class="execution-a4-page"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div class="execution-document-body">${executionPlanHtml(content)}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article>`
+        ? `<div class="plan-book-preview-layout">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet)}<div class="plan-a4-preview-wrap"><article id="executionPlanPreview" class="execution-a4-page" style="${planStyleAttribute(presentation)}"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div id="executionPlanBookBody" class="execution-document-body">${executionPlanHtml(displayContent)}</div><div id="executionPlanRecordSheet" ${book.includeRecordSheet ? '' : 'hidden'}>${planRecordSheetHtml()}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article></div></div>`
         : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
     const currentContentReady = Boolean(content && !imported && !task);
     host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
     $('backToPlansButton').onclick = () => window.switchView('plans');
     $('importPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
-    $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId));
+    $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId, book.selectedSections, book.includeRecordSheet));
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
+    document.querySelectorAll('[data-plan-section]').forEach(control => control.addEventListener('change', () => {
+      book.selectedSections = [...document.querySelectorAll('[data-plan-section]:checked')].map(input => input.value);
+      const body = $('executionPlanBookBody');
+      if (body) body.innerHTML = executionPlanHtml(visiblePlanContent(content, book.selectedSections));
+    }));
+    $('planRecordSheetToggle')?.addEventListener('change', event => {
+      book.includeRecordSheet = event.target.checked;
+      const sheet = $('executionPlanRecordSheet');
+      if (sheet) sheet.hidden = !book.includeRecordSheet;
+    });
   }
 
   function generatePlanBook(book, scope) {
@@ -771,13 +916,14 @@
     }
   }
 
-  function downloadPlanExport(planId, format, subexperimentId = '', includeRecordSheet = false) {
+  function downloadPlanExport(planId, format, subexperimentId = '', includeRecordSheet = false, selectedSections = null) {
     if (!R.active || !['docx', 'pdf', 'md'].includes(format)) return;
     const plan = R.plans.find(item => item.id === planId);
     const scope = planScopeDetails(plan, subexperimentId);
     const query = new URLSearchParams();
     if (subexperimentId) query.set('subexperimentId', subexperimentId);
     if (includeRecordSheet) query.set('includeRecordSheet', 'true');
+    if (Array.isArray(selectedSections)) query.set('sections', selectedSections.join('|'));
     const link = document.createElement('a');
     link.href = `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/export/${format}?${query.toString()}`;
     link.download = `${scope.title}-实验执行方案.${format}`;
@@ -787,16 +933,16 @@
     toast(`正在导出实验执行方案（${format.toUpperCase()}）${includeRecordSheet ? '，并附实验记录表' : ''}`);
   }
 
-  function openPlanExportDialog(planId, subexperimentId = '') {
+  function openPlanExportDialog(planId, subexperimentId = '', selectedSections = null, includeRecordSheet = false) {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到可导出的实验方案'); return; }
     const scope = planScopeDetails(plan, subexperimentId);
     openModal(`<div class="modal-header"><div><h2>导出实验方案</h2><p>用于实验执行、打印或归档；这不会更新项目记忆。项目记忆 MD 请使用右上角的独立导出按钮。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <form id="planExportForm"><div class="modal-body"><div class="form-field full"><span>导出格式</span><div class="export-format-options"><label><input type="radio" name="planExportFormat" value="docx" checked /> Word（可继续编辑）</label><label><input type="radio" name="planExportFormat" value="pdf" /> PDF（打印版）</label><label><input type="radio" name="planExportFormat" value="md" /> 原生 Markdown</label></div></div><label class="export-record-sheet-option"><input id="includePlanRecordSheet" type="checkbox" /><span><b>附带实验记录表</b><small>增加可打印填写的执行时间、关键参数、现象、原始数据与偏差处理表。</small></span></label><p class="import-tip">导出对象：<b>${esc(scope.title)}</b>。导出文件不会写入项目文件夹，项目内仍以 Markdown 为唯一持久格式。</p></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button type="submit" class="primary-button">开始导出</button></div></form>`, () => {
+      <form id="planExportForm"><div class="modal-body"><div class="form-field full"><span>导出格式</span><div class="export-format-options"><label><input type="radio" name="planExportFormat" value="docx" checked /> Word（可继续编辑）</label><label><input type="radio" name="planExportFormat" value="pdf" /> PDF（打印版）</label><label><input type="radio" name="planExportFormat" value="md" /> 原生 Markdown</label></div></div><label class="export-record-sheet-option"><input id="includePlanRecordSheet" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>与预览页的选择保持一致；可在这里临时调整。</small></span></label><p class="import-tip">导出对象：<b>${esc(scope.title)}</b>。将使用预览页面当前勾选的显示板块。导出文件不会写入项目文件夹，项目内仍以 Markdown 为唯一持久格式。</p></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button type="submit" class="primary-button">开始导出</button></div></form>`, () => {
       $('planExportForm').addEventListener('submit', event => {
         event.preventDefault();
         const format = document.querySelector('input[name="planExportFormat"]:checked')?.value || 'docx';
-        downloadPlanExport(planId, format, subexperimentId, $('includePlanRecordSheet').checked);
+        downloadPlanExport(planId, format, subexperimentId, $('includePlanRecordSheet').checked, selectedSections);
         closeModal();
       });
     });
