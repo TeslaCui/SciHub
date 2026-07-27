@@ -245,20 +245,45 @@
 
   // ------------------------------------------------------------- 侧栏渲染 --
   function renderProjectSidebar() {
-    const list = $('projectList');
-    if (!list) return;
+    const picker = $('projectSelect');
+    if (!picker) return;
     if (!R.projects.length) {
-      list.innerHTML = '<div style="padding:8px;color:#89958e;font-size:11px;line-height:1.6">还没有项目。<br>点击右上角 + 新建，资料会保存在 SciHub 的科研项目目录。</div>';
+      picker.innerHTML = '<option value="">暂无研究项目</option>';
+      picker.disabled = true;
+      renderPlanBookSwitcher();
       return;
     }
-    list.innerHTML = R.projects.map(p => `
-      <button class="project-item ${R.active && p.slug === R.active.slug ? 'selected' : ''}" data-project-select="${esc(p.slug)}" title="${esc(p.description || '')}">
-        <span class="project-color" style="background:#5d8a75"></span>
-        <span>${esc(p.name)}</span>
-        <b>${p.logCount}·${p.conversationCount}</b>
-      </button>`).join('');
-    list.querySelectorAll('[data-project-select]').forEach(button => {
-      button.addEventListener('click', () => selectProject(button.dataset.projectSelect));
+    picker.disabled = false;
+    picker.innerHTML = R.projects.map(project => `<option value="${esc(project.slug)}" ${R.active?.slug === project.slug ? 'selected' : ''}>${esc(project.name)}</option>`).join('');
+    if (!R.active && R.projects[0]) picker.value = R.projects[0].slug;
+    picker.onchange = () => {
+      if (picker.value) selectProject(picker.value);
+    };
+    renderPlanBookSwitcher();
+  }
+
+  function renderPlanBookSwitcher() {
+    const section = $('planBookSwitcher');
+    const list = $('planBookList');
+    if (!section || !list) return;
+    const visible = Boolean(R.active && ['plans', 'planBook'].includes(currentView()));
+    section.hidden = !visible;
+    if (!visible) return;
+    if (!R.plans.length) {
+      list.innerHTML = '<div class="plan-book-switcher-empty">尚未建立实验方案。</div>';
+      return;
+    }
+    const scopes = R.plans.flatMap(plan => {
+      const subexperiments = plan.subexperiments?.length ? plan.subexperiments : [{ id: '', name: plan.name }];
+      return subexperiments.map(subexperiment => ({ plan, subexperiment }));
+    });
+    list.innerHTML = scopes.map(({ plan, subexperiment }) => {
+      const selected = R.planBook?.planId === plan.id && R.planBook?.subexperimentId === subexperiment.id;
+      const label = subexperiment.name || plan.name;
+      return `<button class="project-item plan-book-switcher-item ${selected ? 'selected' : ''}" data-plan-book-switch="${esc(plan.id)}" data-subexperiment-id="${esc(subexperiment.id)}" title="${esc(`${plan.version || ''} · ${label}`)}"><span class="project-color" style="background:#7b9f8c"></span><span class="plan-book-switcher-copy"><b>${esc(label)}</b><small>${esc(plan.version || '未命名版本')}</small></span><i>›</i></button>`;
+    }).join('');
+    list.querySelectorAll('[data-plan-book-switch]').forEach(button => {
+      button.addEventListener('click', () => openPlanBookPage(button.dataset.planBookSwitch, button.dataset.subexperimentId || ''));
     });
   }
 
@@ -338,16 +363,16 @@
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
           const subexperimentPath = projectPath(plan.folder || '实验方案', item.folder || '', '实验方案.md');
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button></div></li>`;
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button><button class="text-button" data-edit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">编辑方案书</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
       const planDocumentPath = projectPath(plan.relativePath || `${plan.folder || '实验方案'}/方案.md`);
       const planFolderPath = projectPath(plan.folder || '实验方案');
       return `<article class="plan-card">
-        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
+        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案信息</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button>`}</div></div>
+        <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button><button class="text-button" data-edit-plan-book="${esc(plan.id)}">编辑方案书</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>${esc(planFolderPath)}/ · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
@@ -361,6 +386,9 @@
     });
     $('plansBody').querySelectorAll('[data-preview-plan]').forEach(button => {
       button.onclick = () => openPlanBookPage(button.dataset.previewPlan, button.dataset.subexperimentId || '');
+    });
+    $('plansBody').querySelectorAll('[data-edit-plan-book]').forEach(button => {
+      button.onclick = () => openPlanContentEditor(button.dataset.editPlanBook, button.dataset.subexperimentId || '');
     });
     $('plansBody').querySelectorAll('[data-edit-plan]').forEach(button => {
       button.onclick = () => openEditPlanDialog(button.dataset.editPlan);
@@ -379,16 +407,70 @@
     loadLog(TODAY, { planId, subexperimentId });
   }
 
+  async function openSubexperimentDeleteDialog(planId, subexperimentId) {
+    if (!R.active) { toast('请先选择项目'); return; }
+    try {
+      const preview = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/subexperiments/${encodeURIComponent(subexperimentId)}/delete-preview`);
+      const items = preview.items || [];
+      const subexperiment = preview.subexperiment;
+      if (!subexperiment) { toast('未找到子实验'); return; }
+      const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
+      openModal(`<div class="modal-header"><div><h2>删除子实验</h2><p>将删除该子实验目录及其中的方案、日志和附加资料；不会影响同一方案下的其他子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
+        <form id="deleteSubexperimentForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：移除不再需要的子实验。</b><br>待删除目录：项目/${esc(preview.folder)}/<br>以下 ${items.length} 项会被逐项删除。请核对清单后输入子实验名称确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入 <b>${esc(subexperiment.name)}</b> 以确认删除</span><input id="deleteSubexperimentConfirmation" required autocomplete="off" placeholder="${esc(subexperiment.name)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除子实验</button></div></form>`, () => {
+        $('deleteSubexperimentConfirmation').focus();
+        $('deleteSubexperimentForm').addEventListener('submit', async event => {
+          event.preventDefault();
+          const confirmation = $('deleteSubexperimentConfirmation').value.trim();
+          if (confirmation !== subexperiment.name) { toast('请输入完整且正确的子实验名称'); return; }
+          const button = $('deleteSubexperimentForm').querySelector('[type=submit]');
+          button.disabled = true;
+          button.textContent = '删除中…';
+          try {
+            await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/subexperiments/${encodeURIComponent(subexperimentId)}`, {
+              method: 'DELETE', body: JSON.stringify({ confirmation })
+            });
+            closeModal();
+            await refreshProjects(true);
+            await loadProject(R.active.slug);
+            renderPlansView();
+            toast('子实验及确认清单中的内容已删除');
+          } catch (error) {
+            toast(`删除子实验失败：${error.message}`);
+          } finally {
+            const current = $('deleteSubexperimentForm')?.querySelector('[type=submit]');
+            if (current) { current.disabled = false; current.textContent = '删除子实验'; }
+          }
+        });
+      });
+    } catch (error) {
+      toast(`读取子实验删除清单失败：${error.message}`);
+    }
+  }
+
   function openEditPlanDialog(planId) {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan) { toast('未找到实验方案'); return; }
     if (plan.storage === 'legacy') { toast('旧版单文件方案暂不支持在界面编辑'); return; }
-    openModal(`<div class="modal-header"><div><h2>编辑实验方案</h2><p>可修改方案名称和说明；版本目录 <b>${esc(plan.folder)}</b> 保持不变，以免移动已有的子实验和日志文件。</p></div><button class="close-button" data-close-modal>×</button></div>
+    const orderedPlans = [...R.plans].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const planIndex = orderedPlans.findIndex(item => item.id === plan.id);
+    const previous = planIndex >= 0 ? orderedPlans[planIndex + 1] || null : null;
+    const inheritedCount = previous?.subexperiments?.length || 0;
+    const inheritSubexperimentsPanel = previous
+      ? `<label class="inherit-subexperiments-option"><span class="checkbox-card"><input id="inheritPreviousSubexperiments" type="checkbox" ${inheritedCount ? '' : 'disabled'} /><span><b>沿用上版本子实验</b><small>${inheritedCount ? '一键沿用上版本的子实验，但不会沿用实验方案。' : '上一版本暂无子实验。'}</small></span></span></label>`
+      : `<div class="inherit-subexperiments-option"><div class="checkbox-card is-disabled"><span><b>沿用上版本子实验</b><small>暂无上一版本可沿用。</small></span></div></div>`;
+    const managedSubexperiments = plan.subexperiments?.length
+      ? plan.subexperiments.map(item => `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : '<small>尚未填写子实验说明。</small>'}</div><button type="button" class="text-button danger-button" data-manage-delete-subexperiment="${esc(item.id)}">删除</button></li>`).join('')
+      : '<li class="subexperiment-management-empty">尚未创建子实验；可在保存时沿用上一版本的子实验标题。</li>';
+    openModal(`<div class="modal-header"><div><h2>编辑实验方案</h2><p>可修改当前版本的基本信息；版本目录保持不变，以保证已有文件路径稳定。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="editPlanForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field"><span>方案名称</span><input id="editPlanName" required maxlength="120" value="${esc(plan.name)}" /></label>
-        <label class="form-field"><span>版本目录</span><input value="${esc(plan.folder)}" disabled /><small class="field-note">目录名不在编辑时变更，保证现有文件路径稳定。</small></label>
-        <label class="form-field full"><span>方案说明</span><textarea id="editPlanDescription" maxlength="4000" placeholder="方案目的、变量范围、判定标准等。">${esc(plan.description || '')}</textarea></label>
+        <label class="form-field"><span>方案版本</span><input value="${esc(plan.version)}" disabled /><small class="field-note">编辑不会变更版本目录或已有文件路径。</small></label>
+        <label class="form-field full"><span>方案说明（可选）</span><textarea id="editPlanDescription" maxlength="4000" placeholder="记录方案目的、变量范围、判定标准等。">${esc(plan.description || '')}</textarea></label>
+        <section class="form-field full subexperiment-management"><span>管理子实验</span><p>可删除当前版本中不再需要的子实验。删除前会展示目录与文件清单，并要求再次确认。</p><ul class="subexperiment-management-list">${managedSubexperiments}</ul>${inheritSubexperimentsPanel}</section>
       </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存修改</button></div></form>`, () => {
+      $('editPlanForm').querySelectorAll('[data-manage-delete-subexperiment]').forEach(button => {
+        button.addEventListener('click', () => openSubexperimentDeleteDialog(planId, button.dataset.manageDeleteSubexperiment));
+      });
       $('editPlanForm').addEventListener('submit', async event => {
         event.preventDefault();
         const button = $('editPlanForm').querySelector('[type=submit]');
@@ -399,7 +481,8 @@
             method: 'PUT',
             body: JSON.stringify({
               name: $('editPlanName').value.trim(),
-              description: $('editPlanDescription').value.trim()
+              description: $('editPlanDescription').value.trim(),
+              inheritSubexperimentsFromPlanId: $('inheritPreviousSubexperiments')?.checked ? previous?.id : ''
             })
           });
           R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
@@ -491,7 +574,7 @@
   }
 
   const PLAN_STYLE_RE = /<!--\s*SCIHUB-PLAN-STYLE:\s*({[\s\S]*?})\s*-->/i;
-  const PLAN_STYLE_DEFAULT = { font: 'Microsoft YaHei', fontSize: 11, layout: 'spacious' };
+  const PLAN_STYLE_DEFAULT = { font: 'Microsoft YaHei', fontSize: 11, layout: 'compact' };
   const PLAN_LAYOUT_OPTIONS = [
     ['compact', '紧凑排布（占用最少页面）'],
     ['spacious', '宽松排布（表达结构清晰）']
@@ -538,7 +621,7 @@
 
   function standardPlanPrompt(sourceMarkdown) {
     return [
-      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
+      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充。“材料与仪器”中的试剂、耗材和设备必须写成一个连续自然段，项目之间用中文逗号分隔，不要使用项目符号、编号、卡片或表格。版式应紧凑：使用简洁段落或列表，避免无意义的空行、重复说明和空白板块。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
       { role: 'user', content: `请读取以下已转换的 Markdown 资料，并生成标准实验方案：\n\n${sourceMarkdown}` }
     ];
   }
@@ -822,9 +905,37 @@
     return `<aside id="planEditorPanel" class="plan-display-controls plan-editor-side-panel"><div><p class="eyebrow">编辑模式</p><h2>编辑方案书</h2><p>左侧会同步显示当前内容的 A4 分页效果；保存后只会写入 Markdown 与版式设置。</p></div><div class="plan-editor-toolbar" role="toolbar" aria-label="方案书编辑工具"><label>字体 <select id="planEditorFont">${fontOptions}</select></label><label>字号 <select id="planEditorSize">${sizeOptions}</select></label><label>排版 <select id="planEditorLayout">${layoutOptions}</select></label><span class="plan-editor-divider"></span><button type="button" data-plan-editor-command="bold" title="加粗"><b>B</b></button><button type="button" data-plan-editor-command="italic" title="斜体"><i>I</i></button><button type="button" data-plan-editor-command="insertUnorderedList" title="无序列表">• 列表</button><button type="button" data-plan-editor-command="insertOrderedList" title="有序列表">1. 列表</button><button type="button" data-plan-editor-command="undo" title="撤销">↶</button><button type="button" data-plan-editor-command="redo" title="重做">↷</button></div><p class="plan-editor-hint">可直接输入、删除和调整结构。外部内容会以纯文本粘贴，避免混入 Word 格式；选中文字后右键可复制、剪切、粘贴或让 AI 修改该段。</p><div id="planContentEditor" class="plan-rich-editor execution-document-body" data-layout="${presentation.layout}" contenteditable="true" role="textbox" aria-multiline="true" style="${editorStyle}">${executionPlanHtml(editor.content || '')}</div><section id="planEditorAiPopover" class="plan-editor-ai-popover" hidden><div class="plan-editor-ai-popover-head"><div><b>AI 修改选中内容</b><small>只会替换选中的文字；实验事实、数据与条件不会被擅自改写。</small></div><button type="button" class="close-button" data-plan-ai-close aria-label="关闭">×</button></div><div class="plan-editor-ai-selection"></div><label class="plan-editor-ai-request"><span>修改要求</span><textarea maxlength="600" placeholder="例如：让表述更专业、条理更清晰，但不要改变实验条件和数据"></textarea></label><div class="plan-editor-ai-actions"><button type="button" class="secondary-button" data-plan-ai-close>取消</button><button type="button" class="primary-button" data-plan-ai-submit>开始修改</button></div></section><div class="plan-editor-side-actions"><button id="cancelPlanEditingButton" type="button" class="secondary-button">取消编辑</button><button id="savePlanContentButton" type="button" class="primary-button">保存方案书</button></div></aside>`;
   }
 
+  function planEditorTopPanelMarkup(editor) {
+    const presentation = editor.presentation || PLAN_STYLE_DEFAULT;
+    const fontOptions = PLAN_FONT_OPTIONS.map(([value, label]) => `<option value="${esc(value)}" ${value === presentation.font ? 'selected' : ''}>${esc(label)}</option>`).join('');
+    const sizeOptions = [9, 10, 11, 12, 13, 14, 16].map(size => `<option value="${size}" ${size === presentation.fontSize ? 'selected' : ''}>${size} pt</option>`).join('');
+    const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === presentation.layout ? 'selected' : ''}>${label}</option>`).join('');
+    return `<section id="planEditorPanel" class="plan-editor-top-panel"><div class="plan-editor-top-copy"><div><p class="eyebrow">编辑模式</p><h2>直接编辑 A4 方案书</h2><p>直接在下方方案纸张内输入、删除或选中文字修改；工具栏会影响当前方案书的显示与导出。</p></div><div class="plan-editor-actions"><button id="cancelPlanEditingButton" type="button" class="secondary-button">取消编辑</button><button id="savePlanContentButton" type="button" class="primary-button">保存方案书</button></div></div><div class="plan-editor-toolbar" role="toolbar" aria-label="方案书编辑工具"><label>字体 <select id="planEditorFont">${fontOptions}</select></label><label>字号 <select id="planEditorSize">${sizeOptions}</select></label><label>排版 <select id="planEditorLayout">${layoutOptions}</select></label><span class="plan-editor-divider"></span><button type="button" data-plan-editor-command="bold" title="加粗"><b>B</b></button><button type="button" data-plan-editor-command="italic" title="斜体"><i>I</i></button><button type="button" data-plan-editor-command="removeFormat" title="清除选中文字的加粗、斜体等格式">清除格式</button><button type="button" data-plan-editor-command="insertUnorderedList" title="无序列表">• 列表</button><button type="button" data-plan-editor-command="insertOrderedList" title="有序列表">1. 列表</button><button type="button" data-plan-editor-command="undo" title="撤销">↶</button><button type="button" data-plan-editor-command="redo" title="重做">↷</button></div><p class="plan-editor-hint">可使用键盘直接输入、删除、换行、复制、剪切和粘贴；选中文字后右键还可让 AI 仅修改该段。粘贴内容会转为纯文本，保存后只写入 Markdown。</p><section id="planEditorAiPopover" class="plan-editor-ai-popover" hidden><div class="plan-editor-ai-popover-head"><div><b>AI 修改选中内容</b><small>只替换选中的文字；实验事实、数据与条件不会被擅自改写。</small></div><button type="button" class="close-button" data-plan-ai-close aria-label="关闭">×</button></div><div class="plan-editor-ai-selection"></div><label class="plan-editor-ai-request"><span>修改要求</span><textarea maxlength="600" placeholder="例如：让表述更专业、条理更清晰，但不要改变实验条件和数据"></textarea></label><div class="plan-editor-ai-actions"><button type="button" class="secondary-button" data-plan-ai-close>取消</button><button type="button" class="primary-button" data-plan-ai-submit>开始修改</button></div></section></section>`;
+  }
+
+  function planEditableA4Markup(plan, scope, editor) {
+    const presentation = editor.presentation || PLAN_STYLE_DEFAULT;
+    const content = editor.content ? executionPlanHtml(editor.content) : '';
+    const editorStyle = `font-family:${esc(presentation.font)},sans-serif;font-size:${presentation.fontSize}pt`;
+    return `<div class="plan-a4-preview-wrap plan-a4-editing-wrap"><div class="execution-a4-pages"><article id="planEditingPage" class="execution-a4-page plan-editing-page" data-layout="${esc(presentation.layout)}" style="${planStyleAttribute(presentation)}"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div id="planContentEditor" class="execution-document-body plan-rich-editor" data-layout="${esc(presentation.layout)}" contenteditable="true" role="textbox" aria-multiline="true" aria-label="实验方案正文" data-placeholder="在这里直接输入或修改实验方案正文…" style="${editorStyle}">${content}</div><div class="execution-page-foot">SciHub 本地科研记录工作台 <span>· 编辑中</span></div></article></div></div>`;
+  }
+
   async function openPlanContentEditor(planId, subexperimentId = '') {
     const plan = R.plans.find(item => item.id === planId);
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
+    const previousBook = R.planBook;
+    const sameBook = previousBook?.planId === planId && previousBook?.subexperimentId === subexperimentId;
+    if (!sameBook) {
+      R.planBook = {
+        planId,
+        subexperimentId,
+        imported: null,
+        selectedSections: null,
+        includeRecordSheet: false,
+        layoutMode: null
+      };
+      window.switchView('planBook');
+    }
     const scopeQuery = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
     try {
       const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/content${scopeQuery}`);
@@ -846,6 +957,7 @@
     const panel = $('planEditorPanel');
     const editor = $('planContentEditor');
     if (!panel || !editor) return;
+    const editingPage = $('planEditingPage');
     const font = $('planEditorFont');
     const size = $('planEditorSize');
     const layout = $('planEditorLayout');
@@ -871,6 +983,11 @@
       editor.style.fontFamily = editorState.presentation.font;
       editor.style.fontSize = `${editorState.presentation.fontSize}pt`;
       editor.dataset.layout = editorState.presentation.layout;
+      if (editingPage) {
+        editingPage.style.setProperty('--execution-font', `${editorState.presentation.font}, sans-serif`);
+        editingPage.style.setProperty('--execution-size', `${editorState.presentation.fontSize}pt`);
+        editingPage.dataset.layout = editorState.presentation.layout;
+      }
       book.layoutMode = editorState.presentation.layout;
       refreshPreview();
     };
@@ -1076,6 +1193,11 @@
     let currentSection = '';
     const flushList = () => {
       if (!list) return;
+      if (list.materials) {
+        blocks.push(`<p class="execution-materials-paragraph">${list.items.map(item => inlineExecutionHtml(item)).join('，')}</p>`);
+        list = null;
+        return;
+      }
       blocks.push(`<${list.type} class="execution-list${list.materials ? ' materials-list' : ''}">${list.items.map(item => `<li>${inlineExecutionHtml(item)}</li>`).join('')}</${list.type}>`);
       list = null;
     };
@@ -1214,34 +1336,48 @@
       return body;
     };
     const overflowing = () => body.scrollHeight > body.clientHeight + 1;
+    const isHeadingBlock = block => /^H[2-6]$/.test(block?.tagName || '');
     const placeListAcrossPages = list => {
       const items = [...list.children];
       let fragment = list.cloneNode(false);
       body.append(fragment);
       for (const item of items) {
         fragment.append(item);
-        if (overflowing() && fragment.children.length > 1) {
-          fragment.removeChild(item);
+        if (!overflowing()) continue;
+        fragment.removeChild(item);
+        if (fragment.children.length) {
           addPage();
           fragment = list.cloneNode(false);
           body.append(fragment);
-          fragment.append(item);
+        } else {
+          const preceding = fragment.previousElementSibling;
+          const moveHeading = isHeadingBlock(preceding);
+          body.removeChild(fragment);
+          if (moveHeading) body.removeChild(preceding);
+          addPage();
+          fragment = list.cloneNode(false);
+          if (moveHeading) body.append(preceding);
+          body.append(fragment);
         }
+        fragment.append(item);
       }
     };
     const placeBlock = block => {
       body.append(block);
       if (!overflowing()) return;
-      if (body.children.length === 1) {
-        if (!['UL', 'OL'].includes(block.tagName) || block.children.length < 2) return;
-        body.removeChild(block);
+      const isList = ['UL', 'OL'].includes(block.tagName);
+      body.removeChild(block);
+      if (isList && block.children.length) {
         placeListAcrossPages(block);
         return;
       }
-      body.removeChild(block);
+      if (body.children.length === 0) {
+        body.append(block);
+        return;
+      }
       addPage();
       body.append(block);
-      if (!overflowing() || !['UL', 'OL'].includes(block.tagName) || block.children.length < 2) return;
+      if (!overflowing() || !isList || block.children.length < 2) return;
       body.removeChild(block);
       placeListAcrossPages(block);
     };
@@ -1256,7 +1392,7 @@
   function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode) {
     const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === layoutMode ? 'selected' : ''}>${label}</option>`).join('');
-    return `<aside class="plan-display-controls"><div class="plan-controls-drag-handle" title="拖动此处移动面板；双击恢复默认位置"><span>⠿</span><small>拖动</small></div><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
+    return `<aside class="plan-display-controls"><div class="plan-controls-drag-handle" title="拖动此处调整位置；面板会随页面滚动保持可见；双击恢复默认位置"><span>⠿</span><small>拖动</small></div><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
   }
 
   function openPlanBookPage(planId, subexperimentId = '', imported = null) {
@@ -1348,6 +1484,8 @@
     if (!canvas || !layer || !handle || !window.matchMedia('(min-width: 1180px)').matches) return;
 
     const storageKey = `scihub-plan-controls:${R.active?.slug || ''}:${book.planId}:${book.subexperimentId || 'plan'}`;
+    const stage = canvas.closest('.plan-book-stage');
+    const topbar = document.querySelector('.topbar');
     const clampPosition = (left, top) => {
       const maxLeft = Math.max(12, canvas.clientWidth - layer.offsetWidth - 12);
       const maxTop = Math.max(12, canvas.scrollHeight - layer.offsetHeight - 12);
@@ -1361,6 +1499,7 @@
       if (persist) {
         try { localStorage.setItem(storageKey, JSON.stringify(position)); } catch { /* 存储不可用时只保留本次位置 */ }
       }
+      return position;
     };
     const currentPosition = () => {
       const canvasBox = canvas.getBoundingClientRect();
@@ -1368,10 +1507,45 @@
       return { left: layerBox.left - canvasBox.left + canvas.scrollLeft, top: layerBox.top - canvasBox.top + canvas.scrollTop };
     };
 
+    let restoredPosition = false;
+    let savedFollowPosition = null;
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
-      if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) applyPosition(saved.left, saved.top, false);
+      if (Number.isFinite(saved?.left) && Number.isFinite(saved?.offsetTop)) {
+        savedFollowPosition = saved;
+      } else if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) {
+        applyPosition(saved.left, saved.top, false);
+        restoredPosition = true;
+      }
     } catch { /* 无效的历史位置将使用默认位置 */ }
+
+    const defaultLeft = () => Math.max(12, canvas.clientWidth - layer.offsetWidth - 20);
+    const followTop = () => {
+      const canvasBox = canvas.getBoundingClientRect();
+      const topbarBottom = topbar?.getBoundingClientRect().bottom || 0;
+      return Math.max(20, Math.max(16, topbarBottom + 14) - canvasBox.top + canvas.scrollTop);
+    };
+    const initialPosition = currentPosition();
+    const state = {
+      left: savedFollowPosition?.left ?? (restoredPosition ? initialPosition.left : defaultLeft()),
+      offsetTop: savedFollowPosition?.offsetTop ?? (restoredPosition ? initialPosition.top - followTop() : 0),
+    };
+    const persistFollowPosition = () => {
+      try { localStorage.setItem(storageKey, JSON.stringify({ left: state.left, offsetTop: state.offsetTop, version: 2 })); } catch { /* 存储不可用时只保留本次位置 */ }
+    };
+    const follow = () => {
+      if (!layer.isConnected) return;
+      applyPosition(state.left, followTop() + state.offsetTop, false);
+    };
+    let animationFrame = 0;
+    const scheduleFollow = () => {
+      if (animationFrame) return;
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = 0;
+        follow();
+      });
+    };
+    follow();
 
     handle.addEventListener('pointerdown', event => {
       if (event.button !== 0) return;
@@ -1381,10 +1555,15 @@
       const pointerOffset = { x: event.clientX - layerBox.left, y: event.clientY - layerBox.top };
       layer.classList.add('is-dragging');
       handle.setPointerCapture?.(event.pointerId);
-      const move = moveEvent => applyPosition(
-        moveEvent.clientX - canvas.getBoundingClientRect().left + canvas.scrollLeft - pointerOffset.x,
-        moveEvent.clientY - canvas.getBoundingClientRect().top + canvas.scrollTop - pointerOffset.y,
-      );
+      const move = moveEvent => {
+        const position = applyPosition(
+          moveEvent.clientX - canvas.getBoundingClientRect().left + canvas.scrollLeft - pointerOffset.x,
+          moveEvent.clientY - canvas.getBoundingClientRect().top + canvas.scrollTop - pointerOffset.y,
+          false,
+        );
+        state.left = position.left;
+        state.offsetTop = position.top - followTop();
+      };
       const finish = finishEvent => {
         if (finishEvent.pointerId !== event.pointerId) return;
         layer.classList.remove('is-dragging');
@@ -1392,18 +1571,30 @@
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', finish);
         handle.removeEventListener('pointercancel', finish);
+        persistFollowPosition();
       };
-      applyPosition(start.left, start.top, false);
+      const position = applyPosition(start.left, start.top, false);
+      state.left = position.left;
+      state.offsetTop = position.top - followTop();
       handle.addEventListener('pointermove', move);
       handle.addEventListener('pointerup', finish);
       handle.addEventListener('pointercancel', finish);
     });
     handle.addEventListener('dblclick', () => {
-      layer.style.removeProperty('left');
-      layer.style.removeProperty('right');
-      layer.style.removeProperty('top');
+      state.left = defaultLeft();
+      state.offsetTop = 0;
       try { localStorage.removeItem(storageKey); } catch { /* 存储不可用时无需清理 */ }
+      follow();
     });
+    window.addEventListener('scroll', scheduleFollow, { passive: true });
+    canvas.addEventListener('scroll', scheduleFollow, { passive: true });
+    if (stage && stage !== canvas) stage.addEventListener('scroll', scheduleFollow, { passive: true });
+    window.addEventListener('resize', scheduleFollow, { passive: true });
+    if (window.ResizeObserver) {
+      const observer = new ResizeObserver(scheduleFollow);
+      observer.observe(canvas);
+      observer.observe(layer);
+    }
   }
 
   async function renderPlanBookView() {
@@ -1441,11 +1632,14 @@
       ? planGenerationMarkup(task)
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
-      : content
-        ? `<div class="plan-book-preview-layout${isEditing ? ' is-editing' : ''}"><div class="plan-a4-preview-wrap${isEditing ? '' : ' has-floating-controls'}">${isEditing ? '' : `<div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div>`}<div id="executionPlanPages" class="execution-a4-pages"></div></div>${isEditing ? planEditorSidePanelMarkup(editorState) : ''}</div>`
-        : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
+      : isEditing
+        ? `<div class="plan-book-edit-layout">${planEditorTopPanelMarkup(editorState)}${planEditableA4Markup(plan, scope, editorState)}</div>`
+        : content
+        ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap has-floating-controls"><div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
+        : '<div class="plan-book-empty"><h2>尚未创建实验方案书</h2><p>可导入方案资料后由 AI 按统一模板生成，也可以直接打开简易编辑器手动编写。编辑内容会保存为 Markdown。</p><button id="createPlanBookButton" type="button" class="primary-button">✎ 手动编辑方案书</button></div>';
     const currentContentReady = Boolean(content && !imported && !task);
-    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isEditing ? '正在页内编辑：左侧预览会随输入同步更新。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? `${isEditing ? '' : '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button>'}<button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>` : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
+    const canEditPlanBook = Boolean(!imported && !task);
+    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isEditing ? '正在直接编辑下方 A4 方案书；上方工具栏会作用于纸张内的正文。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${canEditPlanBook && !isEditing ? '<button id="editPlanBookButton" class="secondary-button" type="button">✎ 编辑方案书</button>' : ''}${currentContentReady ? '<button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
     $('backToPlansButton').onclick = () => {
       editorState?.dispose?.();
       if (R.planEditor === editorState) R.planEditor = null;
@@ -1453,9 +1647,11 @@
     };
     $('importPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
+    $('createPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
     $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId, book.selectedSections, book.includeRecordSheet, book.layoutMode || layoutMode));
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
     const refreshA4Pages = () => {
+      if (isEditing) return;
       const currentContent = isEditing ? editorState.content : content;
       const currentPresentation = isEditing ? editorState.presentation : presentation;
       const currentSections = planDisplaySections(currentContent);
@@ -1471,7 +1667,7 @@
         includeRecordSheet: Boolean(book.includeRecordSheet)
       });
     };
-    if (content && !imported && !task) refreshA4Pages();
+    if (!isEditing && content && !imported && !task) refreshA4Pages();
     if (isEditing) {
       bindPlanContentEditor({ plan, scope, book, editorState, refreshPreview: refreshA4Pages });
     } else {
@@ -1609,54 +1805,33 @@
   function openPlanDialog() {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
     const previous = [...R.plans].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
-    const previousPanel = previous
-      ? `<div class="form-field full"><div class="plan-source-panel"><b>上一次方案文件</b><br>${esc(previous.relativePath || `${previous.version}/方案.md`)} · ${esc(previous.name)}<br><button type="button" class="text-button" id="loadPreviousPlan">载入作为新方案草稿</button><small>仅复制内容到当前输入框，不会修改旧方案文件。</small></div></div>`
-      : `<div class="form-field full"><div class="plan-source-panel"><b>上一次方案文件</b><br>这是项目中的第一个方案；创建下一版后即可进行版本差异对比。</div></div>`;
-    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。可载入上一次方案作为草稿，并用已配置的 API 模型一键润色生成新方案。</p></div><button class="close-button" data-close-modal>×</button></div>
+    const numericVersions = R.plans.map(plan => String(plan.version || '').trim().match(/^v?(\d+)(?:\.\d+)?$/i)).filter(Boolean).map(match => Number(match[1])).filter(Number.isFinite);
+    const suggestedVersion = `${(numericVersions.length ? Math.max(...numericVersions) : 0) + 1}.0`;
+    const inheritedCount = previous?.subexperiments?.length || 0;
+    const inheritSubexperimentsPanel = previous
+      ? `<label class="form-field full inherit-subexperiments-option"><span class="checkbox-card"><input id="inheritPreviousSubexperiments" type="checkbox" ${inheritedCount ? '' : 'disabled'} /><span><b>沿用上版本子实验</b><small>${inheritedCount ? '一键沿用上版本的子实验，但不会沿用实验方案。' : '上一版本暂无子实验。'}</small></span></span></label>`
+      : `<div class="form-field full inherit-subexperiments-option"><div class="checkbox-card is-disabled"><span><b>沿用上版本子实验</b><small>暂无上一版本可沿用。</small></span></div></div>`;
+    const inheritedSubexperimentsPreview = inheritedCount
+      ? `<section id="newPlanInheritedSubexperiments" class="form-field full subexperiment-management" hidden><span>管理子实验</span><p>将沿用上一版本的以下子实验。</p><ul class="subexperiment-management-list">${previous.subexperiments.map(item => `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}</div></li>`).join('')}</ul></section>`
+      : '';
+    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。新建后可在方案内导入资料并生成独立的实验方案书。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="planForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field"><span>方案名称</span><input id="planName" required placeholder="例如：蛋白纯化条件筛选" /></label>
-        <label class="form-field"><span>方案版本</span><input id="planVersion" required placeholder="例如：V1" /></label>
+        <label class="form-field"><span>方案版本</span><input id="planVersion" required value="${esc(suggestedVersion)}" placeholder="例如：3.0" /><small class="field-note">已按现有版本自动建议，可直接修改。</small></label>
         <label class="form-field full"><span>方案说明（可选）</span><textarea id="planDescription" placeholder="记录方案目的、变量范围、判定标准等。"></textarea></label>
-        ${previousPanel}
-        <label class="form-field full"><span>实验方案草稿 / 生成结果（可选）</span><textarea id="planContent" style="min-height:210px" placeholder="可直接输入方案草稿，或先载入上一次方案文件。点击“AI 一键润色生成方案”后，结果会保留在这里并随新方案保存为 Markdown。"></textarea><div class="plan-ai-actions"><small>AI 仅修正错别字、表达和结构，不应虚构实验数据、条件或结论。</small><button type="button" class="secondary-button" id="polishPlanButton">✦ AI 一键润色生成方案</button></div></label>
-        <label class="form-field full"><span>子实验（可选）</span><textarea id="planSubexperiments" placeholder="每行一个；可用“名称 | 说明”格式。&#10;例如：不同 pH 条件 | pH 6.5、7.0、7.5 的对照实验&#10;例如：重复验证 | 对 V1 最优条件进行三次重复"></textarea><small class="field-note">创建后子实验会成为日志的可选关联项。</small></label>
+        ${inheritSubexperimentsPanel}
+        ${inheritedSubexperimentsPreview}
       </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建方案</button></div></form>`, () => {
-      $('loadPreviousPlan')?.addEventListener('click', async () => {
-        try {
-          const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(previous.id)}/content`);
-          $('planContent').value = response.content || '';
-          toast('已载入上一次方案文件作为草稿');
-        } catch (error) {
-          toast(`载入上一次方案失败：${error.message}`);
-        }
-      });
-      $('polishPlanButton').addEventListener('click', async () => {
-        const source = $('planContent').value.trim();
-        if (!source) { toast('请先输入方案草稿，或载入上一次方案文件'); return; }
-        const button = $('polishPlanButton');
-        button.disabled = true;
-        button.textContent = 'AI 生成中…';
-        try {
-          const result = await askModel([
-            { role: 'system', content: '你是严谨的科研实验方案编辑。只修正错别字、语法、表达和结构，使方案清晰、专业、可执行。不得虚构或补充未提供的实验事实、数据、试剂、参数、条件、现象或结论；信息缺失时保留为待补充项。输出中文 Markdown 正文，不要 YAML front matter，也不要重复输出一级标题。' },
-            { role: 'user', content: `请润色并整理以下实验方案草稿，保留原意：\n\n${source}` }
-          ]);
-          $('planContent').value = result.trim();
-          toast('AI 已生成润色后的实验方案；确认后可创建新版本');
-        } catch (error) {
-          toast(`AI 生成失败：${error.message}`);
-        } finally {
-          button.disabled = false;
-          button.textContent = '✦ AI 一键润色生成方案';
-        }
-      });
+      const inheritCheckbox = $('inheritPreviousSubexperiments');
+      const inheritedPreview = $('newPlanInheritedSubexperiments');
+      const updateInheritedPreview = () => {
+        if (inheritedPreview && inheritCheckbox) inheritedPreview.hidden = !inheritCheckbox.checked;
+      };
+      inheritCheckbox?.addEventListener('change', updateInheritedPreview);
+      updateInheritedPreview();
       $('planForm').addEventListener('submit', async event => {
         event.preventDefault();
         const button = $('planForm').querySelector('[type=submit]');
-        const subexperiments = $('planSubexperiments').value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map(line => {
-          const [name, ...rest] = line.split('|');
-          return { name: name.trim(), description: rest.join('|').trim() };
-        }).filter(item => item.name);
         button.disabled = true;
         button.textContent = '创建中…';
         try {
@@ -1666,8 +1841,7 @@
               name: $('planName').value.trim(),
               version: $('planVersion').value.trim(),
               description: $('planDescription').value.trim(),
-              planContent: $('planContent').value.trim(),
-              subexperiments
+              inheritSubexperimentsFromPlanId: $('inheritPreviousSubexperiments')?.checked ? previous?.id : ''
             })
           });
           R.plans = [response.plan, ...R.plans];
@@ -2366,6 +2540,7 @@
 
   function onViewActivated(view) {
     updateTopbarActions(view);
+    renderProjectSidebar();
     renderPlanTaskBanner();
     if (view === 'home') renderHomeView();
     else if (view === 'plans') renderPlansView();

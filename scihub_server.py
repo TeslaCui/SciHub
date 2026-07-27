@@ -34,7 +34,7 @@ PROJECTS_ROOT = ROOT / "科研项目"
 HOST = "127.0.0.1"
 PORT = 8770
 MAX_BODY_SIZE = 24 * 1024 * 1024
-APP_VERSION = "2026.07.26"
+APP_VERSION = "2026.07.27"
 
 INDEX_FILE = "index.html"
 SLUG_RE = re.compile(r"^[\w一-鿿-]+$", re.UNICODE)
@@ -181,7 +181,9 @@ def load_project(slug: str) -> dict:
         raise ApiError("项目元数据无效。")
     if meta_value(doc["meta"], "slug", slug) != slug:
         raise ApiError("项目标识与项目文件夹不一致。")
-    return {"slug": slug, "dir": directory, "meta": doc["meta"], "content": doc["content"]}
+    project = {"slug": slug, "dir": directory, "meta": doc["meta"], "content": doc["content"]}
+    project["compatibilityUpdates"] = synchronise_existing_project(project)
+    return project
 
 
 def write_project_readme(project: dict, name: str, description: str, important: str) -> None:
@@ -412,6 +414,7 @@ PLAN_FILE_NAME = "方案.md"
 SUBEXPERIMENT_FILE_NAME = "README.md"
 SUBEXPERIMENT_PLAN_FILE_NAME = "实验方案.md"
 LOGS_FOLDER = "实验日志"
+CONVERSATIONS_FOLDER = "对话记录"
 PLAN_IMPORTS_FOLDER = "导入资料"
 LEGACY_MEMORY_FOLDERS = {"scihub-memory", "sciMemory"}
 RESERVED_PLAN_FOLDERS = {"实验日志", "对话记录", "实验方案", *LEGACY_MEMORY_FOLDERS, "__pycache__"}
@@ -543,6 +546,7 @@ def read_plan(project: dict, plan_id: str) -> dict:
 
 def list_plans(project: dict) -> list[dict]:
     items = []
+    migrated_sources, folder_plan_ids = migrated_legacy_plan_sources(project)
     for path in project_plan_paths(project):
         try:
             items.append(read_folder_plan(path))
@@ -552,7 +556,11 @@ def list_plans(project: dict) -> list[dict]:
     if legacy_dir.is_dir():
         for path in legacy_dir.glob("*.md"):
             try:
-                items.append(read_legacy_plan(path))
+                legacy = read_legacy_plan(path)
+                relative_source = path.relative_to(project["dir"]).as_posix()
+                if relative_source in migrated_sources or legacy["id"] in folder_plan_ids:
+                    continue
+                items.append(legacy)
             except ApiError:
                 continue
     return sorted(items, key=lambda item: item.get("updatedAt", ""), reverse=True)
@@ -563,12 +571,17 @@ def normalise_subexperiments(value: Any) -> list[dict]:
         return []
     result = []
     used_folders: set[str] = set()
+    used_names: set[str] = set()
     for index, item in enumerate(value, start=1):
         if not isinstance(item, dict):
             continue
         name = one_line(item.get("name"))
         if not name:
             continue
+        name_key = name.casefold()
+        if name_key in used_names:
+            continue
+        used_names.add(name_key)
         base = safe_folder_name(name, "子实验文件夹名称")
         folder = base
         suffix = 2
@@ -583,6 +596,145 @@ def normalise_subexperiments(value: Any) -> list[dict]:
             "folder": folder,
         })
     return result
+
+
+def migrated_legacy_plan_sources(project: dict) -> tuple[set[str], set[str]]:
+    """返回已无损升级的旧方案来源和当前文件夹方案 ID。"""
+    sources: set[str] = set()
+    plan_ids: set[str] = set()
+    for plan_path in project_plan_paths(project):
+        doc = read_markdown_document(plan_path)
+        plan_id = meta_value(doc["meta"], "id")
+        if plan_id:
+            plan_ids.add(plan_id)
+        source = meta_value(doc["meta"], "scihub_migrated_from").replace("\\", "/")
+        if source:
+            sources.add(source)
+    return sources, plan_ids
+
+
+def migrated_legacy_folder_name(project: dict, legacy_plan: dict, legacy_path: Path) -> str:
+    """为旧版单文件方案选择一个绝不覆盖现有目录的目标名称。"""
+    preferred = legacy_plan["version"] or legacy_plan["name"] or legacy_path.stem
+    base = safe_folder_name(preferred, "旧版实验方案文件夹名称")
+    candidate = base
+    index = 2
+    while (project["dir"] / candidate).exists():
+        candidate = safe_folder_name(f"{base[:62]}-旧版{index}", "旧版实验方案文件夹名称")
+        index += 1
+    return candidate
+
+
+def migrate_legacy_plan_file(project: dict, legacy_path: Path, known_sources: set[str], known_plan_ids: set[str]) -> str:
+    """把可识别的旧版方案复制为当前目录结构，原 Markdown 始终保留不动。"""
+    if legacy_path.is_symlink() or not legacy_path.is_file():
+        return ""
+    relative_source = legacy_path.relative_to(project["dir"]).as_posix()
+    if relative_source in known_sources:
+        return ""
+    legacy_plan = read_legacy_plan(legacy_path)
+    if legacy_plan["id"] in known_plan_ids:
+        return ""
+
+    legacy_doc = read_markdown_document(legacy_path)
+    folder = migrated_legacy_folder_name(project, legacy_plan, legacy_path)
+    target_dir = project["dir"] / folder
+    target_path = target_dir / PLAN_FILE_NAME
+    target_meta = dict(legacy_doc["meta"])
+    target_meta.update({
+        "kind": "experiment_plan",
+        "id": legacy_plan["id"],
+        "name": legacy_plan["name"],
+        "version": legacy_plan["version"] or folder,
+        "description": legacy_plan["description"],
+        "created_at": legacy_plan["createdAt"] or now_iso(),
+        "updated_at": legacy_plan["updatedAt"] or now_iso(),
+        "scihub_migrated_from": relative_source,
+    })
+    content = legacy_doc["content"].strip()
+    if not content:
+        content = (
+            f"# {legacy_plan['name']} · {target_meta['version']}\n\n"
+            f"## 方案说明\n\n{legacy_plan['description'] or '尚未填写。'}\n"
+        )
+    write_markdown(target_path, front_matter(target_meta) + content.rstrip() + "\n")
+
+    used_folders: set[str] = set()
+    for index, subexperiment in enumerate(legacy_plan["subexperiments"], start=1):
+        name = one_line(subexperiment.get("name"))
+        if not name:
+            continue
+        base = safe_folder_name(name, "子实验文件夹名称")
+        sub_folder = base
+        suffix = 2
+        while sub_folder.casefold() in used_folders:
+            sub_folder = safe_folder_name(f"{base[:62]}-{suffix}", "子实验文件夹名称")
+            suffix += 1
+        used_folders.add(sub_folder.casefold())
+        sub_id = one_line(subexperiment.get("id")) or f"sub-{index}"
+        sub_description = str(subexperiment.get("description", "")).strip()
+        sub_meta = {
+            "kind": "experiment_subexperiment",
+            "id": sub_id,
+            "plan_id": legacy_plan["id"],
+            "name": name,
+            "description": sub_description,
+            "created_at": target_meta["created_at"],
+            "scihub_migrated_from": f"{relative_source}#{sub_id}",
+        }
+        sub_content = f"# {name}\n\n{sub_description or '尚未填写子实验说明。'}\n"
+        write_markdown(target_dir / sub_folder / SUBEXPERIMENT_FILE_NAME, front_matter(sub_meta) + sub_content)
+
+    known_sources.add(relative_source)
+    known_plan_ids.add(legacy_plan["id"])
+    return folder
+
+
+def synchronise_existing_project(project: dict) -> list[str]:
+    """为旧项目补齐可逆的结构升级，不删除、移动或覆盖原始 Markdown。"""
+    changes: list[str] = []
+    for folder in (LOGS_FOLDER, CONVERSATIONS_FOLDER):
+        path = project["dir"] / folder
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=False)
+            changes.append(folder)
+
+    known_sources, known_plan_ids = migrated_legacy_plan_sources(project)
+    legacy_dir = legacy_plans_dir(project)
+    if legacy_dir.is_dir() and not legacy_dir.is_symlink():
+        for legacy_path in sorted(legacy_dir.glob("*.md"), key=lambda path: path.name.casefold()):
+            try:
+                folder = migrate_legacy_plan_file(project, legacy_path, known_sources, known_plan_ids)
+            except (ApiError, OSError, ValueError):
+                continue
+            if folder:
+                changes.append(f"旧版方案 → {folder}")
+
+    agents_path = project["dir"] / "AGENTS.md"
+    agents_missing = not agents_path.is_file()
+    if changes or agents_missing:
+        update_agents(project)
+        if agents_missing:
+            changes.append("AGENTS.md")
+    return changes
+
+
+def synchronise_all_existing_projects() -> dict[str, list[str]]:
+    """启动时扫描已存在项目，使升级不依赖用户逐个重新创建项目。"""
+    updated: dict[str, list[str]] = {}
+    if not PROJECTS_ROOT.is_dir():
+        return updated
+    for child in sorted(PROJECTS_ROOT.iterdir(), key=lambda path: path.name.casefold()):
+        if not child.is_dir() or child.is_symlink():
+            continue
+        try:
+            project = load_project(child.name)
+        except (ApiError, OSError, ValueError):
+            continue
+        changes = project.get("compatibilityUpdates") or []
+        if changes:
+            updated[child.name] = changes
+    return updated
 
 
 def write_plan(project: dict, payload: dict) -> dict:
@@ -600,7 +752,14 @@ def write_plan(project: dict, payload: dict) -> dict:
     now = now_iso()
     description = str(payload.get("description", "")).strip()
     plan_content = str(payload.get("planContent", "")).strip()
-    subexperiments = normalise_subexperiments(payload.get("subexperiments"))
+    source_plan_id = one_line(payload.get("inheritSubexperimentsFromPlanId"))
+    inherited_subexperiments = []
+    if source_plan_id:
+        source_plan = read_plan(project, source_plan_id)
+        inherited_subexperiments = [{"name": item["name"]} for item in source_plan["subexperiments"]]
+    # Explicitly entered entries take priority over inherited titles.  The inherited
+    # entries intentionally contain no description or plan content.
+    subexperiments = normalise_subexperiments(list(payload.get("subexperiments") or []) + inherited_subexperiments)
     meta = {
         "kind": "experiment_plan",
         "id": plan_id,
@@ -776,6 +935,27 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     description = str(payload.get("description", "")).strip()
     has_plan_content = "planContent" in payload
     plan_content = str(payload.get("planContent", "")).strip()
+    source_plan_id = one_line(payload.get("inheritSubexperimentsFromPlanId"))
+    source_plan = None
+    inherited_titles: list[str] = []
+    if source_plan_id:
+        if source_plan_id == plan_id:
+            raise ApiError("不能从当前方案版本自身沿用子实验。")
+        source_plan = read_plan(project, source_plan_id)
+        existing_names = {item["name"].casefold() for item in plan["subexperiments"]}
+        inherited_folders: set[str] = set()
+        plan_dir = project["dir"] / plan["folder"]
+        for item in source_plan["subexperiments"]:
+            title = item["name"]
+            title_key = title.casefold()
+            if title_key in existing_names:
+                continue
+            folder = safe_folder_name(title, "子实验文件夹名称")
+            if folder.casefold() in inherited_folders or (plan_dir / folder).exists():
+                raise ApiError(f"无法沿用子实验“{title}”：当前方案已存在同名目录。")
+            inherited_titles.append(title)
+            existing_names.add(title_key)
+            inherited_folders.add(folder.casefold())
     path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
     doc = read_markdown_document(path)
     meta = dict(doc["meta"])
@@ -804,6 +984,11 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     if has_plan_content:
         content = replace_plan_content(content, plan_content)
     write_markdown(path, front_matter(meta) + content.rstrip() + "\n")
+    if source_plan:
+        for title in inherited_titles:
+            # Only the title is inherited.  ``add_subexperiment`` creates a fresh
+            # Markdown folder and never copies the source description or plan body.
+            add_subexperiment(project, plan_id, {"name": title})
     return read_plan(project, plan_id)
 
 
@@ -870,6 +1055,62 @@ def delete_plan(project: dict, plan_id: str, confirmation: str) -> None:
     for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         path.rmdir()
     target.rmdir()
+
+
+def subexperiment_deletion_paths(project: dict, plan_id: str, subexperiment_id: str) -> tuple[dict, dict, Path, list[Path], list[Path]]:
+    """列出一个子实验的可核对删除清单，遇到链接或异常条目一律拒绝。"""
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan["folder"]:
+        raise ApiError("旧版单文件方案不能由本功能删除子实验。")
+    subexperiment = next((item for item in plan["subexperiments"] if item["id"] == subexperiment_id), None)
+    if not subexperiment:
+        raise ApiError("未找到所选子实验。")
+    project_root = project["dir"].resolve()
+    plan_dir = (project_root / plan["folder"]).resolve()
+    target = (plan_dir / subexperiment["folder"]).resolve()
+    if plan_dir.parent != project_root or target.parent != plan_dir or not target.is_dir() or target.is_symlink():
+        raise ApiError("子实验目录无效，已拒绝删除。")
+    files: list[Path] = []
+    directories: list[Path] = []
+    for item in sorted(target.rglob("*"), key=lambda path: path.relative_to(target).as_posix().casefold()):
+        if item.is_symlink():
+            raise ApiError("子实验目录包含链接文件，为避免误删已拒绝删除。")
+        if item.is_file():
+            files.append(item)
+        elif item.is_dir():
+            directories.append(item)
+        else:
+            raise ApiError("子实验目录包含无法安全识别的条目，已拒绝删除。")
+    return plan, subexperiment, target, files, directories
+
+
+def subexperiment_deletion_preview(project: dict, plan_id: str, subexperiment_id: str) -> dict:
+    plan, subexperiment, target, files, directories = subexperiment_deletion_paths(project, plan_id, subexperiment_id)
+    root = project["dir"].resolve()
+    items = [{"path": target.relative_to(root).as_posix() + "/", "kind": "folder"}]
+    items.extend({"path": path.relative_to(root).as_posix() + "/", "kind": "folder"} for path in directories)
+    items.extend({"path": path.relative_to(root).as_posix(), "kind": "file"} for path in files)
+    return {"plan": plan, "subexperiment": subexperiment, "folder": target.relative_to(root).as_posix(), "items": items}
+
+
+def delete_subexperiment(project: dict, plan_id: str, subexperiment_id: str, confirmation: str) -> dict:
+    """逐项删除已展示清单的一个子实验，并保留方案中的其他内容。"""
+    plan, subexperiment, target, files, directories = subexperiment_deletion_paths(project, plan_id, subexperiment_id)
+    if confirmation != subexperiment["name"]:
+        raise ApiError("请准确输入子实验名称以确认删除。")
+    plan_path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
+    plan_doc = read_markdown_document(plan_path)
+    reference = f"- [{subexperiment['name']}]({subexperiment['folder']}/{SUBEXPERIMENT_FILE_NAME})"
+    retained_lines = [line for line in plan_doc["content"].splitlines() if line.strip() != reference]
+    for path in files:
+        path.unlink()
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        path.rmdir()
+    target.rmdir()
+    plan_meta = dict(plan_doc["meta"])
+    plan_meta["updated_at"] = now_iso()
+    write_markdown(plan_path, front_matter(plan_meta) + "\n".join(retained_lines).rstrip() + "\n")
+    return read_plan(project, plan_id)
 
 
 def plan_markdown_content(project: dict, plan_id: str, subexperiment_id: str = "") -> tuple[dict, str]:
@@ -2219,6 +2460,15 @@ class SciHubHandler(BaseHTTPRequestHandler):
             update_agents(project)
             self._send_json(HTTPStatus.CREATED, {"plan": plan})
             return
+        if method == "GET" and len(segments) == 8 and segments[5] == "subexperiments" and segments[7] == "delete-preview":
+            self._send_json(HTTPStatus.OK, subexperiment_deletion_preview(project, segments[4], segments[6]))
+            return
+        if method == "DELETE" and len(segments) == 7 and segments[5] == "subexperiments":
+            payload = self._read_json()
+            plan = delete_subexperiment(project, segments[4], segments[6], one_line(payload.get("confirmation")))
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"plan": plan})
+            return
         raise ApiError("找不到实验方案。", HTTPStatus.NOT_FOUND)
 
     def _log_association_from_query(self, project: dict) -> dict:
@@ -2325,6 +2575,9 @@ class SciHubHandler(BaseHTTPRequestHandler):
 def main() -> None:
     print("正在初始化 SciHub 本地服务…", flush=True)
     PROJECTS_ROOT.mkdir(parents=True, exist_ok=True)
+    upgraded = synchronise_all_existing_projects()
+    if upgraded:
+        print(f"已同步升级 {len(upgraded)} 个已有项目的数据结构。", flush=True)
     print("正在监听本地端口…", flush=True)
     server = SciHubServer((HOST, PORT), SciHubHandler)
     url = f"http://{HOST}:{PORT}/{INDEX_FILE}"
