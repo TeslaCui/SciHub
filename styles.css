@@ -48,7 +48,7 @@ button, input, select, textarea { font:inherit; } button { color:inherit; cursor
 @media(min-width:1180px){
   .plan-book-preview-layout{position:relative;display:block;flex:0 0 100%;width:100%;min-height:297mm}
   .plan-a4-preview-wrap{box-sizing:border-box;position:relative;left:calc(50vw - var(--scihub-sidebar-width) - 82px);transform:translateX(-50%);width:calc(100% - 358px);max-width:none;margin:0}
-  .plan-display-controls{position:absolute;top:0;left:calc(50vw - var(--scihub-sidebar-width) - 42px + 50% - 161px);width:320px;box-sizing:border-box}
+  .plan-display-controls{position:absolute;top:0;right:0;left:auto;width:320px;box-sizing:border-box}
 }
 
 /* 紧凑模式仅压缩材料、试剂和仪器清单；A4 预览可一行显示四项。 */
