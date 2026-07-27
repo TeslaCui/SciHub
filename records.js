@@ -926,6 +926,69 @@
     return `<section class="execution-record-sheet"><h2>实验记录表</h2><p>用于执行本方案时同步记录关键参数、现象和原始数据。</p><table><tbody><tr><th>实验日期</th><td></td></tr><tr><th>执行人</th><td></td></tr><tr><th>样品 / 批次</th><td></td></tr><tr><th>仪器 / 设备</th><td></td></tr></tbody></table><h3>步骤与数据记录</h3><table class="execution-record-table"><thead><tr><th>步骤</th><th>执行时间</th><th>关键参数、现象与原始数据</th><th>签名</th></tr></thead><tbody>${rows}</tbody></table><h3>偏差与处理</h3><table class="execution-record-table"><thead><tr><th>发现时间</th><th colspan="2">偏差或异常与处理措施</th><th>复核人</th></tr></thead><tbody><tr><td></td><td colspan="2"></td><td></td></tr><tr><td></td><td colspan="2"></td><td></td></tr></tbody></table></section>`;
   }
 
+  function planA4PageMarkup(plan, scope, presentation, layoutMode, pageNumber, firstPage = false, recordSheet = false) {
+    const title = firstPage
+      ? `<div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div>`
+      : `<div class="execution-continuation-title"><span>${esc(scope.title)}</span><small>${recordSheet ? '实验记录表' : '方案正文续页'}</small></div>`;
+    return `<article class="execution-a4-page${recordSheet ? ' execution-record-sheet-page' : ''}" data-execution-plan-page data-layout="${layoutMode}" style="${planStyleAttribute(presentation)}"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div>${title}<div class="execution-document-body"></div><div class="execution-page-foot">SciHub 本地科研记录工作台 <span>· 第 ${pageNumber} 页</span></div></article>`;
+  }
+
+  function renderPlanA4Pages(host, { plan, scope, presentation, layoutMode, content, includeRecordSheet }) {
+    if (!host) return;
+    host.innerHTML = '';
+    const source = document.createElement('template');
+    source.innerHTML = executionPlanHtml(content);
+    const blocks = [...source.content.children];
+    let pageNumber = 0;
+    let page;
+    let body;
+    const addPage = (firstPage = false, recordSheet = false) => {
+      pageNumber += 1;
+      host.insertAdjacentHTML('beforeend', planA4PageMarkup(plan, scope, presentation, layoutMode, pageNumber, firstPage, recordSheet));
+      page = host.lastElementChild;
+      body = page.querySelector('.execution-document-body');
+      return body;
+    };
+    const overflowing = () => body.scrollHeight > body.clientHeight + 1;
+    const placeListAcrossPages = list => {
+      const items = [...list.children];
+      let fragment = list.cloneNode(false);
+      body.append(fragment);
+      for (const item of items) {
+        fragment.append(item);
+        if (overflowing() && fragment.children.length > 1) {
+          fragment.removeChild(item);
+          addPage();
+          fragment = list.cloneNode(false);
+          body.append(fragment);
+          fragment.append(item);
+        }
+      }
+    };
+    const placeBlock = block => {
+      body.append(block);
+      if (!overflowing()) return;
+      if (body.children.length === 1) {
+        if (!['UL', 'OL'].includes(block.tagName) || block.children.length < 2) return;
+        body.removeChild(block);
+        placeListAcrossPages(block);
+        return;
+      }
+      body.removeChild(block);
+      addPage();
+      body.append(block);
+      if (!overflowing() || !['UL', 'OL'].includes(block.tagName) || block.children.length < 2) return;
+      body.removeChild(block);
+      placeListAcrossPages(block);
+    };
+    addPage(true);
+    blocks.forEach(placeBlock);
+    if (includeRecordSheet) {
+      addPage(false, true);
+      body.innerHTML = planRecordSheetHtml();
+    }
+  }
+
   function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode) {
     const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === layoutMode ? 'selected' : ''}>${label}</option>`).join('');
@@ -1044,7 +1107,7 @@
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
-        ? `<div class="plan-book-preview-layout">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}<div class="plan-a4-preview-wrap"><article id="executionPlanPreview" class="execution-a4-page" data-layout="${layoutMode}" style="${planStyleAttribute(presentation)}"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div><div class="execution-title-block"><p>实验方案书</p><h1>${esc(scope.title)}</h1>${plan.description ? `<div>${esc(plan.description)}</div>` : ''}</div><div id="executionPlanBookBody" class="execution-document-body">${executionPlanHtml(displayContent)}</div><div id="executionPlanRecordSheet" ${book.includeRecordSheet ? '' : 'hidden'}>${planRecordSheetHtml()}</div><div class="execution-page-foot">SciHub 本地科研记录工作台</div></article></div></div>`
+        ? `<div class="plan-book-preview-layout">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}<div class="plan-a4-preview-wrap"><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
         : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
     const currentContentReady = Boolean(content && !imported && !task);
     host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
@@ -1053,20 +1116,26 @@
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
     $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId, book.selectedSections, book.includeRecordSheet, book.layoutMode || layoutMode));
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
+    const refreshA4Pages = () => renderPlanA4Pages($('executionPlanPages'), {
+      plan,
+      scope,
+      presentation,
+      layoutMode: planLayoutMode(presentation, book),
+      content: visiblePlanContent(content, book.selectedSections),
+      includeRecordSheet: Boolean(book.includeRecordSheet)
+    });
+    if (content && !imported && !task) refreshA4Pages();
     document.querySelectorAll('[data-plan-section]').forEach(control => control.addEventListener('change', () => {
       book.selectedSections = [...document.querySelectorAll('[data-plan-section]:checked')].map(input => input.value);
-      const body = $('executionPlanBookBody');
-      if (body) body.innerHTML = executionPlanHtml(visiblePlanContent(content, book.selectedSections));
+      refreshA4Pages();
     }));
     $('planRecordSheetToggle')?.addEventListener('change', event => {
       book.includeRecordSheet = event.target.checked;
-      const sheet = $('executionPlanRecordSheet');
-      if (sheet) sheet.hidden = !book.includeRecordSheet;
+      refreshA4Pages();
     });
     $('planLayoutMode')?.addEventListener('change', event => {
       book.layoutMode = event.target.value;
-      const preview = $('executionPlanPreview');
-      if (preview) preview.dataset.layout = book.layoutMode;
+      refreshA4Pages();
     });
   }
 
