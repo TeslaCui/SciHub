@@ -992,7 +992,7 @@
   function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode) {
     const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === layoutMode ? 'selected' : ''}>${label}</option>`).join('');
-    return `<aside class="plan-display-controls"><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在右侧预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
+    return `<aside class="plan-display-controls"><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
   }
 
   function openPlanBookPage(planId, subexperimentId = '', imported = null) {
@@ -1107,7 +1107,7 @@
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
       : content
-        ? `<div class="plan-book-preview-layout">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}<div class="plan-a4-preview-wrap"><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
+        ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap"><div id="executionPlanPages" class="execution-a4-pages"></div></div>${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div>`
         : '<div class="plan-book-empty"><h2>尚未导入方案资料</h2><p>请使用右上角的“导入方案资料”，系统会先转换为 Markdown，再按统一模板生成可执行的实验方案书。</p></div>';
     const currentContentReady = Boolean(content && !imported && !task);
     host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>此页面展示排版后的方案书，不直接展示 Markdown 源文件。</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${currentContentReady ? '<button id="editPlanBookButton" class="secondary-button" type="button">编辑方案书</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
