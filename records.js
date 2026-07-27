@@ -302,6 +302,19 @@
     return `<div class="plan-entry-list">${entries.map(entry => `<span class="plan-entry"><i>${entry.kind === 'folder' ? '▣' : '▤'}</i>${esc(entry.name)}</span>`).join('')}</div>`;
   }
 
+  function projectPath(...parts) {
+    return ['科研项目', R.active?.slug || '当前项目', ...parts.filter(Boolean).map(String)].join('/');
+  }
+
+  function logStoragePath(log = R.log, date = R.date) {
+    if (!log.planId) return projectPath('实验日志', `${date}.md`);
+    const plan = planForLog(log);
+    const planFolder = plan?.folder || log.planFolder || '实验方案';
+    const subexperiment = plan?.subexperiments?.find(item => item.id === log.subexperimentId);
+    const subexperimentFolder = subexperiment?.folder || log.subexperimentFolder || '';
+    return projectPath(planFolder, log.subexperimentId ? subexperimentFolder : '', '实验日志', `${date}.md`);
+  }
+
   function renderPlansView() {
     if (!requireProject('plansProjectTitle', 'plansBody')) return;
     $('plansProjectTitle').textContent = R.active.name;
@@ -316,16 +329,19 @@
       const subexperiments = plan.subexperiments?.length
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button></div></li>`;
+          const subexperimentPath = projectPath(plan.folder || '实验方案', item.folder || '', '实验方案.md');
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
+      const planDocumentPath = projectPath(plan.relativePath || `${plan.folder || '实验方案'}/方案.md`);
+      const planFolderPath = projectPath(plan.folder || '实验方案');
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">${esc(plan.relativePath || `${plan.version}/方案.md`)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button>`}</div></div>
+        <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
-        <div class="plan-card-foot"><span>项目/${esc(plan.folder || '实验方案')}/… · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
+        <div class="plan-card-foot"><span>${esc(planFolderPath)}/ · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
     }).join('');
     $('plansBody').innerHTML = `<div class="plans-grid">${cards}</div>`;
@@ -1328,6 +1344,7 @@
     const source = visibleLogSource(l);
     const hasContent = Boolean(source.trim());
     const selectedPlan = planForLog(l);
+    const storagePath = logStoragePath(l, R.date);
     const planOptions = ['<option value="">不关联实验方案</option>'].concat(
       R.plans.map(plan => `<option value="${esc(plan.id)}" ${plan.id === l.planId ? 'selected' : ''}>${esc(plan.name)} · ${esc(plan.version)}</option>`)
     ).join('');
@@ -1340,7 +1357,7 @@
           <label class="record-field"><span>实验日期</span><input id="logDate" type="date" value="${R.date}" /></label>
           <label class="record-field log-association-field"><span>关联实验方案</span><select id="logPlan">${planOptions}</select></label>
           <label class="record-field log-association-field"><span>关联子实验</span><select id="logSubexperiment" ${selectedPlan ? '' : 'disabled'}>${subexperimentOptions}</select></label>
-          <p class="record-note">${textDate}<br><b>${esc(logAssociationText(l))}</b>；保存后会写入对应 Markdown，并更新 AGENTS.md。</p>
+          <div class="record-association-summary"><p class="record-note">${textDate}<br><b>${esc(logAssociationText(l))}</b>；保存后会写入对应 Markdown，并更新 AGENTS.md。</p><code>关联保存路径：${esc(storagePath)}</code><small>需要更换保存位置时，在上方切换实验方案或子实验；路径会随选择立即更新。</small></div>
         </div>
         <div class="record-field"><div class="record-field-head"><span>实验日志内容</span><small id="logSourceCount">${source.length} 字</small></div>
           <textarea id="logSource" class="record-textarea log-source-input" placeholder="输入实验过程、现象、数据、条件、结论与后续计划；保存时可由 AI 自动整理为实验现象、实验记录等板块。">${esc(source)}</textarea>
