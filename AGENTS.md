@@ -17,7 +17,7 @@ SciHub 是本地优先的科研记录工具，仅提供：
 
 ## 运行
 
-- 双击 `启动 SciHub.cmd`，或运行 `D:\LeStoreDownload\Anaconda\python.exe scihub_server.py`。
+- 双击 `启动 SciHub.cmd`，或在已安装 Python 的终端运行 `py -3 scihub_server.py`（没有 `py` 时使用 `python scihub_server.py`）。启动脚本会自动使用当前用户可用的 Python；若未找到，会提示用户输入自己电脑上 `python.exe` 的完整路径，也可预先通过环境变量 `SCIHUB_PYTHON` 指定该路径。
 - 服务地址为 `http://127.0.0.1:8770/index.html`，仅监听 `127.0.0.1`。
 - 依赖仅为 Python 3 标准库；前端不需要构建步骤或 CDN。
 - `SCIHUB_NO_BROWSER=1` 可禁止启动时自动打开浏览器，便于测试。
