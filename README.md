@@ -17,17 +17,19 @@ SciHub 是一个本地优先的科研记录工具，只保留四项核心能力�
 
 保持命令窗口开启即可继续使用；关闭窗口会停止服务。
 
-也可以在此目录手动运行：
+也可以在此目录手动运行（Windows 已安装 Python Launcher 时）：
 
 ```powershell
-& 'D:\LeStoreDownload\Anaconda\python.exe' .\scihub_server.py
+py -3 .\scihub_server.py
 ```
 
-SciHub 使用本地 Anaconda Python。PDF 导入和 Word/PDF 导出需要 `pypdf`、`python-docx` 与 `reportlab`；当前环境已安装。若迁移到新电脑，可运行：
+启动脚本会依次使用 Windows Python Launcher（`py -3`）和环境变量 `PATH` 中的 `python`，不会依赖某个用户的安装路径。PDF 导入和 Word/PDF 导出需要 `pypdf`、`python-docx` 与 `reportlab`；在新电脑上可运行：
 
 ```powershell
-& 'D:\LeStoreDownload\Anaconda\python.exe' -m pip install pypdf python-docx reportlab
+py -3 -m pip install pypdf python-docx reportlab
 ```
+
+若未安装 `py`，请使用 `python` 替换上述命令。启动脚本无法自动找到 Python 时，会让该用户粘贴自己电脑上 `python.exe` 的完整路径；也可预先设置环境变量 `SCIHUB_PYTHON` 为该路径，再双击启动脚本。
 
 ## 使用方式
 
