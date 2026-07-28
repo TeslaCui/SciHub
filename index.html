@@ -58,7 +58,7 @@
           <button class="menu-button" id="menuButton" aria-label="打开导航">☰</button>
           <div class="topbar-title"><strong>科研记录</strong><span>实验方案、实验日志、对话与执行单</span></div>
           <button id="planTaskBanner" class="plan-task-banner" type="button" hidden aria-live="polite"></button>
-          <div class="topbar-actions"><button class="secondary-button" id="editActiveProjectButton" title="编辑项目名称、说明和重要信息" hidden>编辑项目</button><button class="secondary-button" id="exportProjectButton" title="汇总项目 Markdown，并选择导出位置，供 AI 读取">一键导出项目记忆 MD</button><button class="secondary-button" id="apiSettingsButton" title="配置 AI 接口">AI 设置</button><button class="primary-button" id="topNewProjectButton"><span>+</span> 新建项目</button></div>
+          <div class="topbar-actions"><button class="secondary-button" id="editActiveProjectButton" title="编辑项目名称、说明和重要信息" hidden>编辑项目</button><button class="secondary-button usage-tutorial-button" id="usageTutorialButton" title="查看 SciHub 的上手指引" aria-haspopup="dialog"><span aria-hidden="true">?</span> 使用教学</button><button class="secondary-button" id="apiSettingsButton" title="配置 AI 接口">AI 设置</button><button class="primary-button" id="exportProjectButton" title="先预览精简项目记忆，再选择导出位置"><span>⇩</span> 一键导出记忆</button></div>
         </header>
 
         <section id="homeView" class="view">
@@ -72,7 +72,7 @@
         </section>
 
         <section id="logsView" class="view active-view">
-          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>日志保存为项目中的 Markdown，并实时更新项目 AGENTS.md。</p></div><button class="secondary-button" id="viewAgentsButton">查看 AGENTS.md</button></div>
+          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>日志保存为项目中的 Markdown，并实时更新项目 AGENTS.md。</p></div></div>
           <div id="logsBody"></div>
         </section>
 

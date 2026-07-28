@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import difflib
+import hashlib
 import io
 import json
 import mimetypes
@@ -53,6 +54,8 @@ PLAN_STYLE_RE = re.compile(r"<!--\s*SCIHUB-PLAN-STYLE:\s*({.*?})\s*-->", re.IGNO
 PLAN_FONT_NAMES = {"Microsoft YaHei", "SimSun", "KaiTi", "Noto Serif SC"}
 PLAN_FONT_SIZES = {9, 10, 11, 12, 13, 14, 16}
 PLAN_LAYOUT_MODES = {"compact", "spacious"}
+PLAN_ANALYSIS_META_KEY = "version_analysis"
+PLAN_ANALYSIS_MAX_CHANGES = 80
 
 AUTO_START = "<!-- AUTO-UPDATE:START -->"
 AUTO_END = "<!-- AUTO-UPDATE:END -->"
@@ -295,7 +298,7 @@ def delete_project(project: dict, confirmation: str) -> None:
     target.rmdir()
 
 
-def update_agents(project: dict) -> None:
+def legacy_update_agents(project: dict) -> None:
     """实时更新项目 AGENTS.md 的自动区块。"""
     readme = read_markdown_document(project["dir"] / "README.md")
     conversations_dir = project["dir"] / "对话记录"
@@ -402,6 +405,375 @@ def update_agents(project: dict) -> None:
             "此文件可作为后续 AI 对话的项目记忆。自动区块会随实验日志和对话记录更新；"
             "可在其他位置手工补充长期有效信息。\n"
         )
+    stripped = AUTO_BLOCK_RE.sub("", old).rstrip()
+    write_markdown(path, stripped + "\n\n" + auto + "\n")
+
+
+def memory_is_placeholder(value: Any) -> bool:
+    text = one_line(value).strip(" 。；;，,")
+    return not text or text in {"待补充", "尚未填写", "暂无", "无", "—", "-"}
+
+
+def memory_text(value: Any, limit: int = 360) -> str:
+    """移除 Markdown 装饰并截取语义完整的短文本，控制项目记忆长度。"""
+    text = PLAN_STYLE_RE.sub("", str(value or ""))
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"(?m)^\s*(?:[-*+]\s+|\d+[.)、]\s+)", "", text)
+    text = re.sub(r"[*_`]", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" -；;，,")
+    if not text or limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    floor = max(0, int(limit * 0.58))
+    cut = max((text.rfind(mark, floor, limit + 1) for mark in "。；;！？!?"), default=-1)
+    if cut >= floor:
+        return text[:cut + 1].rstrip()
+    return text[:max(1, limit - 1)].rstrip() + "…"
+
+
+def memory_heading_blocks(content: str) -> list[tuple[int, str, str]]:
+    """按 Markdown 标题返回正文块；嵌套标题保留在父板块中。"""
+    source = PLAN_STYLE_RE.sub("", content or "")
+    source = re.sub(r"<!--.*?-->", "", source, flags=re.DOTALL)
+    headings = []
+    for match in re.finditer(r"(?m)^(#{1,6})\s+(.+?)\s*$", source):
+        headings.append((match.start(), match.end(), len(match.group(1)), re.sub(r"[*_`]", "", match.group(2)).strip()))
+    blocks = []
+    for index, (_, end, level, title) in enumerate(headings):
+        stop = len(source)
+        for next_start, _, next_level, _ in headings[index + 1:]:
+            if next_level <= level:
+                stop = next_start
+                break
+        blocks.append((level, title, source[end:stop].strip()))
+    return blocks
+
+
+def memory_section(content: str, title_pattern: str) -> str:
+    for _, title, body in memory_heading_blocks(content):
+        if re.search(title_pattern, title, re.IGNORECASE):
+            return body
+    return ""
+
+
+def memory_bullets(content: str, max_items: int = 4, item_limit: int = 150) -> list[str]:
+    """优先保留列表项；没有列表时从段落中摘取短句。"""
+    candidates = []
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if not line or re.match(r"^#{1,6}\s+", line):
+            continue
+        if not re.match(r"^(?:[-*+]\s+|\d+[.)、]\s+)", line):
+            continue
+        text = memory_text(line, item_limit)
+        if text and not memory_is_placeholder(text):
+            candidates.append(text)
+    if not candidates:
+        normalized = memory_text(content, item_limit * max_items)
+        candidates = [memory_text(part, item_limit) for part in re.split(r"(?<=[。；;！？!?])\s*", normalized) if part.strip()]
+    result = []
+    seen = set()
+    for item in candidates:
+        key = re.sub(r"\s+", "", item).casefold()
+        if not item or key in seen or memory_is_placeholder(item):
+            continue
+        seen.add(key)
+        result.append(item)
+        if len(result) >= max_items:
+            break
+    return result
+
+
+def memory_step_items(content: str, max_items: int = 5) -> list[str]:
+    """只摘取方案步骤中带数值或执行警示的句子，避免复制整段方案。"""
+    steps = plan_analysis_sections(content).get("steps", "")
+    if not steps:
+        return []
+    numeric = re.compile(r"(?:\d+(?:\.\d+)?\s*(?:mg|g|kg|μg|µg|mL|L|μL|µL|rpm|min|h|hr|℃|°C|K|MPa|kPa|bar|%|V|mA|A|s)|\b\d+\s*(?:x|×)\s*g\b)", re.IGNORECASE)
+    caution = re.compile(r"必须|不得|避免|配平|确认|置换|通入|密闭|暂停|回收|记录实际|安全", re.IGNORECASE)
+    current_step = ""
+    numeric_items, caution_items = [], []
+    for raw in steps.splitlines():
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", raw.strip())
+        if heading:
+            title = re.sub(r"[*_`]", "", heading.group(2)).strip()
+            if not re.search(r"操作步骤|实验步骤|操作流程|实验流程", title):
+                current_step = title
+            continue
+        text = memory_text(raw, 102)
+        if not text or memory_is_placeholder(text):
+            continue
+        candidate = f"{current_step}：{text}" if current_step and not text.startswith(current_step) else text
+        candidate = memory_text(candidate, 124)
+        if numeric.search(text):
+            numeric_items.append(candidate)
+        elif caution.search(text):
+            caution_items.append(candidate)
+    result = []
+    seen = set()
+    for item in numeric_items + caution_items:
+        key = re.sub(r"\s+", "", item).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+        if len(result) >= max_items:
+            break
+    return result
+
+
+def compact_plan_baseline(content: str) -> list[str]:
+    """生成单个子实验的首版基线，保留目标、关键参数、风险与未决项。"""
+    lines = []
+    purpose = memory_text(memory_section(content, r"实验目的|研究目的|目标"), 170)
+    if purpose and not memory_is_placeholder(purpose):
+        lines.append(f"目的：{purpose}")
+    design = memory_text(memory_section(content, r"研究假设|实验设计|实验分组|变量"), 170)
+    if design and not memory_is_placeholder(design):
+        lines.append(f"设计/变量：{design}")
+    step_items = memory_step_items(content)
+    if step_items:
+        lines.append("关键步骤参数：" + "；".join(step_items))
+    risks = memory_bullets(memory_section(content, r"风险|注意事项|安全"), 2, 105)
+    if risks:
+        lines.append("执行警示：" + "；".join(risks))
+    pending = memory_bullets(memory_section(content, r"待确认|待补充|未决"), 2, 100)
+    if pending:
+        lines.append("待确认：" + "；".join(pending))
+    return lines or ["方案正文尚未填写关键执行信息。"]
+
+
+def plan_scope_items(plan: dict) -> list[dict]:
+    scopes = plan.get("subexperiments") or []
+    if scopes:
+        return [{"id": item.get("id", ""), "name": item.get("name", "未命名子实验")} for item in scopes]
+    return [{"id": "", "name": "整体方案"}]
+
+
+def plan_scope_key(scope: dict) -> str:
+    return one_line(scope.get("name") or "整体方案").casefold()
+
+
+def compact_version_delta(project: dict, previous_plan_data: dict, previous_scope: dict, current_plan_data: dict, current_scope: dict) -> list[str]:
+    """仅使用仍匹配正文的 AI 参数分析；不退化为大段文本 diff。"""
+    try:
+        _, previous_content = plan_markdown_content(project, previous_plan_data["id"], previous_scope.get("id", ""))
+        _, current_content = plan_markdown_content(project, current_plan_data["id"], current_scope.get("id", ""))
+        if not current_content:
+            return ["当前版本尚未填写独立方案书；不可默认沿用上一版。"]
+        if previous_content == current_content:
+            return []
+        _, _, current_path = plan_content_target(project, current_plan_data["id"], current_scope.get("id", ""))
+        stored = decode_plan_version_analysis(read_markdown_document(current_path)["meta"].get(PLAN_ANALYSIS_META_KEY))
+        basis = stored.get("basis", {}) if isinstance(stored, dict) else {}
+        if (
+            basis.get("current_plan_id") != current_plan_data.get("id")
+            or basis.get("previous_plan_id") != previous_plan_data.get("id")
+            or basis.get("current_content") != plan_analysis_fingerprint(current_content)
+            or basis.get("previous_content") != plan_analysis_fingerprint(previous_content)
+        ):
+            return ["方案正文已改动，但尚未生成可复用的参数分析；请在方案书中点击“查看版本改动”。"]
+        analysis = normalize_plan_version_analysis(stored)
+    except (ApiError, OSError, KeyError):
+        return ["方案正文已改动，但尚未生成可复用的参数分析；请在方案书中点击“查看版本改动”。"]
+    changes = analysis.get("changes", [])
+    if not changes:
+        return ["AI 未识别出实验步骤中的实际参数改动。"]
+    priority = re.compile(r"热解|煅烧|烧结|升温|保温|反应温度|干燥|洗涤|质量|体积|浓度|比例|转速|压力|气氛|溶剂")
+    ordered_changes = sorted(changes, key=lambda change: (0 if priority.search(str(change.get("parameter", ""))) else 1))
+    result = []
+    for change in ordered_changes[:12]:
+        parameter = memory_text(change.get("parameter"), 90)
+        before = memory_text(change.get("before"), 100) or "—"
+        after = memory_text(change.get("after"), 100) or "—"
+        kind = change.get("kind", "调整")
+        if kind == "新增":
+            result.append(f"新增 {parameter}={after}")
+        elif kind == "删除":
+            result.append(f"删除 {parameter}（原为 {before}）")
+        else:
+            result.append(f"{parameter}：{before} → {after}")
+    if len(ordered_changes) > len(result):
+        result.append(f"另有 {len(ordered_changes) - len(result)} 项低优先级步骤变动，详见原始方案")
+    return result
+
+
+def compact_plan_memory_sections(project: dict, heading_level: int) -> list[str]:
+    plans = sorted(list_plans(project), key=lambda item: item.get("createdAt", ""))
+    if not plans:
+        return [f"{'#' * heading_level} 当前实验方案\n\n- 暂无实验方案。"]
+    families: dict[str, list[dict]] = {}
+    for plan in plans:
+        key = one_line(plan.get("name") or plan.get("id")).casefold()
+        families.setdefault(key, []).append(plan)
+    sections = [f"{'#' * heading_level} 当前有效实验方案（执行基线，非实验结果）"]
+    for versions in families.values():
+        versions.sort(key=lambda item: item.get("createdAt", ""))
+        current = versions[-1]
+        versions_text = " → ".join(one_line(item.get("version") or "未命名版本") for item in versions)
+        lines = [f"{'#' * (heading_level + 1)} {current.get('name') or '未命名方案'} · 当前 {current.get('version') or '未命名版本'}", "", f"- 版本链：{versions_text}"]
+        description = memory_text(current.get("description"), 220)
+        if description and not memory_is_placeholder(description):
+            lines.append(f"- 方案说明：{description}")
+        occurrences_by_scope: dict[str, list[tuple[dict, dict]]] = {}
+        for version in versions:
+            for candidate in plan_scope_items(version):
+                occurrences_by_scope.setdefault(plan_scope_key(candidate), []).append((version, candidate))
+        for scope in plan_scope_items(current):
+            occurrences = occurrences_by_scope.get(plan_scope_key(scope), [])
+            if not occurrences:
+                continue
+            baseline_plan, baseline_scope = occurrences[0]
+            lines.extend(["", f"{'#' * (heading_level + 2)} {scope['name']} · 基线 {baseline_plan.get('version') or '未命名版本'}"])
+            try:
+                _, baseline_content = plan_markdown_content(project, baseline_plan["id"], baseline_scope.get("id", ""))
+                lines.extend(f"- {item}" for item in compact_plan_baseline(baseline_content))
+            except (ApiError, OSError):
+                lines.append("- 未找到可读取的方案正文。")
+            for index in range(1, len(occurrences)):
+                previous_plan_data, previous_scope = occurrences[index - 1]
+                current_plan_data, current_scope = occurrences[index]
+                delta = compact_version_delta(project, previous_plan_data, previous_scope, current_plan_data, current_scope)
+                if delta:
+                    lines.append(f"- {current_plan_data.get('version') or '未命名版本'} 相较 {previous_plan_data.get('version') or '上一版本'}：" + "；".join(delta))
+        sections.append("\n".join(lines))
+    return sections
+
+
+def compact_log_summary(content: str) -> str:
+    important = []
+    for _, title, body in memory_heading_blocks(content):
+        if re.search(r"现象|结果|结论|问题|异常|偏差|注意|实验记录|数据", title):
+            important.extend(memory_bullets(body, 2, 150))
+    if not important:
+        for _, title, body in memory_heading_blocks(content):
+            if re.search(r"原始输入|导入|图片", title):
+                continue
+            important.extend(memory_bullets(body, 2, 150))
+    unique = []
+    seen = set()
+    for item in important:
+        key = re.sub(r"\s+", "", item).casefold()
+        if key and key not in seen and not memory_is_placeholder(item):
+            seen.add(key)
+            unique.append(item)
+        if len(unique) >= 4:
+            break
+    return "；".join(unique)
+
+
+def compact_log_memory_section(project: dict, heading_level: int) -> Optional[str]:
+    paths = sorted(list_log_paths(project), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
+    if not paths:
+        return None
+    lines = [f"{'#' * heading_level} 近期实验事实、问题与踩坑点（原始记录）", ""]
+    for path in paths:
+        doc = read_markdown_document(path)
+        date = meta_value(doc["meta"], "date", path.stem[:10])
+        relation = " · ".join(filter(None, [meta_value(doc["meta"], "plan_name"), meta_value(doc["meta"], "plan_version"), meta_value(doc["meta"], "subexperiment_name")]))
+        summary = compact_log_summary(doc["content"])
+        label = f"{date}{(' · ' + relation) if relation else ''}"
+        lines.append(f"- {label}：{summary or '尚未提取到现象、问题或结论；请查阅原始日志。'}")
+    return "\n".join(lines)
+
+
+def compact_conversation_memory_section(project: dict, heading_level: int) -> Optional[str]:
+    directory = project["dir"] / CONVERSATIONS_FOLDER
+    if not directory.is_dir():
+        return None
+    paths = sorted(directory.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)[:3]
+    keyword = re.compile(r"结论|问题|异常|失败|风险|注意|待验证|下一步|建议|原因|优化")
+    lines = []
+    for path in paths:
+        doc = read_markdown_document(path)
+        fragments = []
+        for match in MESSAGE_RE.finditer(doc["content"]):
+            for part in re.split(r"(?<=[。；;！？!?])\s*", match.group(3)):
+                text = memory_text(part, 160)
+                if text and keyword.search(text):
+                    fragments.append(text)
+                if len(fragments) >= 2:
+                    break
+            if len(fragments) >= 2:
+                break
+        if fragments:
+            lines.append(f"- {meta_value(doc['meta'], 'title', path.stem)}：{'；'.join(fragments)}")
+    if not lines:
+        return None
+    return f"{'#' * heading_level} 近期讨论要点（未验证）\n\n" + "\n".join(lines)
+
+
+def compact_manual_memory(project: dict) -> str:
+    path = project["dir"] / "AGENTS.md"
+    if not path.is_file():
+        return ""
+    content = AUTO_BLOCK_RE.sub("", path.read_text(encoding="utf-8"))
+    lines = []
+    for raw in content.splitlines():
+        line = raw.strip()
+        if not line or re.match(r"^#\s+", line) or "此文件可作为后续 AI 对话" in line:
+            continue
+        lines.append(line)
+    return memory_text(" ".join(lines), 700)
+
+
+def compact_project_memory_sections(project: dict, heading_level: int = 2) -> list[str]:
+    readme = read_markdown_document(project["dir"] / "README.md")
+    project_lines = []
+    description = memory_text(meta_value(readme["meta"], "description"), 320)
+    important = memory_text(meta_value(readme["meta"], "important_info"), 520)
+    manual = compact_manual_memory(project)
+    if description and not memory_is_placeholder(description):
+        project_lines.append(f"- 研究目标/范围：{description}")
+    if important and not memory_is_placeholder(important):
+        project_lines.append(f"- 固定信息与约束：{important}")
+    if manual and not memory_is_placeholder(manual):
+        project_lines.append(f"- 人工补充：{manual}")
+    sections = [f"{'#' * heading_level} 项目要点\n\n" + ("\n".join(project_lines) if project_lines else "- 项目目标与固定约束尚未填写。")]
+    sections.extend(compact_plan_memory_sections(project, heading_level))
+    logs = compact_log_memory_section(project, heading_level)
+    if logs:
+        sections.append(logs)
+    conversations = compact_conversation_memory_section(project, heading_level)
+    if conversations:
+        sections.append(conversations)
+    return sections
+
+
+def compact_project_memory_markdown(project: dict) -> str:
+    name = meta_value(project["meta"], "name", project["slug"])
+    return "\n\n".join([
+        f"# {name} · 精简项目记忆",
+        "> 用于补充模型上下文：仅保留当前执行基线、后续版本参数增量，以及近期事实、问题和待确认项。",
+        "> 这不是完整 SOP 或行为指令；请结合当前用户问题独立推理。原始 Markdown 仍保留在项目目录中供追溯。",
+        *compact_project_memory_sections(project, 2),
+        "## 证据状态与使用建议\n\n- 方案基线与版本变动是当前计划/操作条件，不代表实验已完成或结论已成立。\n- 日志摘要来自原始记录；对话摘录属于未验证讨论。\n- 将本记忆作为参考而非约束：优先响应当前用户问题，独立判断；信息冲突或不足时说明原因并建议回查原始资料。",
+    ]).strip() + "\n"
+
+
+def update_agents(project: dict) -> None:
+    """实时更新 AGENTS.md：默认 AI 上下文也使用精简、增量式策略。"""
+    readme = read_markdown_document(project["dir"] / "README.md")
+    auto = "\n".join([
+        AUTO_START,
+        "## 自动更新的精简项目上下文",
+        "",
+        *compact_project_memory_sections(project, 3),
+        "",
+        "### 使用建议",
+        "",
+        "- 此处是分层参考上下文，不替代当前用户问题或模型的独立推理。",
+        "- 方案是执行基线；日志是原始记录；对话摘录是未验证讨论。信息不足或冲突时请说明并回查原始 Markdown。",
+        AUTO_END,
+    ])
+    path = project["dir"] / "AGENTS.md"
+    if path.is_file():
+        old = path.read_text(encoding="utf-8")
+    else:
+        name = meta_value(readme["meta"], "name", project["slug"])
+        old = f"# {name} · 项目协作记忆\n\n可在自动区块外手工补充长期有效信息。\n"
     stripped = AUTO_BLOCK_RE.sub("", old).rstrip()
     write_markdown(path, stripped + "\n\n" + auto + "\n")
 
@@ -712,10 +1084,13 @@ def synchronise_existing_project(project: dict) -> list[str]:
 
     agents_path = project["dir"] / "AGENTS.md"
     agents_missing = not agents_path.is_file()
-    if changes or agents_missing:
+    agents_needs_memory_upgrade = agents_missing or "自动更新的精简项目上下文" not in agents_path.read_text(encoding="utf-8")
+    if changes or agents_needs_memory_upgrade:
         update_agents(project)
         if agents_missing:
             changes.append("AGENTS.md")
+        elif agents_needs_memory_upgrade:
+            changes.append("AGENTS.md（精简记忆升级）")
     return changes
 
 
@@ -999,6 +1374,8 @@ def update_plan_content(project: dict, plan_id: str, plan_content: str, subexper
         raise ApiError("旧版单文件方案暂不支持写入方案正文；请新建 V1/V2 文件夹方案。")
     doc = read_markdown_document(path)
     if subexperiment:
+        # 正文一旦保存，原有 AI 版本参数分析不再对应当前文本，必须重新同步。
+        doc["meta"].pop(PLAN_ANALYSIS_META_KEY, None)
         write_markdown(
             path,
             subexperiment_plan_document(plan, subexperiment, plan_content, doc["meta"], doc["content"]),
@@ -1006,6 +1383,7 @@ def update_plan_content(project: dict, plan_id: str, plan_content: str, subexper
         return read_plan(project, plan_id)
     meta = dict(doc["meta"])
     meta["updated_at"] = now_iso()
+    meta.pop(PLAN_ANALYSIS_META_KEY, None)
     write_markdown(
         path,
         front_matter(meta) + replace_plan_content(doc["content"], plan_content).rstrip() + "\n",
@@ -1128,12 +1506,32 @@ def previous_plan(project: dict, plan_id: str) -> Optional[dict]:
     return None
 
 
-def plan_comparison(project: dict, plan_id: str) -> dict:
-    current, current_content = plan_markdown_content(project, plan_id)
+def _legacy_text_plan_comparison(project: dict, plan_id: str, subexperiment_id: str = "") -> dict:
+    """比较当前方案（或同名子实验）与上一版本的正文。"""
+    subexperiment_id = one_line(subexperiment_id)
+    current, current_content = plan_markdown_content(project, plan_id, subexperiment_id)
+    _, current_subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
+    current_scope = {"name": current_subexperiment["name"]} if current_subexperiment else None
     previous = previous_plan(project, plan_id)
     if not previous:
-        return {"current": current, "previous": None, "lines": []}
-    previous_plan_data, previous_content = plan_markdown_content(project, previous["id"])
+        return {"current": current, "previous": None, "currentScope": current_scope, "lines": []}
+    previous_subexperiment = None
+    if current_subexperiment:
+        current_name = current_subexperiment["name"].casefold()
+        previous_subexperiment = next(
+            (item for item in previous["subexperiments"] if item["name"].casefold() == current_name), None
+        )
+        if not previous_subexperiment:
+            return {
+                "current": current,
+                "previous": None,
+                "currentScope": current_scope,
+                "lines": [],
+                "message": "上一版本中没有同名子实验，暂无法进行版本对比。",
+            }
+    previous_plan_data, previous_content = plan_markdown_content(
+        project, previous["id"], previous_subexperiment["id"] if previous_subexperiment else ""
+    )
     lines = []
     matcher = difflib.SequenceMatcher(
         a=previous_content.splitlines(), b=current_content.splitlines(), autojunk=False
@@ -1150,7 +1548,197 @@ def plan_comparison(project: dict, plan_id: str) -> dict:
         else:
             lines.extend({"kind": "removed", "text": line} for line in old_lines[old_start:old_end])
             lines.extend({"kind": "added", "text": line} for line in new_lines[new_start:new_end])
-    return {"current": current, "previous": previous_plan_data, "lines": lines}
+    previous_scope = {"name": previous_subexperiment["name"]} if previous_subexperiment else None
+    return {
+        "current": current,
+        "previous": previous_plan_data,
+        "currentScope": current_scope,
+        "previousScope": previous_scope,
+        "lines": lines,
+    }
+
+
+def plan_analysis_sections(content: str) -> dict[str, str]:
+    """仅摘取供版本分析使用的实验步骤章节。"""
+    buckets = {"steps": []}
+    active = ""
+    active_level = 0
+    for raw in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", raw)
+        if heading:
+            level = len(heading.group(1))
+            title = re.sub(r"[*_`]", "", heading.group(2)).strip()
+            if re.search(r"操作步骤|实验步骤|操作流程|实验流程", title):
+                active, active_level = "steps", level
+                buckets[active].append(raw)
+            elif active and level <= active_level:
+                active, active_level = "", 0
+            elif active:
+                buckets[active].append(raw)
+            continue
+        if active:
+            buckets[active].append(raw)
+    return {key: "\n".join(lines).strip() for key, lines in buckets.items()}
+
+
+def plan_analysis_fingerprint(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def clean_plan_analysis_value(value: Any, limit: int = 320) -> str:
+    return one_line(value)[:limit]
+
+
+def normalize_plan_version_analysis(value: Any) -> dict:
+    """校验浏览器端 AI 返回的结构化参数差异，避免任意模型文本写入项目资料。"""
+    if not isinstance(value, dict):
+        raise ApiError("版本改动分析结果格式无效。")
+    raw_changes = value.get("changes", [])
+    if not isinstance(raw_changes, list):
+        raise ApiError("版本改动分析结果中的 changes 必须是列表。")
+    changes = []
+    seen = set()
+    section_map = {
+        "步骤": "实验步骤", "实验步骤": "实验步骤", "step": "实验步骤", "steps": "实验步骤",
+    }
+    kind_map = {
+        "新增": "新增", "添加": "新增", "added": "新增",
+        "删除": "删除", "移除": "删除", "removed": "删除",
+        "调整": "调整", "修改": "调整", "变更": "调整", "changed": "调整",
+    }
+    for item in raw_changes[:PLAN_ANALYSIS_MAX_CHANGES]:
+        if not isinstance(item, dict):
+            continue
+        section = section_map.get(clean_plan_analysis_value(item.get("section")).casefold())
+        parameter = clean_plan_analysis_value(item.get("parameter"), 180)
+        before = clean_plan_analysis_value(item.get("before"), 500)
+        after = clean_plan_analysis_value(item.get("after"), 500)
+        kind = kind_map.get(clean_plan_analysis_value(item.get("kind")).casefold(), "调整")
+        if not section or not parameter or (not before and not after):
+            continue
+        key = (section, parameter, before, after, kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        changes.append({
+            "section": section,
+            "parameter": parameter,
+            "before": before or "—",
+            "after": after or "—",
+            "kind": kind,
+        })
+    return {"schema": 1, "changes": changes}
+
+
+def encode_plan_version_analysis(value: dict) -> str:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_plan_version_analysis(value: Any) -> Optional[dict]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return decoded if isinstance(decoded, dict) else None
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def version_comparison_state(project: dict, plan_id: str, subexperiment_id: str = "") -> dict:
+    """准备当前方案和上一版本的同一比较范围；子实验按名称对应。"""
+    subexperiment_id = one_line(subexperiment_id)
+    current, current_content = plan_markdown_content(project, plan_id, subexperiment_id)
+    _, current_subexperiment, current_path = plan_content_target(project, plan_id, subexperiment_id)
+    current_scope = {"name": current_subexperiment["name"]} if current_subexperiment else None
+    previous = previous_plan(project, plan_id)
+    state = {
+        "current": current, "currentContent": current_content, "currentPath": current_path,
+        "currentScope": current_scope, "previous": None, "previousContent": "",
+        "previousScope": None, "message": "",
+    }
+    if not previous:
+        state["message"] = "这是当前项目最早创建的方案，暂无上一版本可对比。"
+        return state
+    previous_subexperiment = None
+    if current_subexperiment:
+        current_name = current_subexperiment["name"].casefold()
+        previous_subexperiment = next(
+            (item for item in previous["subexperiments"] if item["name"].casefold() == current_name), None
+        )
+        if not previous_subexperiment:
+            state["message"] = "上一版本中没有同名子实验，暂时无法进行版本对比。"
+            return state
+    previous_plan_data, previous_content = plan_markdown_content(
+        project, previous["id"], previous_subexperiment["id"] if previous_subexperiment else ""
+    )
+    state.update({
+        "previous": previous_plan_data,
+        "previousContent": previous_content,
+        "previousScope": {"name": previous_subexperiment["name"]} if previous_subexperiment else None,
+    })
+    return state
+
+
+def stored_plan_version_analysis(state: dict) -> Optional[dict]:
+    stored = decode_plan_version_analysis(read_markdown_document(state["currentPath"])["meta"].get(PLAN_ANALYSIS_META_KEY))
+    if not stored or not isinstance(stored.get("basis"), dict):
+        return None
+    basis = stored["basis"]
+    previous = state.get("previous") or {}
+    if (
+        basis.get("current_plan_id") != state["current"].get("id")
+        or basis.get("previous_plan_id") != previous.get("id")
+        or basis.get("current_content") != plan_analysis_fingerprint(state["currentContent"])
+        or basis.get("previous_content") != plan_analysis_fingerprint(state["previousContent"])
+    ):
+        return None
+    try:
+        return normalize_plan_version_analysis(stored)
+    except ApiError:
+        return None
+
+
+def plan_comparison(project: dict, plan_id: str, subexperiment_id: str = "") -> dict:
+    """返回仅限试剂与操作步骤的 AI 语义参数对比上下文和同步结果。"""
+    state = version_comparison_state(project, plan_id, subexperiment_id)
+    result = {
+        "current": state["current"], "previous": state["previous"],
+        "currentScope": state["currentScope"], "previousScope": state["previousScope"],
+        "message": state["message"], "analysis": None,
+    }
+    if not state["previous"]:
+        return result
+    result["analysis"] = stored_plan_version_analysis(state)
+    previous_sections = plan_analysis_sections(state["previousContent"])
+    current_sections = plan_analysis_sections(state["currentContent"])
+    result["analysisInput"] = {
+        "previous": {"version": state["previous"].get("version", ""), **previous_sections},
+        "current": {"version": state["current"].get("version", ""), **current_sections},
+    }
+    return result
+
+
+def save_plan_version_analysis(project: dict, plan_id: str, payload: dict) -> dict:
+    """保存已审核结构的 AI 参数差异，并绑定两版正文指纹以防展示过期结果。"""
+    subexperiment_id = one_line(payload.get("subexperimentId"))
+    state = version_comparison_state(project, plan_id, subexperiment_id)
+    if not state["previous"]:
+        raise ApiError(state["message"] or "暂无可分析的上一版本。")
+    analysis = normalize_plan_version_analysis(payload.get("analysis"))
+    analysis["basis"] = {
+        "current_plan_id": state["current"]["id"],
+        "previous_plan_id": state["previous"]["id"],
+        "current_content": plan_analysis_fingerprint(state["currentContent"]),
+        "previous_content": plan_analysis_fingerprint(state["previousContent"]),
+        "updated_at": now_iso(),
+    }
+    doc = read_markdown_document(state["currentPath"])
+    meta = dict(doc["meta"])
+    meta[PLAN_ANALYSIS_META_KEY] = encode_plan_version_analysis(analysis)
+    write_markdown(state["currentPath"], front_matter(meta) + doc["content"].rstrip() + "\n")
+    return plan_comparison(project, plan_id, subexperiment_id)
 
 
 def resolve_plan_association(project: dict, payload: dict) -> dict:
@@ -1322,7 +1910,7 @@ def list_logs(project: dict) -> list:
     return items
 
 
-def export_project_markdown(project: dict) -> bytes:
+def legacy_export_project_markdown(project: dict) -> bytes:
     """把项目内全部 Markdown 合并为一份保留目录层级的 Markdown。"""
     root = project["dir"]
     markdown_paths = sorted(
@@ -1381,6 +1969,11 @@ def export_project_markdown(project: dict) -> bytes:
             "",
         ])
     return "\n".join(lines).encode("utf-8")
+
+
+def export_project_markdown(project: dict) -> bytes:
+    """导出适合直接投喂 AI 的精简项目记忆，而不是合并所有原始 Markdown。"""
+    return compact_project_memory_markdown(project).encode("utf-8")
 
 
 def export_project_to_directory(project: dict, directory_value: Any) -> tuple[Path, bytes]:
@@ -1570,12 +2163,35 @@ def import_plan_source_document(project: dict, plan_id: str, payload: dict) -> d
     }
 
 
-def markdown_line_text(line: str) -> str:
-    """导出时保留 Markdown 正文语义，去掉不适合 Word/PDF 的轻量标记。"""
+def markdown_inline_parts(line: str) -> list[tuple[str, bool]]:
+    """拆分 Markdown 粗体片段，供导出时保留关键步骤与注意事项的强调。"""
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", line)
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
-    text = text.replace("**", "").replace("__", "").replace("`", "")
-    return text.strip()
+    text = text.replace("__", "").replace("`", "").strip()
+    parts: list[tuple[str, bool]] = []
+    for fragment in re.split(r"(\*\*.+?\*\*)", text):
+        if not fragment:
+            continue
+        if fragment.startswith("**") and fragment.endswith("**"):
+            parts.append((fragment[2:-2], True))
+        else:
+            parts.append((fragment, False))
+    return parts
+
+
+def markdown_line_text(line: str) -> str:
+    """导出时保留 Markdown 正文语义，去掉不适合 Word/PDF 的轻量标记。"""
+    return "".join(fragment for fragment, _ in markdown_inline_parts(line)).strip()
+
+
+def important_plan_emphasis(title: str) -> str:
+    """返回方案板块中粗体文本的语义类型，仅影响已由作者标出的内容。"""
+    normalized = re.sub(r"[*_`]", "", title).strip()
+    if normalized == "操作步骤":
+        return "step"
+    if re.search(r"风险|注意", normalized):
+        return "caution"
+    return ""
 
 
 def plan_presentation_style(content: str) -> dict:
@@ -1777,6 +2393,13 @@ def export_plan_docx(
         if color:
             target.font.color.rgb = RGBColor.from_string(color)
 
+    def add_markdown_runs(paragraph, value: str, emphasis: str = "") -> None:
+        emphasis_color = {"step": "1F6749", "caution": "994C42"}.get(emphasis)
+        for fragment, is_bold in markdown_inline_parts(value):
+            run = paragraph.add_run(fragment)
+            set_font(run, body_size, emphasis_color if is_bold else None)
+            run.bold = is_bold
+
     normal = document.styles["Normal"]
     set_font(normal, body_size)
     normal.paragraph_format.space_after = Pt(3 if compact_layout else 8)
@@ -1830,27 +2453,34 @@ def export_plan_docx(
             style_name = "Heading 1" if level == 2 else "Heading 2" if level == 3 else "Heading 3"
             document.add_paragraph(markdown_line_text(heading.group(2)), style=style_name)
         elif line.startswith("- ") or line.startswith("* "):
-            item = markdown_line_text(line[2:])
+            item_source = line[2:]
+            item = markdown_line_text(item_source)
             if compact_layout and is_materials_section(current_section):
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                document.add_paragraph(item, style="List Bullet")
-        elif re.match(r"^\d+[.)]\s+", line):
-            item = markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line))
+                paragraph = document.add_paragraph(style="List Bullet")
+                add_markdown_runs(paragraph, item_source, important_plan_emphasis(current_section))
+        elif numbered := re.match(r"^\d+[.)]\s+(.+)$", line):
+            item_source = numbered.group(1)
+            item = markdown_line_text(item_source)
             if compact_layout and is_materials_section(current_section):
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                document.add_paragraph(item, style="List Number")
+                paragraph = document.add_paragraph(style="List Number")
+                add_markdown_runs(paragraph, item_source, important_plan_emphasis(current_section))
         elif line.startswith("> "):
             flush_compact_material_items()
-            paragraph = document.add_paragraph(markdown_line_text(line[2:]))
+            paragraph = document.add_paragraph()
+            add_markdown_runs(paragraph, line[2:], important_plan_emphasis(current_section))
             paragraph.paragraph_format.left_indent = Inches(0.25)
-            paragraph.runs[0].italic = True
+            for run in paragraph.runs:
+                run.italic = True
         elif not re.fullmatch(r"[-*_]{3,}", line):
             flush_compact_material_items()
-            document.add_paragraph(markdown_line_text(line))
+            paragraph = document.add_paragraph()
+            add_markdown_runs(paragraph, line, important_plan_emphasis(current_section))
     flush_compact_material_items()
     if include_record_sheet:
         append_docx_record_sheet(document, set_font, Pt, Cm)
@@ -1982,6 +2612,19 @@ def export_plan_pdf(
         story.append(Paragraph("• " + xml_escape("； ".join(compact_material_items)), body))
         compact_material_items.clear()
 
+    def pdf_markdown_markup(value: str, emphasis: str = "") -> str:
+        emphasis_color = {"step": "#1F6749", "caution": "#994C42"}.get(emphasis)
+        rendered = []
+        for fragment, is_bold in markdown_inline_parts(value):
+            text = xml_escape(fragment)
+            if is_bold and emphasis_color:
+                rendered.append(f'<b><font color="{emphasis_color}">{text}</font></b>')
+            elif is_bold:
+                rendered.append(f"<b>{text}</b>")
+            else:
+                rendered.append(text)
+        return "".join(rendered)
+
     for raw_line in content.splitlines():
         line = raw_line.rstrip()
         if not line:
@@ -1989,7 +2632,6 @@ def export_plan_pdf(
             continue
         if line.startswith("<!--"):
             continue
-        text = xml_escape(markdown_line_text(line))
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
             flush_compact_material_items()
@@ -2001,28 +2643,30 @@ def export_plan_pdf(
             heading_style = h1 if level == 2 else h2 if level == 3 else h3
             story.append(Paragraph(xml_escape(markdown_line_text(heading.group(2))), heading_style))
         elif line.startswith("- ") or line.startswith("* "):
-            item = markdown_line_text(line[2:])
+            item_source = line[2:]
+            item = markdown_line_text(item_source)
             if compact_layout and is_materials_section(current_section):
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                story.append(Paragraph("• " + xml_escape(item), body))
-        elif re.match(r"^\d+[.)]\s+", line):
-            item = markdown_line_text(re.sub(r"^\d+[.)]\s+", "", line))
+                story.append(Paragraph("• " + pdf_markdown_markup(item_source, important_plan_emphasis(current_section)), body))
+        elif numbered := re.match(r"^(\d+[.)]\s+)(.+)$", line):
+            item_source = numbered.group(2)
+            item = markdown_line_text(item_source)
             if compact_layout and is_materials_section(current_section):
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                story.append(Paragraph(xml_escape(line), body))
+                story.append(Paragraph(xml_escape(numbered.group(1)) + pdf_markdown_markup(item_source, important_plan_emphasis(current_section)), body))
         elif line.startswith("> "):
             flush_compact_material_items()
-            story.append(Paragraph(xml_escape(markdown_line_text(line[2:])), callout))
+            story.append(Paragraph(pdf_markdown_markup(line[2:], important_plan_emphasis(current_section)), callout))
         elif re.fullmatch(r"[-*_]{3,}", line):
             flush_compact_material_items()
             story.append(Spacer(1, 6))
         else:
             flush_compact_material_items()
-            story.append(Paragraph(text, body))
+            story.append(Paragraph(pdf_markdown_markup(line, important_plan_emphasis(current_section)), body))
     flush_compact_material_items()
     if include_record_sheet:
         append_pdf_record_sheet(story, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle)
@@ -2434,7 +3078,15 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 return
             raise ApiError("仅支持导出 Word、PDF 或原生 Markdown。")
         if method == "GET" and len(segments) == 6 and segments[5] == "compare":
-            self._send_json(HTTPStatus.OK, plan_comparison(project, segments[4]))
+            self._send_json(
+                HTTPStatus.OK,
+                plan_comparison(project, segments[4], one_line(self._query().get("subexperimentId"))),
+            )
+            return
+        if method == "PUT" and len(segments) == 6 and segments[5] == "compare":
+            comparison = save_plan_version_analysis(project, segments[4], self._read_json())
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"comparison": comparison})
             return
         if method == "GET" and len(segments) == 5:
             self._send_json(HTTPStatus.OK, {"plan": read_plan(project, segments[4])})

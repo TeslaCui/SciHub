@@ -227,7 +227,7 @@
     loadProject(slug).then(() => {
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
-      const v = ['plans', 'logs', 'records', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'logs';
+      const v = ['plans', 'logs', 'records', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'plans';
       if (typeof window.switchView === 'function') window.switchView(v);
       else {
         const target = document.getElementById(`${v}View`);
@@ -266,25 +266,51 @@
     const section = $('planBookSwitcher');
     const list = $('planBookList');
     if (!section || !list) return;
-    const visible = Boolean(R.active && ['plans', 'planBook'].includes(currentView()));
+    // 方案列表页不需要重复展示所有版本；进入某一份方案书后，
+    // 以子实验为组切换其在不同方案版本中的方案书。
+    const visible = Boolean(R.active && currentView() === 'planBook' && R.planBook);
     section.hidden = !visible;
     if (!visible) return;
-    if (!R.plans.length) {
-      list.innerHTML = '<div class="plan-book-switcher-empty">尚未建立实验方案。</div>';
+    const openedPlan = R.plans.find(item => item.id === R.planBook.planId);
+    if (!openedPlan) {
+      list.innerHTML = '<div class="plan-book-switcher-empty">当前实验方案不可用。</div>';
       return;
     }
-    const scopes = R.plans.flatMap(plan => {
-      const subexperiments = plan.subexperiments?.length ? plan.subexperiments : [{ id: '', name: plan.name }];
-      return subexperiments.map(subexperiment => ({ plan, subexperiment }));
+    const orderedPlans = [...R.plans].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    // 将当前打开版本的子实验放在前面，保留用户原来在侧栏中看到的顺序；
+    // 其他版本中独有的子实验再接在后面。
+    const plansForGroups = [openedPlan, ...orderedPlans.filter(plan => plan.id !== openedPlan.id)];
+    const groups = new Map();
+    plansForGroups.forEach(plan => {
+      const scopes = plan.subexperiments?.length
+        ? plan.subexperiments
+        : [{ id: '', name: '整个方案' }];
+      scopes.forEach(subexperiment => {
+        const label = (subexperiment.name || '整个方案').trim();
+        const groupKey = subexperiment.id ? `sub:${label.toLocaleLowerCase()}` : 'plan:root';
+        if (!groups.has(groupKey)) groups.set(groupKey, { label, items: [] });
+        groups.get(groupKey).items.push({ plan, subexperiment });
+      });
     });
-    list.innerHTML = scopes.map(({ plan, subexperiment }) => {
-      const selected = R.planBook?.planId === plan.id && R.planBook?.subexperimentId === subexperiment.id;
-      const label = subexperiment.name || plan.name;
-      return `<button class="project-item plan-book-switcher-item ${selected ? 'selected' : ''}" data-plan-book-switch="${esc(plan.id)}" data-subexperiment-id="${esc(subexperiment.id)}" title="${esc(`${plan.version || ''} · ${label}`)}"><span class="project-color" style="background:#7b9f8c"></span><span class="plan-book-switcher-copy"><b>${esc(label)}</b><small>${esc(plan.version || '未命名版本')}</small></span><i>›</i></button>`;
+    const selectedValue = `${R.planBook.planId}::${R.planBook.subexperimentId || ''}`;
+    const selectors = [...groups.values()].map(group => {
+      const versionOptions = group.items
+        .sort((a, b) => String(b.plan.createdAt || '').localeCompare(String(a.plan.createdAt || '')))
+        .map(({ plan, subexperiment }) => {
+          const value = `${plan.id}::${subexperiment.id || ''}`;
+          const selected = value === selectedValue;
+          const version = plan.version || '未命名版本';
+          return `<option value="${esc(value)}" ${selected ? 'selected' : ''} title="${esc(`${plan.name} · ${version}`)}">${esc(`${version}${selected ? '（当前查看）' : ''}`)}</option>`;
+        }).join('');
+      const isCurrentGroup = group.items.some(({ plan, subexperiment }) => `${plan.id}::${subexperiment.id || ''}` === selectedValue);
+      const selectLabel = `选择 ${group.label} 的方案版本`;
+      return `<label class="plan-book-switcher-select ${isCurrentGroup ? 'is-current' : ''}"><span>${esc(group.label)}</span><select data-plan-book-version-select aria-label="${esc(selectLabel)}">${versionOptions}</select></label>`;
     }).join('');
-    list.querySelectorAll('[data-plan-book-switch]').forEach(button => {
-      button.addEventListener('click', () => openPlanBookPage(button.dataset.planBookSwitch, button.dataset.subexperimentId || ''));
-    });
+    list.innerHTML = selectors;
+    list.querySelectorAll('[data-plan-book-version-select]').forEach(select => select.addEventListener('change', event => {
+      const [planId, subexperimentId = ''] = event.currentTarget.value.split('::');
+      if (planId) openPlanBookPage(planId, subexperimentId);
+    }));
   }
 
   function updateTopbarActions(view = currentView()) {
@@ -356,7 +382,10 @@
       $('plansEmptyCreate').onclick = openPlanDialog;
       return;
     }
-    const cards = R.plans.map(plan => {
+    // 方案页按版本建立时间倒序展示：最新版本在最上方；编辑旧版本不会改变版本顺序。
+    const cards = [...R.plans]
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+      .map(plan => {
       const relatedLogs = R.logs.filter(log => log.planId === plan.id);
       const hasSubexperiments = (plan.subexperiments?.length || 0) > 0;
       const subexperiments = plan.subexperiments?.length
@@ -370,13 +399,13 @@
       const planDocumentPath = projectPath(plan.relativePath || `${plan.folder || '实验方案'}/方案.md`);
       const planFolderPath = projectPath(plan.folder || '实验方案');
       return `<article class="plan-card">
-        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-compare-plan="${esc(plan.id)}">查看版本改动</button><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案信息</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
+        <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案信息</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
         <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button><button class="text-button" data-edit-plan-book="${esc(plan.id)}">编辑方案书</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
         <div class="plan-card-foot"><span>${esc(planFolderPath)}/ · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
       </article>`;
-    }).join('');
+      }).join('');
     $('plansBody').innerHTML = `<div class="plans-grid">${cards}</div>`;
     $('plansBody').querySelectorAll('[data-start-log]').forEach(button => {
       button.onclick = () => startPlanLog(button.dataset.startLog, button.dataset.startSubexperiment || '');
@@ -395,9 +424,6 @@
     });
     $('plansBody').querySelectorAll('[data-delete-plan]').forEach(button => {
       button.onclick = () => openPlanDeleteDialog(button.dataset.deletePlan);
-    });
-    $('plansBody').querySelectorAll('[data-compare-plan]').forEach(button => {
-      button.onclick = () => openPlanDiffDialog(button.dataset.comparePlan);
     });
   }
 
@@ -621,7 +647,7 @@
 
   function standardPlanPrompt(sourceMarkdown) {
     return [
-      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充。“材料与仪器”中的试剂、耗材和设备必须写成一个连续自然段，项目之间用中文逗号分隔，不要使用项目符号、编号、卡片或表格。版式应紧凑：使用简洁段落或列表，避免无意义的空行、重复说明和空白板块。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
+      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充；其中已明确的关键动作、条件、参数、时间、顺序或停启条件须用 **粗体** 标记。风险与注意事项中，已明确的重要风险、禁忌、个人防护、异常处理或停止条件也须用 **粗体** 标记。不得为了突出显示而新增或推断任何事实。“材料与仪器”中的试剂、耗材和设备必须写成一个连续自然段，项目之间用中文逗号分隔，不要使用项目符号、编号、卡片或表格。版式应紧凑：使用简洁段落或列表，避免无意义的空行、重复说明和空白板块。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
       { role: 'user', content: `请读取以下已转换的 Markdown 资料，并生成标准实验方案：\n\n${sourceMarkdown}` }
     ];
   }
@@ -654,6 +680,10 @@
       await loadAgents();
       closeModal();
       openPlanBookPage(planId, subexperimentId, imported);
+      const importedPlan = R.plans.find(item => item.id === planId);
+      if (importedPlan && R.planBook) {
+        generatePlanBook(R.planBook, planScopeDetails(importedPlan, subexperimentId));
+      }
     } catch (error) {
       toast(`方案文件导入失败：${error.message}`);
     } finally {
@@ -1161,11 +1191,17 @@
         });
         R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
         book.layoutMode = editorState.presentation.layout;
+        let analysisError = '';
+        try {
+          await synchroniseImpactedPlanVersionAnalyses(plan.id, editorState.subexperimentId);
+        } catch (error) {
+          analysisError = error.message;
+        }
         editorState.dispose?.();
         if (R.planEditor === editorState) R.planEditor = null;
         await loadAgents();
         await renderPlanBookView();
-        toast('实验方案书已保存');
+        toast(analysisError ? `实验方案书已保存，但版本参数分析未同步：${analysisError}` : '实验方案书已保存，版本参数分析已同步');
       } catch (error) {
         toast(`保存方案失败：${error.message}`);
       } finally {
@@ -1180,9 +1216,10 @@
     refreshPreview();
   }
 
-  function inlineExecutionHtml(value) {
+  function inlineExecutionHtml(value, emphasisClass = '') {
+    const strong = emphasisClass ? `<strong class="${emphasisClass}">$1</strong>` : '<strong>$1</strong>';
     return esc(value)
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*\*(.+?)\*\*/g, strong)
       .replace(/`(.+?)`/g, '<code>$1</code>')
       .replace(/_(.+?)_/g, '<em>$1</em>');
   }
@@ -1191,14 +1228,19 @@
     const blocks = [];
     let list = null;
     let currentSection = '';
+    const emphasisClass = () => {
+      if (currentSection === '操作步骤') return 'execution-key-step';
+      if (/(?:风险|注意)/.test(currentSection)) return 'execution-key-caution';
+      return '';
+    };
     const flushList = () => {
       if (!list) return;
       if (list.materials) {
-        blocks.push(`<p class="execution-materials-paragraph">${list.items.map(item => inlineExecutionHtml(item)).join('，')}</p>`);
+        blocks.push(`<p class="execution-materials-paragraph">${list.items.map(item => inlineExecutionHtml(item, list.emphasisClass)).join('，')}</p>`);
         list = null;
         return;
       }
-      blocks.push(`<${list.type} class="execution-list${list.materials ? ' materials-list' : ''}">${list.items.map(item => `<li>${inlineExecutionHtml(item)}</li>`).join('')}</${list.type}>`);
+      blocks.push(`<${list.type} class="execution-list${list.materials ? ' materials-list' : ''}">${list.items.map(item => `<li>${inlineExecutionHtml(item, list.emphasisClass)}</li>`).join('')}</${list.type}>`);
       list = null;
     };
     editablePlanContent(content).split(/\r?\n/).forEach(raw => {
@@ -1217,13 +1259,13 @@
       const numbered = line.match(/^\d+[.)]\s+(.+)$/);
       if (bullet || numbered) {
         const type = bullet ? 'ul' : 'ol';
-        if (!list || list.type !== type) { flushList(); list = { type, items: [], materials: /(?:材料|试剂).*(?:仪器|耗材)|(?:仪器|耗材).*(?:材料|试剂)|^(?:材料|仪器|试剂|耗材)$/.test(currentSection) }; }
+        if (!list || list.type !== type) { flushList(); list = { type, items: [], materials: /(?:材料|试剂).*(?:仪器|耗材)|(?:仪器|耗材).*(?:材料|试剂)|^(?:材料|仪器|试剂|耗材)$/.test(currentSection), emphasisClass: emphasisClass() }; }
         list.items.push((bullet || numbered)[1]);
         return;
       }
       flushList();
-      if (line.startsWith('> ')) { blocks.push(`<aside>${inlineExecutionHtml(line.slice(2))}</aside>`); return; }
-      blocks.push(`<p>${inlineExecutionHtml(line)}</p>`);
+      if (line.startsWith('> ')) { blocks.push(`<aside>${inlineExecutionHtml(line.slice(2), emphasisClass())}</aside>`); return; }
+      blocks.push(`<p>${inlineExecutionHtml(line, emphasisClass())}</p>`);
     });
     flushList();
     return blocks.join('') || '<div class="execution-empty">尚未生成实验执行方案。请先导入资料并使用 AI 生成，或编辑方案正文后保存。</div>';
@@ -1337,6 +1379,79 @@
     };
     const overflowing = () => body.scrollHeight > body.clientHeight + 1;
     const isHeadingBlock = block => /^H[2-6]$/.test(block?.tagName || '');
+    const placeParagraphAcrossPages = paragraph => {
+      const textNodes = [];
+      const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (walker.currentNode.nodeValue) textNodes.push(walker.currentNode);
+      }
+      const textLength = textNodes.reduce((total, node) => total + node.nodeValue.length, 0);
+      if (!textLength) {
+        body.append(paragraph);
+        return;
+      }
+
+      const pointAt = position => {
+        let offset = position;
+        for (const node of textNodes) {
+          if (offset <= node.nodeValue.length) return { node, offset };
+          offset -= node.nodeValue.length;
+        }
+        const last = textNodes[textNodes.length - 1];
+        return { node: last, offset: last.nodeValue.length };
+      };
+      const paragraphPart = (start, end) => {
+        const range = document.createRange();
+        const rangeStart = pointAt(start);
+        const rangeEnd = pointAt(end);
+        range.setStart(rangeStart.node, rangeStart.offset);
+        range.setEnd(rangeEnd.node, rangeEnd.offset);
+        const part = paragraph.cloneNode(false);
+        part.append(range.cloneContents());
+        return part;
+      };
+      const preferredBreak = (start, end) => {
+        const text = paragraph.textContent || '';
+        for (let index = end - 1; index >= Math.max(start, end - 96); index -= 1) {
+          if (/[\s，。；、：！？,.!?;:]/u.test(text[index])) return index + 1;
+        }
+        return end;
+      };
+      const fitsThrough = (start, end) => {
+        const part = paragraphPart(start, end);
+        body.append(part);
+        const fits = !overflowing();
+        body.removeChild(part);
+        return fits;
+      };
+
+      let start = 0;
+      while (start < textLength) {
+        let low = start + 1;
+        let high = textLength;
+        let end = start;
+        while (low <= high) {
+          const middle = Math.floor((low + high) / 2);
+          if (fitsThrough(start, middle)) {
+            end = middle;
+            low = middle + 1;
+          } else {
+            high = middle - 1;
+          }
+        }
+        if (end === start) {
+          if (body.children.length) {
+            addPage();
+            continue;
+          }
+          end = Math.min(textLength, start + 1);
+        }
+        end = preferredBreak(start, end);
+        body.append(paragraphPart(start, end));
+        start = end;
+        if (start < textLength) addPage();
+      }
+    };
     const placeListAcrossPages = list => {
       const items = [...list.children];
       let fragment = list.cloneNode(false);
@@ -1369,6 +1484,10 @@
       body.removeChild(block);
       if (isList && block.children.length) {
         placeListAcrossPages(block);
+        return;
+      }
+      if (block.tagName === 'P') {
+        placeParagraphAcrossPages(block);
         return;
       }
       if (body.children.length === 0) {
@@ -1418,6 +1537,30 @@
 
   function planGenerationMarkup(task) {
     return `<div class="plan-book-generating" role="status" aria-live="polite"><div class="plan-book-generating-orbit" aria-hidden="true"></div><p class="eyebrow">AI 任务正在运行</p><h2>正在生成实验方案书</h2><p>正在按统一模板整理实验目的、设计、材料、步骤、记录与风险。你可以切换页面，任务会继续在当前网站中运行。</p><div class="plan-book-task-time">已运行 <b data-plan-task-elapsed>${planTaskElapsed(task)}</b></div><div class="plan-book-task-progress" aria-hidden="true"><span></span></div><p class="plan-book-task-note">请保持本网站打开；关闭或刷新页面会中断本次生成。</p></div>`;
+  }
+
+  function planAnalysisTaskMarkup(comparison, scope) {
+    const task = comparison.analysisTask;
+    const currentScope = comparison.currentScope?.name || scope.title;
+    const previousScope = comparison.previousScope?.name || comparison.previous?.name || '上一版本';
+    return `<div class="plan-book-generating plan-analysis-generating" role="status" aria-live="polite"><div class="plan-book-generating-orbit" aria-hidden="true"></div><p class="eyebrow">AI 参数分析正在运行</p><h2>正在分析实验步骤中的关键参数</h2><p>正在比较 <b>${esc(comparison.current?.version || '当前版本')} · ${esc(currentScope)}</b> 与 <b>${esc(comparison.previous?.version || '上一版本')} · ${esc(previousScope)}</b>。仅分析实验步骤中的温度、时间、速率、气氛、次数及操作顺序。</p><div class="plan-book-task-time">已运行 <b data-plan-analysis-elapsed>${planTaskElapsed(task)}</b></div><div class="plan-book-task-progress" aria-hidden="true"><span></span></div><p class="plan-book-task-note">模型返回后将自动显示参数表；如上游接口超时或返回格式异常，会恢复方案正文并显示具体原因。</p></div>`;
+  }
+
+  function refreshPlanAnalysisTask(task) {
+    if (task?.status !== 'running') return;
+    document.querySelectorAll('[data-plan-analysis-elapsed]').forEach(node => { node.textContent = planTaskElapsed(task); });
+  }
+
+  function startPlanAnalysisTicker(task) {
+    refreshPlanAnalysisTask(task);
+    task.timerId = window.setInterval(() => refreshPlanAnalysisTask(task), 1000);
+  }
+
+  function stopPlanAnalysisTicker(task) {
+    if (!task) return;
+    task.status = 'completed';
+    if (task.timerId) window.clearInterval(task.timerId);
+    task.timerId = null;
   }
 
   function renderPlanTaskBanner() {
@@ -1597,6 +1740,22 @@
     }
   }
 
+  function planParameterKindClass(kind) {
+    return ({ '新增': 'kind-added', '删除': 'kind-removed', '调整': 'kind-changed' })[kind] || 'kind-changed';
+  }
+
+  function planVersionDiffPreviewMarkup(comparison, scope) {
+    const currentScope = comparison.currentScope?.name || scope.title;
+    const previousScope = comparison.previousScope?.name || comparison.previous?.name || '上一版本';
+    const diffLines = (comparison.lines || []).map(line => {
+      const kind = ['removed', 'added', 'same'].includes(line.kind) ? line.kind : 'same';
+      const symbol = kind === 'removed' ? '−' : kind === 'added' ? '+' : ' ';
+      const text = line.text ? esc(line.text) : '&nbsp;';
+      return `<div class="plan-diff-line ${kind}"><i>${symbol}</i><span>${text}</span></div>`;
+    }).join('') || '<div class="plan-diff-line same"><i>•</i><span>两个方案正文相同。</span></div>';
+    return `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap plan-diff-preview-wrap"><section class="plan-diff-preview" aria-label="方案版本改动"><div class="plan-diff-preview-head"><p class="eyebrow">方案版本改动</p><h2>${esc(comparison.current?.version || '')} · ${esc(currentScope)}</h2><p>与 ${esc(comparison.previous?.version || '')} · ${esc(previousScope)} 对比</p></div><div class="plan-diff-legend"><span class="old">灰色划线：上一版本中删除或替换的内容</span><span class="new">绿色高亮：当前版本新增或替换的内容</span></div><div class="plan-diff">${diffLines}</div></section></div></div>`;
+  }
+
   async function renderPlanBookView() {
     const book = R.planBook;
     const host = $('planBookBody');
@@ -1623,12 +1782,18 @@
     }
     const imported = book.imported;
     const task = runningPlanTaskFor(book);
+    const comparison = book.comparison;
     const sections = planDisplaySections(content);
     const selectedSections = selectedPlanSections(book, sections);
     const presentation = planPresentationStyle(rawContent);
     const isEditing = Boolean(editorState && !imported && !task);
     const layoutMode = isEditing ? editorState.presentation.layout : planLayoutMode(presentation, book);
-    const sourceAction = task
+    const isAnalysingComparison = Boolean(comparison?.analysisTask?.status === 'running');
+    const sourceAction = isAnalysingComparison
+      ? planAnalysisTaskMarkup(comparison, scope)
+      : comparison
+      ? planVersionDiffPreviewMarkup(comparison, scope)
+      : task
       ? planGenerationMarkup(task)
       : imported
       ? `<div class="plan-book-source"><p class="eyebrow">已导入方案资料</p><h2>准备生成实验方案书</h2><p>资料已转换为 Markdown 并保存到 <b>${esc(imported.storedPath || '导入资料')}</b>。点击下方按钮后，AI 会依照统一模板整理为实验目的、设计、材料、步骤、记录与风险等板块。${content ? '生成后将替换当前方案书。' : ''}</p><button id="generatePlanBookButton" type="button" class="primary-button">生成实验方案书</button></div>`
@@ -1636,10 +1801,10 @@
         ? `<div class="plan-book-edit-layout">${planEditorTopPanelMarkup(editorState)}${planEditableA4Markup(plan, scope, editorState)}</div>`
         : content
         ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap has-floating-controls"><div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
-        : '<div class="plan-book-empty"><h2>尚未创建实验方案书</h2><p>可导入方案资料后由 AI 按统一模板生成，也可以直接打开简易编辑器手动编写。编辑内容会保存为 Markdown。</p><button id="createPlanBookButton" type="button" class="primary-button">✎ 手动编辑方案书</button></div>';
-    const currentContentReady = Boolean(content && !imported && !task);
+        : '<div class="plan-book-empty"><h2>尚未创建实验方案书</h2><p>可导入已有实验书，或直接手动编写。两种方式的内容都会保存为 Markdown。</p><div class="plan-book-actions"><button id="importEmptyPlanBookButton" type="button" class="primary-button">⇧ 导入实验书</button><button id="createPlanBookButton" type="button" class="secondary-button">✎ 手动编辑方案书</button></div></div>';
+    const currentContentReady = Boolean(content && !imported && !task && !comparison);
     const canEditPlanBook = Boolean(!imported && !task);
-    host.innerHTML = `<div class="plan-book-shell"><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isEditing ? '正在直接编辑下方 A4 方案书；上方工具栏会作用于纸张内的正文。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions"><button id="backToPlansButton" class="secondary-button" type="button">← 返回实验方案</button>${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${canEditPlanBook && !isEditing ? '<button id="editPlanBookButton" class="secondary-button" type="button">✎ 编辑方案书</button>' : ''}${currentContentReady ? '<button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
+    host.innerHTML = `<div class="plan-book-shell"><button id="backToPlansButton" class="secondary-button plan-book-back" type="button">← 返回实验方案</button><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isAnalysingComparison ? '正在使用 AI 分析两个版本中实际会影响实验执行的参数。' : comparison ? '正在阅览当前方案与上一版本的正文改动。' : isEditing ? '正在直接编辑下方 A4 方案书；上方工具栏会作用于纸张内的正文。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions">${comparison ? (isAnalysingComparison ? '<span class="plan-analysis-status" role="status">AI 参数分析中…</span>' : '<button id="closePlanDiffButton" class="secondary-button" type="button">← 返回方案正文</button>') : `${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${canEditPlanBook && !isEditing ? '<button id="editPlanBookButton" class="secondary-button" type="button">✎ 编辑方案书</button>' : ''}${currentContentReady ? '<button id="showPlanDiffButton" class="secondary-button" type="button">查看版本改动</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}`}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
     $('backToPlansButton').onclick = () => {
       editorState?.dispose?.();
       if (R.planEditor === editorState) R.planEditor = null;
@@ -1647,6 +1812,12 @@
     };
     $('importPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
+    $('showPlanDiffButton')?.addEventListener('click', () => showPlanVersionComparison(book));
+    $('closePlanDiffButton')?.addEventListener('click', async () => {
+      book.comparison = null;
+      await renderPlanBookView();
+    });
+    $('importEmptyPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('createPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
     $('exportPlanBookButton')?.addEventListener('click', () => openPlanExportDialog(book.planId, book.subexperimentId, book.selectedSections, book.includeRecordSheet, book.layoutMode || layoutMode));
     $('generatePlanBookButton')?.addEventListener('click', () => generatePlanBook(book, scope));
@@ -1667,10 +1838,10 @@
         includeRecordSheet: Boolean(book.includeRecordSheet)
       });
     };
-    if (!isEditing && content && !imported && !task) refreshA4Pages();
+    if (!isEditing && content && !imported && !task && !comparison) refreshA4Pages();
     if (isEditing) {
       bindPlanContentEditor({ plan, scope, book, editorState, refreshPreview: refreshA4Pages });
-    } else {
+    } else if (!comparison) {
       document.querySelectorAll('[data-plan-section]').forEach(control => control.addEventListener('change', () => {
         book.selectedSections = [...document.querySelectorAll('[data-plan-section]:checked')].map(input => input.value);
         refreshA4Pages();
@@ -1718,16 +1889,29 @@
       const response = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(task.planId)}/content`, {
         method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId: task.subexperimentId })
       });
+      try {
+        await synchroniseImpactedPlanVersionAnalyses(task.planId, task.subexperimentId);
+      } catch (analysisError) {
+        task.analysisError = analysisError.message;
+      }
       task.status = 'completed';
       stopPlanTask(task);
       if (R.active?.slug === task.projectSlug) {
         R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
-        if (R.planBook?.planId === task.planId && R.planBook?.subexperimentId === task.subexperimentId) R.planBook = { ...R.planBook, imported: null };
+        if (R.planBook?.planId === task.planId && R.planBook?.subexperimentId === task.subexperimentId) {
+          R.planBook = {
+            ...R.planBook,
+            imported: null,
+            selectedSections: planDisplaySections(content).map(section => section.key),
+            includeRecordSheet: true
+          };
+        }
         await loadAgents();
         renderPlansView();
         if (currentView() === 'planBook' && R.planBook?.planId === task.planId && R.planBook?.subexperimentId === task.subexperimentId) await renderPlanBookView();
       }
       notifyPlanGenerationFinished(task);
+      if (task.analysisError) toast(`方案书已生成，但版本参数分析未同步：${task.analysisError}`);
     } catch (error) {
       task.status = 'failed';
       stopPlanTask(task);
@@ -1858,28 +2042,138 @@
     });
   }
 
-  async function openPlanDiffDialog(planId) {
-    if (!R.active) { toast('请先选择项目'); return; }
+  async function legacyTextPlanVersionComparison(book) {
+    if (!R.active || !book) { toast('请先选择项目'); return; }
+    const query = book.subexperimentId ? `?subexperimentId=${encodeURIComponent(book.subexperimentId)}` : '';
     try {
-      const comparison = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/compare`);
+      const comparison = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/compare${query}`);
       if (!comparison.previous) {
-        toast('这是当前项目最早创建的方案，尚无上一次方案可对比');
+        toast(comparison.message || '这是当前项目最早创建的方案，尚无上一次方案可对比');
         return;
       }
-      const diffLines = (comparison.lines || []).map(line => {
-        const symbol = line.kind === 'removed' ? '−' : line.kind === 'added' ? '+' : ' ';
-        const text = line.text ? esc(line.text) : '&nbsp;';
-        return `<div class="plan-diff-line ${esc(line.kind)}"><i>${symbol}</i><span>${text}</span></div>`;
-      }).join('') || '<div class="plan-diff-line same"><i>•</i><span>两个方案正文相同。</span></div>';
-      openModal(`<div class="modal-header"><div><h2>方案版本改动</h2><p>对比 <b>${esc(comparison.previous.version)} · ${esc(comparison.previous.name)}</b> 与 <b>${esc(comparison.current.version)} · ${esc(comparison.current.name)}</b> 的方案正文。</p></div><button class="close-button" data-close-modal>×</button></div>
-        <div class="modal-body"><div class="plan-diff-legend"><span class="old">灰色划线：上一次方案中删除或替换的内容</span><span class="new">绿色高亮：当前方案新增或替换的内容</span></div><div class="plan-diff">${diffLines}</div></div>
-        <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>关闭</button></div>`);
+      if (R.planBook?.planId !== book.planId || R.planBook?.subexperimentId !== book.subexperimentId) return;
+      book.comparison = comparison;
+      await renderPlanBookView();
     } catch (error) {
       toast(`读取方案差异失败：${error.message}`);
     }
   }
 
   // ---------------------------------------------------------- 视图：日志 --
+  function planComparisonUrl(planId, subexperimentId = '') {
+    const query = subexperimentId ? `?subexperimentId=${encodeURIComponent(subexperimentId)}` : '';
+    return `${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/compare${query}`;
+  }
+
+  function extractPlanAnalysisJson(modelText) {
+    const source = String(modelText || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const start = source.indexOf('{');
+    const end = source.lastIndexOf('}');
+    if (start < 0 || end <= start) throw new Error('AI 未返回可读取的 JSON 分析结果。');
+    let parsed;
+    try {
+      parsed = JSON.parse(source.slice(start, end + 1));
+    } catch (_) {
+      throw new Error('AI 返回的版本改动分析不是有效 JSON。');
+    }
+    if (!parsed || !Array.isArray(parsed.changes)) throw new Error('AI 返回的版本改动分析缺少 changes 列表。');
+    return { changes: parsed.changes };
+  }
+
+  function planVersionAnalysisPrompt(analysisInput) {
+    return [
+      {
+        role: 'system',
+        content: '你是科研实验方案的版本参数审阅员。只比较输入中的“实验步骤”，绝不分析或输出实验试剂、材料、仪器或其他板块。只报告会改变实际执行的条件或操作：温度、时间、气氛、速率、次数、顺序、加料/洗涤/干燥/烧结等具体条件。完全忽略标题、段落、语序、加粗、补充说明和同义改写；两版语义相同即使文字不同，也绝不能算改动。不得推测原文没有的参数或事实。只返回严格 JSON，不要 Markdown、解释或代码块：{"changes":[{"section":"实验步骤","parameter":"具体参数名称","before":"上一版本的精确值；无则写—","after":"当前版本的精确值；无则写—","kind":"新增、删除或调整"}]}。没有符合范围的实际参数改动时返回 {"changes":[]}。'
+      },
+      {
+        role: 'user',
+        content: `请按上述规则分析以下两版方案的限定章节：\n${JSON.stringify(analysisInput)}`
+      }
+    ];
+  }
+
+  async function synchronisePlanVersionAnalysis(planId, subexperimentId = '', comparison = null) {
+    if (!R.active) throw new Error('请先选择项目。');
+    const source = comparison || await api(planComparisonUrl(planId, subexperimentId));
+    if (!source.previous) return source;
+    const analysis = extractPlanAnalysisJson(await askModel(planVersionAnalysisPrompt(source.analysisInput || {})));
+    const saved = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/compare`, {
+      method: 'PUT',
+      body: JSON.stringify({ subexperimentId, analysis })
+    });
+    return saved.comparison || source;
+  }
+
+  async function synchroniseImpactedPlanVersionAnalyses(planId, subexperimentId = '') {
+    const ordered = [...R.plans].sort((left, right) => String(left.createdAt || '').localeCompare(String(right.createdAt || '')));
+    const index = ordered.findIndex(plan => plan.id === planId);
+    const targets = [{ planId, subexperimentId }];
+    const next = index >= 0 ? ordered[index + 1] : null;
+    const current = ordered[index];
+    if (next && current) {
+      if (subexperimentId) {
+        const currentSubexperiment = current.subexperiments?.find(item => item.id === subexperimentId);
+        const nextSubexperiment = currentSubexperiment && next.subexperiments?.find(item => item.name === currentSubexperiment.name);
+        if (nextSubexperiment) targets.push({ planId: next.id, subexperimentId: nextSubexperiment.id });
+      } else if (!(next.subexperiments?.length)) {
+        targets.push({ planId: next.id, subexperimentId: '' });
+      }
+    }
+    const results = [];
+    for (const target of targets) results.push(await synchronisePlanVersionAnalysis(target.planId, target.subexperimentId));
+    return results;
+  }
+
+  function planVersionDiffPreviewMarkup(comparison, scope) {
+    const currentScope = comparison.currentScope?.name || scope.title;
+    const previousScope = comparison.previousScope?.name || comparison.previous?.name || '上一版本';
+    const changes = Array.isArray(comparison.analysis?.changes) ? comparison.analysis.changes : [];
+    const rows = changes.map(change => {
+      const kind = change.kind || '调整';
+      return `<tr><th>${esc(change.parameter || '')}</th><td class="plan-parameter-before">${esc(change.before || '—')}</td><td class="plan-parameter-after">${esc(change.after || '—')}</td><td><span class="plan-parameter-kind ${planParameterKindClass(kind)}">${esc(kind)}</span></td></tr>`;
+    }).join('');
+    const body = rows
+      ? `<div class="plan-parameter-table-wrap"><table class="plan-parameter-table"><thead><tr><th>实验步骤参数</th><th>上一版本</th><th>当前版本</th><th>变更</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="plan-parameter-empty">未发现实验步骤的实际参数改动。</div>';
+    return `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap plan-diff-preview-wrap"><section class="plan-diff-preview" aria-label="方案版本参数改动"><div class="plan-diff-preview-head"><p class="eyebrow">AI 语义参数分析</p><h2>${esc(comparison.current?.version || '')} · ${esc(currentScope)}</h2><p>与 ${esc(comparison.previous?.version || '')} · ${esc(previousScope)} 对比；仅展示实验步骤的实际参数变化。</p></div>${body}</section></div></div>`;
+  }
+
+  async function showPlanVersionComparison(book) {
+    if (!R.active || !book) { toast('请先选择项目'); return; }
+    if (book.comparison?.analysisTask?.status === 'running') {
+      toast('AI 正在分析当前方案版本，请稍候。');
+      return;
+    }
+    let analysisTask = null;
+    try {
+      let comparison = await api(planComparisonUrl(book.planId, book.subexperimentId));
+      if (!comparison.previous) {
+        toast(comparison.message || '这是当前项目最早创建的方案，尚无上一版本可对比');
+        return;
+      }
+      if (!comparison.analysis) {
+        analysisTask = { status: 'running', startedAt: Date.now(), timerId: null };
+        comparison.analysisTask = analysisTask;
+        book.comparison = comparison;
+        await renderPlanBookView();
+        startPlanAnalysisTicker(analysisTask);
+        comparison = await synchronisePlanVersionAnalysis(book.planId, book.subexperimentId, comparison);
+        stopPlanAnalysisTicker(analysisTask);
+      }
+      if (R.planBook?.planId !== book.planId || R.planBook?.subexperimentId !== book.subexperimentId) return;
+      book.comparison = comparison;
+      await renderPlanBookView();
+    } catch (error) {
+      stopPlanAnalysisTicker(analysisTask);
+      if (book.comparison?.analysisTask === analysisTask) {
+        book.comparison = null;
+        if (R.planBook?.planId === book.planId && R.planBook?.subexperimentId === book.subexperimentId) await renderPlanBookView();
+      }
+      toast(`分析方案参数改动失败：${error.message}`);
+    }
+  }
+
   function normalizeLog(log = {}) {
     const source = typeof log.source === 'string' ? log.source : '';
     const phenomena = typeof log.phenomena === 'string' ? log.phenomena : '';
@@ -2137,9 +2431,31 @@
     toast('已导出 Markdown 实验日志');
   }
 
-  function exportProject() {
+  async function exportProject() {
     if (!R.active) { toast('请先选择项目'); return; }
-    openModal(`<div class="modal-header"><div><h2>导出项目记忆 Markdown</h2><p>项目原始资料仍保存在 SciHub 的科研项目目录；此操作只将汇总后的项目记忆复制到你选择的位置。</p></div><button class="close-button" data-close-modal>×</button></div>
+    let memory = '';
+    try {
+      memory = (await api(`${slugPath(R.active.slug)}/memory`)).content || '';
+    } catch (error) {
+      toast(`无法生成精简项目记忆：${error.message}`);
+      return;
+    }
+    openModal(`<div class="modal-header"><div><h2>预览精简项目记忆</h2><p>仅保留方案基线、版本参数增量、近期实验事实、问题与待确认项；它作为模型的参考上下文，不会替代模型独立推理。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><pre class="agents-preview" style="max-height:52vh">${esc(memory || '尚未生成项目记忆。')}</pre></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="continueProjectExportButton" type="button" class="primary-button">下一步：选择导出位置</button></div>`, () => {
+      $('continueProjectExportButton').onclick = openProjectExportDialog;
+    });
+  }
+
+  function openUsageTutorial() {
+    openModal(`<div class="modal-header"><div><p class="eyebrow">SciHub 使用教学</p><h2>从项目到实验记录，六步上手</h2><p>所有项目资料默认保存在本机；按顺序完成下面几步，就能建立一条可追溯的科研记录链。</p></div><button class="close-button" data-close-modal aria-label="关闭使用教学">×</button></div>
+      <div class="modal-body usage-tutorial-body"><section class="usage-tutorial-note"><b>开始前</b><span>AI 设置是可选的。未配置 AI 时，仍可手动编辑方案书、记录日志与导入对话。</span></section><ol class="usage-tutorial-steps"><li><div><b>创建或选择研究项目</b><p>在首页创建项目，或用左侧项目下拉框切换。一个项目对应一套独立的方案、日志、对话和项目记忆。</p></div></li><li><div><b>新建实验方案与子实验</b><p>进入“实验方案”后点击“新建实验方案”，填写版本号；再为不同工作内容添加子实验。每个子实验都有各自的方案书与日志。</p></div></li><li><div><b>导入或编辑实验方案书</b><p>在对应子实验中点击“查看实验方案”，可导入 Word、PDF、Markdown 或文本资料，也可以直接编辑。导入资料后可使用 AI 整理成标准方案书。</p></div></li><li><div><b>核对版本改动</b><p>进入方案书后点击“查看版本改动”。系统只比较实验步骤中会影响执行的实际参数，例如质量、时间、温度和转速；新增、删除、调整会以不同颜色标识。</p></div></li><li><div><b>关联方案记录实验日志</b><p>在方案或子实验旁点击“记录日志”，当天日志会自动关联到该方案。也可在“实验日志”页面手写或导入文档，保存后会同步项目记忆。</p></div></li><li><div><b>保存对话并导出项目记忆</b><p>在“对话记录”中新建或导入 AI 对话。右上角“一键导出记忆”会先预览精简上下文：只保留有效方案、版本改动、事实与问题，再让你选择导出位置。</p></div></li></ol><section class="usage-tutorial-privacy"><b>隐私提示</b><span>只有在你主动使用 AI 润色、生成或分析时，相关内容才会发送到你配置的模型接口；API Key 仅保存在当前浏览器。</span></section></div>
+      <div class="modal-footer"><button type="button" class="primary-button" data-close-modal>开始使用</button></div>`);
+  }
+
+  function openProjectExportDialog() {
+    if (!R.active) { toast('请先选择项目'); return; }
+    openModal(`<div class="modal-header"><div><h2>导出精简项目记忆 Markdown</h2><p>项目原始资料仍保存在 SciHub 的科研项目目录；此操作只将精简后的 AI 上下文复制到你选择的位置。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="exportProjectForm"><div class="modal-body"><label class="form-field full"><span>导出文件夹</span><div class="inline-file-actions"><input id="exportProjectPath" required placeholder="例如：D:\\科研资料\\导出" /><button id="chooseExportFolder" type="button" class="secondary-button">选择导出文件夹</button></div><small class="field-note">若同名文件已存在，会自动使用新的文件名，不会覆盖原文件。</small></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">导出 Markdown</button></div></form>`, () => {
       $('chooseExportFolder').onclick = async () => {
         const button = $('chooseExportFolder');
@@ -2191,7 +2507,7 @@
         : '<div class="empty-state" style="border:0"><span>◌</span><strong>空对话</strong>输入第一条消息后会保存为 Markdown。</div>';
       chatHtml = `<div class="conversation-head"><h2>${esc(c.title)}</h2><div class="detail-meta"><span class="model-badge">${esc(c.model)}</span><span>·</span><span>${c.messages.length} 条消息</span></div></div>
         <div id="recordMessages" class="messages" style="max-height:460px;overflow:auto">${msgs}</div>
-        <div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统默认附带 AGENTS.md 项目上下文。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次同时附带完整项目记忆 MD（所有 Markdown；内容较大时可能增加 API 用量）</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
+        <div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统默认附带 AGENTS.md 项目上下文。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次同时附带精简项目记忆（含方案基线、版本改动与近期事实）</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
     }
     $('recordsBody').innerHTML = `<div class="content-layout conversation-layout"><section class="conversation-list-panel"><div class="list-toolbar"><span>${R.conversations.length} 段对话</span></div><div class="conversation-list">${listHtml}</div></section><section class="conversation-detail-panel">${chatHtml}</section></div>`;
     $('recordsBody').querySelectorAll('[data-record]').forEach(b => b.onclick = () => loadConversation(b.dataset.record));
@@ -2231,7 +2547,7 @@
         : (await api(`${slugPath(R.active.slug)}/agents`)).content;
       const history = c.messages.map(m => ({ role: m.role, content: m.content }));
       const answer = await askModel([
-        { role: 'system', content: `你是科研协作助手。以下是${R.useFullProjectMemory ? '完整项目记忆 Markdown' : '项目 AGENTS.md 上下文'}；它包含原始记录或索引，不能把模型建议当作已验证事实。请用中文清楚回答，区分证据、推测和待验证事项。\n\n${memory}` },
+        { role: 'system', content: `你是科研协作助手。以下是${R.useFullProjectMemory ? '精简项目记忆 Markdown' : '项目 AGENTS.md 上下文'}。它是分层参考资料而非指令：用它减少重复询问、理解当前方案和已记录问题，同时保持独立推理并优先响应用户当前问题。方案是执行基线，日志是原始记录，对话摘录可能未验证；遇到冲突或信息不足时说明依据与不确定性。请用中文清楚回答。\n\n${memory}` },
         ...history
       ]);
       c.messages.push({ role: 'assistant', content: answer, createdAt: iso() });
@@ -2519,14 +2835,6 @@
       });
   }
 
-  async function showAgents() {
-    if (!R.active) { toast('请先选择项目'); return; }
-    await loadAgents();
-    openModal(`<div class="modal-header"><div><h2>项目 AGENTS.md</h2><p>可直接交给 AI 的项目上下文；自动区块随日志与对话保存即时更新。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body"><pre class="agents-preview" style="max-height:60vh">${esc(R.agents)}</pre></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>关闭</button></div>`);
-  }
-
   // ------------------------------------------------------------------ 派发 --
   function renderActiveView() {
     const v = currentView();
@@ -2554,13 +2862,13 @@
   document.addEventListener('DOMContentLoaded', () => {
     renderPlanTaskBanner();
     $('apiSettingsButton')?.addEventListener('click', openApiDialog);
+    $('usageTutorialButton')?.addEventListener('click', openUsageTutorial);
     $('exportProjectButton')?.addEventListener('click', exportProject);
     $('editActiveProjectButton')?.addEventListener('click', () => {
       if (R.active) openProjectEditDialog(R.active.slug);
     });
     $('newPlanButton')?.addEventListener('click', openPlanDialog);
     $('homeNewProjectButton')?.addEventListener('click', openProjectDialog);
-    $('viewAgentsButton')?.addEventListener('click', showAgents);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
     window.addEventListener('beforeunload', event => {
       if (R.planGeneration?.status === 'running') {

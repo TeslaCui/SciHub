@@ -33,6 +33,10 @@
     if (!target) return;
     document.querySelectorAll('.view').forEach(item => item.classList.toggle('active-view', item === target));
     document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.view === view));
+    // 子实验版本切换仅服务于方案书阅览；切换离开时立即收起，
+    // 不依赖异步的方案数据渲染完成。
+    const planBookSwitcher = document.getElementById('planBookSwitcher');
+    if (planBookSwitcher) planBookSwitcher.hidden = view !== 'planBook';
     document.querySelector('.sidebar')?.classList.remove('open');
     window.SciHubRecords?.onViewActivated(view);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -48,7 +52,6 @@
   document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => switchView(button.dataset.view)));
     document.getElementById('addProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
-    document.getElementById('topNewProjectButton')?.addEventListener('click', () => window.SciHubRecords?.openProjectDialog());
     document.getElementById('homeLogoButton')?.addEventListener('click', () => switchView('home'));
     document.getElementById('menuButton')?.addEventListener('click', () => document.querySelector('.sidebar')?.classList.toggle('open'));
     let sidebarCollapsed = false;
