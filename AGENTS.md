@@ -25,6 +25,8 @@ SciHub 是本地优先的科研记录工具，仅提供：
 ## 代码结构
 
 - `scihub_server.py`：本地 HTTP 服务与项目、日志、对话、项目记忆、AI 转发 API；日志导出接口为 `/api/projects/<slug>/logs/<date>/export`，DOCX 导入接口为 `/api/projects/<slug>/logs/<date>/import`。
+- `agent_runtime.py`：确定性 Agent Router、专职 Agent/Skill 注册表、四类 Provider 适配器、受限记忆上下文与轻量执行追踪；Agent 不直接写项目文件。
+- `memory_index.py`：项目 Markdown 分块、SQLite FTS5/纯 Python 回退检索、增量哈希索引、来源追踪与 `PITFALLS_SUMMARY.md` 自动区域维护。
 - `index.html`：只包含实验日志、对话记录、项目记忆三个视图。
 - `app.js`：轻量导航、提示消息和项目创建入口。
 - `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT / DeepSeek 原生推理强度、单输入框的自动日志整理、DOCX/Markdown/文本导入、Markdown 导出和 `AGENTS.md` 预览。
@@ -39,3 +41,7 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - `AGENTS.md` 是 AI 上下文，不等同于已验证的科研结论；需区分原始观察、模型建议和已验证证据。
 - AI 自动整理与润色只允许修正错别字、语病、表达和结构；不得改变实验原意、事实、数据、条件、现象或不确定性。原始输入必须与自动生成板块一同保留在日志 Markdown 中。
 - DOCX 导入仅提取文本和内嵌图片元数据（文件名、类型、大小）；不得额外写入图片二进制文件，确保项目生成内容保持 Markdown 为主。
+- 项目 `.scihub/memory.sqlite3`、`memory-state.json` 与 `index-status.json` 是可重建的派生索引，不是科研事实源；不得用索引内容覆盖原始 Markdown。
+- `PITFALLS_SUMMARY.md` 仅允许更新自动区域；区域外的人工信息必须保留。只有原始记录明确包含的异常、原因或改进信息才能进入自动索引。
+- API Key 只保存在浏览器本地配置并按请求临时发送给本机服务，禁止写入项目文件、索引、追踪或服务日志。
+- Agent 扩展接口为 `POST /api/projects/<slug>/agents/run`；记忆接口为 `POST .../memory/search`、`GET .../memory/status` 和 `POST .../memory/rebuild`。原有 `/api/proxy` 和项目 CRUD 接口继续保留。

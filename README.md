@@ -64,7 +64,7 @@ py -3 -m pip install pypdf python-docx reportlab
 
 审核并保存后，方案正文仍写入 `项目/V1/方案.md`。方案卡片还可以按需导出 Word 或 PDF，这些导出文件仅在下载时生成，不会保存到项目目录，因此后台持久化内容始终是 Markdown。
 
-在“对话记录”中，默认只把 `AGENTS.md` 作为上下文发送给所选 AI；如需让模型读取一键整合的全部项目内容，可在发送框下勾选“本次同时附带完整项目记忆 MD”。该选项会把所有项目 Markdown 一并发送给你当前选择的模型服务商，适合在确认 API 用量和隐私边界后使用。
+在“对话记录”中，`AGENTS.md` 作为短基线，Conversation Agent 再从本地记忆索引中按当前问题召回相关方案、日志、踩坑和对话片段。勾选“本次同时附带精简项目记忆”会扩大召回范围，但不会默认把整个原始文件树发送给模型。
 
 新建方案时，可将“上一次方案文件”载入为草稿，再使用已配置的 GPT、Gemini、Claude 或 DeepSeek 接口一键润色生成新的实验方案。AI 仅应改善错别字、表达与结构，不会被要求编造实验事实。创建下一版本后，点击“查看版本改动”可逐行对比：上一次方案中删除或替换的内容显示为灰色划线，当前方案新增内容显示为绿色高亮。
 
@@ -83,6 +83,18 @@ DeepSeek 的当前预设为 `deepseek-v4-pro` 和 `deepseek-v4-flash`；`deepsee
 
 填写服务商、模型和 API Key 后，可点击“测试连接”。测试会使用当前表单内容发送一条最短请求，不要求先保存设置，并在窗口中显示成功结果或服务商返回的错误信息。
 
+AI 设置支持“默认配置”和各专职 Agent 的独立配置。未单独配置的 Agent 使用默认模型；日志整理、历史日志导入、方案生成、方案辅助、方案对比、选中文字修改和项目对话可以分别选择服务商、模型、推理强度与 API Key。所有 Key 仍只保存在当前浏览器。
+
+## Agent 路由与项目记忆索引
+
+SciHub 使用进程内的确定性 Router，把明确的界面操作路由给对应 Agent，不使用额外模型判断任务类型。Agent 只获得其任务需要的上下文；项目检索结果作为带来源的参考资料处理，不能改变系统规则或触发文件操作。
+
+可通过环境变量 `SCIHUB_AGENT_MODE=legacy|shadow|active` 控制切换：`legacy` 强制使用旧调用，`shadow` 同时验证新 Agent 但实际采用旧结果，`active` 使用新 Agent 并仅在本机服务不支持新接口时回退。当前默认是已经过回归验证的 `active`。
+
+项目 Markdown 始终是唯一事实源。`.scihub/memory.sqlite3`、`memory-state.json` 与 `index-status.json` 仅是可重建的派生索引；SQLite 支持 FTS5 时使用全文检索，不支持时自动改用纯 Python 检索。实验相关问题会优先召回 `PITFALLS_SUMMARY.md` 和“实验异常与踩坑点”段落。
+
+本地 Agent 接口为 `POST /api/projects/<slug>/agents/run`；记忆检索、状态和重建接口分别为 `POST .../memory/search`、`GET .../memory/status` 和 `POST .../memory/rebuild`。这些接口是现有日志、方案、对话和 `/api/proxy` 接口之外的兼容扩展。
+
 ## 文件结构
 
 每个项目位于 `科研项目/<项目名称>/`：
@@ -91,6 +103,11 @@ DeepSeek 的当前预设为 `deepseek-v4-pro` 和 `deepseek-v4-flash`；`deepsee
 科研项目/<项目名称>/
 ├── README.md          # 项目说明与重要信息
 ├── AGENTS.md          # 可提供给 AI 的项目记忆
+├── PITFALLS_SUMMARY.md # 保留人工区域的自动踩坑索引
+├── .scihub/            # 可重建的派生记忆索引，不是事实源
+│   ├── memory.sqlite3
+│   ├── memory-state.json
+│   └── index-status.json
 ├── V1/
 │   ├── 方案.md          # V1 的方案说明
 │   ├── 子实验 A/

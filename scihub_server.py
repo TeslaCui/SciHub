@@ -17,6 +17,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -30,12 +31,41 @@ from typing import Any, Optional
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape as xml_escape
 
+from agent_runtime import run_agent
+
+try:
+    from memory_index import (
+        build_index as ensure_project_index,
+        memory_status as memory_index_status,
+        rebuild_index as rebuild_project_index,
+        search_memory as search_project_memory,
+        parse_front_matter as parse_memory_front_matter,
+        MemoryIndex,
+    )
+except ImportError:  # pragma: no cover - compatibility while upgrading an install
+    ensure_project_index = None
+    memory_index_status = None
+    rebuild_project_index = None
+    search_project_memory = None
+    parse_memory_front_matter = None
+    MemoryIndex = None
+
+if MemoryIndex is not None:
+    def update_pitfalls_summary(project_root: Path) -> bool:
+        with MemoryIndex(project_root) as index:
+            return index.update_pitfalls_summary()
+else:
+    update_pitfalls_summary = None
+
 ROOT = Path(__file__).resolve().parent
 PROJECTS_ROOT = ROOT / "科研项目"
 HOST = "127.0.0.1"
 PORT = 8770
 MAX_BODY_SIZE = 24 * 1024 * 1024
-APP_VERSION = "2026.07.27"
+APP_VERSION = "2026.07.31-agent-runtime"
+AGENT_RUNTIME_MODE = os.environ.get("SCIHUB_AGENT_MODE", "active").strip().lower()
+if AGENT_RUNTIME_MODE not in {"legacy", "shadow", "active"}:
+    AGENT_RUNTIME_MODE = "active"
 
 INDEX_FILE = "index.html"
 SLUG_RE = re.compile(r"^[\w一-鿿-]+$", re.UNICODE)
@@ -195,6 +225,12 @@ def load_project(slug: str) -> dict:
         raise ApiError("项目标识与项目文件夹不一致。")
     project = {"slug": slug, "dir": directory, "meta": doc["meta"], "content": doc["content"]}
     project["compatibilityUpdates"] = synchronise_existing_project(project)
+    # The memory index is a rebuildable derivative.  Failure to create it
+    # must never prevent an existing project from opening.
+    try:
+        refresh_project_memory_index(project)
+    except (OSError, ValueError, RuntimeError):
+        project["memoryIndexWarning"] = True
     return project
 
 
@@ -230,6 +266,51 @@ def project_summary(project: dict) -> dict:
         "logCount": len(logs),
         "conversationCount": len(conversations),
     }
+
+
+def refresh_project_memory_index(project: dict, rebuild: bool = False) -> dict:
+    """Update only derived memory files; source Markdown remains authoritative."""
+    if rebuild and rebuild_project_index:
+        return rebuild_project_index(project["dir"])
+    if ensure_project_index:
+        return ensure_project_index(project["dir"])
+    return {"available": False, "mode": "unavailable", "updated": 0}
+
+
+def project_memory_search(project: dict, query: str, agent_id: str = "", limit: int = 8) -> list[dict]:
+    if not search_project_memory:
+        return []
+    refresh_project_memory_index(project)
+    pitfall_first = agent_id in {"conversation-agent", "log-organizer", "log-import-classifier", "plan-generator"}
+    hits = search_project_memory(project["dir"], query, limit=limit, pitfall_first=pitfall_first)
+    if pitfall_first:
+        pitfall_hits = search_project_memory(
+            project["dir"],
+            "实验异常 踩坑 失败 原因 改进 避坑",
+            limit=limit,
+            pitfall_first=True,
+        )
+        merged = []
+        seen_paths = set()
+        for hit in pitfall_hits + hits:
+            key = (hit.get("source_path"), hit.get("title"), hit.get("chunk_id"))
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            merged.append(hit)
+            if len(merged) >= limit:
+                break
+        hits = merged
+    return [
+        {
+            **hit,
+            "path": hit.get("source_path", ""),
+            "heading": hit.get("title", ""),
+            "excerpt": hit.get("content", ""),
+            "status": hit.get("verification_status") or "reference",
+        }
+        for hit in hits
+    ]
 
 
 def validate_export_directory(value: Any) -> Path:
@@ -788,6 +869,11 @@ def update_agents(project: dict) -> None:
         old = f"# {name} · 项目协作记忆\n\n可在自动区块外手工补充长期有效信息。\n"
     stripped = AUTO_BLOCK_RE.sub("", old).rstrip()
     write_markdown(path, stripped + "\n\n" + auto + "\n")
+    try:
+        refresh_project_memory_index(project)
+    except (OSError, ValueError, RuntimeError):
+        # A derived index or summary must never make a normal save fail.
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -2116,6 +2202,7 @@ def read_log(project: dict, date: str, association: Optional[dict] = None) -> di
         "source": get_section(doc["content"], "原始输入") or get_section(doc["content"], "原始实验记录"),
         "phenomena": get_section(doc["content"], "实验现象"),
         "record": get_section(doc["content"], "实验记录"),
+        "pitfalls": get_section(doc["content"], "实验异常与踩坑点"),
         "images": images,
         "updatedAt": meta_value(doc["meta"], "updated_at"),
     }
@@ -2138,6 +2225,19 @@ def write_log(project: dict, date: str, payload: dict) -> dict:
     source = str(payload.get("source", ""))
     phenomena = str(payload.get("phenomena", ""))
     record = str(payload.get("record", ""))
+    pitfalls = str(payload.get("pitfalls", ""))
+    source_meta = {}
+    if parse_memory_front_matter and source.lstrip().startswith("---"):
+        try:
+            source_meta, _ = parse_memory_front_matter(source.lstrip())
+        except (TypeError, ValueError):
+            source_meta = {}
+    for key in ("sample_id", "process", "status", "tags", "temp_celsius"):
+        value = payload.get(key, source_meta.get(key))
+        if isinstance(value, list):
+            value = ", ".join(one_line(item) for item in value if one_line(item))
+        if value not in (None, ""):
+            meta[key] = one_line(value)
     raw_images = payload.get("images", [])
     images = [one_line(item) for item in raw_images if one_line(item)][:100] if isinstance(raw_images, list) else []
     # 旧版本的“原始实验记录”仍可读取；新日志统一使用单输入框对应的“原始输入”。
@@ -2155,6 +2255,8 @@ def write_log(project: dict, date: str, payload: dict) -> dict:
         f"## 实验现象\n\n{phenomena}",
         f"## 实验记录\n\n{record}",
     ])
+    if pitfalls.strip():
+        sections.append(f"## 实验异常与踩坑点\n\n{pitfalls}")
     if images:
         sections.append("## 导入文档图片信息\n\n" + "\n".join(f"- {item}" for item in images))
     body = "\n\n".join(sections) + "\n"
@@ -2470,17 +2572,20 @@ def write_classified_import_logs(project: dict, date: str, payload: dict) -> dic
         subexperiment_id = one_line(raw.get("subexperimentId"))
         phenomena = str(raw.get("phenomena", "")).strip()
         record = str(raw.get("record", "")).strip()
-        if not phenomena and not record:
+        pitfalls = str(raw.get("pitfalls", "")).strip()
+        if not phenomena and not record and not pitfalls:
             continue
         if subexperiment_id:
             subexperiment = next((item for item in plan.get("subexperiments", []) if item.get("id") == subexperiment_id), None)
             if not subexperiment:
                 raise ApiError("AI 返回了当前方案不存在的子实验，已停止写入。")
-        bucket = grouped.setdefault(subexperiment_id, {"phenomena": [], "record": []})
+        bucket = grouped.setdefault(subexperiment_id, {"phenomena": [], "record": [], "pitfalls": []})
         if phenomena:
             bucket["phenomena"].append(phenomena)
         if record:
             bucket["record"].append(record)
+        if pitfalls:
+            bucket["pitfalls"].append(pitfalls)
     if not grouped:
         raise ApiError("AI 未识别到可归档的已执行实验信息。")
 
@@ -2506,6 +2611,7 @@ def write_classified_import_logs(project: dict, date: str, payload: dict) -> dic
             "images": images,
             "phenomena": "\n\n".join(bucket["phenomena"]),
             "record": "\n\n".join(bucket["record"]),
+            "pitfalls": "\n\n".join(bucket["pitfalls"]),
         })
         result.append(read_log(project, date, association))
     return {"logs": result, "count": len(result)}
@@ -3271,7 +3377,7 @@ class SciHubHandler(BaseHTTPRequestHandler):
         try:
             segments = self._segments()
             if segments == ["api", "health"]:
-                self._send_json(HTTPStatus.OK, {"service": "SciHub", "version": APP_VERSION})
+                self._send_json(HTTPStatus.OK, {"service": "SciHub", "version": APP_VERSION, "agentMode": AGENT_RUNTIME_MODE})
                 return
             if segments[:2] == ["api", "projects"]:
                 self._handle_projects(segments)
@@ -3428,11 +3534,12 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"content": content})
             return
 
-        if method == "GET" and len(segments) == 4 and segments[3] == "memory":
-            self._send_json(
-                HTTPStatus.OK,
-                {"content": export_project_markdown(project).decode("utf-8")},
-            )
+        if len(segments) >= 4 and segments[3] == "agents" and len(segments) == 5 and segments[4] == "run" and method == "POST":
+            self._handle_agent_run(project)
+            return
+
+        if len(segments) >= 4 and segments[3] == "memory":
+            self._handle_memory(project, segments)
             return
 
         if len(segments) >= 4 and segments[3] == "plans":
@@ -3658,6 +3765,64 @@ class SciHubHandler(BaseHTTPRequestHandler):
         raise ApiError("不支持的请求方式。", HTTPStatus.METHOD_NOT_ALLOWED)
 
     # --- AI 代理 --- #
+    def _handle_agent_run(self, project: dict):
+        if AGENT_RUNTIME_MODE == "legacy":
+            raise ApiError("Agent Runtime 当前处于 legacy 模式", HTTPStatus.NOT_FOUND)
+        payload = self._read_json()
+        if not isinstance(payload, dict):
+            raise ApiError("Agent 请求格式无效")
+        operation = one_line(payload.get("operation"))
+        agent_id = one_line(payload.get("agentId"))
+        if not operation and not agent_id:
+            raise ApiError("必须指定 Agent 或 operation")
+
+        def memory_search(query: str, routed_agent: str, limit: int) -> list[dict]:
+            return project_memory_search(project, query, routed_agent, limit)
+
+        try:
+            result = run_agent(project["slug"], payload, memory_search=memory_search)
+        except ValueError as error:
+            raise ApiError(str(error)) from error
+        except RuntimeError as error:
+            raise ApiError(str(error), HTTPStatus.BAD_GATEWAY) from error
+        response = result.as_dict()
+        response["runtimeMode"] = AGENT_RUNTIME_MODE
+        # Keep the top-level content convenient for small clients while the
+        # nested result remains the stable trace-bearing contract.
+        response["result"] = dict(response)
+        self._send_json(HTTPStatus.OK, response)
+
+    def _handle_memory(self, project: dict, segments: list):
+        method = self.command
+        if method == "GET" and len(segments) == 4:
+            self._send_json(
+                HTTPStatus.OK,
+                {"content": export_project_markdown(project).decode("utf-8")},
+            )
+            return
+        if method == "GET" and len(segments) == 5 and segments[4] == "status":
+            status = memory_index_status(project["dir"]) if memory_index_status else {"available": False, "mode": "unavailable"}
+            self._send_json(HTTPStatus.OK, status)
+            return
+        if method == "POST" and len(segments) == 5 and segments[4] == "search":
+            payload = self._read_json()
+            query = one_line(payload.get("query"))
+            if not query:
+                raise ApiError("请填写记忆检索关键词")
+            try:
+                limit = max(1, min(int(payload.get("limit", 8) or 8), 50))
+            except (TypeError, ValueError):
+                raise ApiError("记忆检索 limit 必须是整数")
+            self._send_json(
+                HTTPStatus.OK,
+                {"hits": project_memory_search(project, query, one_line(payload.get("agentId")), limit)},
+            )
+            return
+        if method == "POST" and len(segments) == 5 and segments[4] == "rebuild":
+            self._send_json(HTTPStatus.OK, refresh_project_memory_index(project, rebuild=True))
+            return
+        raise ApiError("找不到项目记忆接口", HTTPStatus.NOT_FOUND)
+
     def _handle_proxy(self):
         payload = self._read_json()
         url = payload.get("url")

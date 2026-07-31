@@ -8,6 +8,17 @@
   'use strict';
 
   const API_SETTINGS_KEY = 'scihub-api-settings-v1';
+  const AGENT_SETTINGS_KEY = 'scihub-agent-settings-v1';
+  const AGENT_CONFIG_IDS = [
+    ['default', '默认配置'],
+    ['log-organizer', '日志整理 Agent'],
+    ['log-import-classifier', '历史日志导入 Agent'],
+    ['plan-generator', '方案生成 Agent'],
+    ['plan-auxiliary', '方案辅助 Agent'],
+    ['plan-comparator', '方案对比 Agent'],
+    ['text-rewriter', '选中文字修改 Agent'],
+    ['conversation-agent', '对话 Agent']
+  ];
   const TODAY = new Date().toISOString().slice(0, 10);
   const PROVIDERS = {
     openai: {
@@ -50,7 +61,7 @@
     active: null,        // 当前项目 summary
     tab: 'logs',
     date: TODAY,
-    log: { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '', aiContext: '', includePlanMemory: true },
+    log: { source: '', phenomena: '', record: '', pitfalls: '', images: [], formattedSource: '', planId: '', subexperimentId: '', aiContext: '', includePlanMemory: true },
     logs: [],
     plans: [],
     planBook: null,
@@ -62,6 +73,8 @@
     agents: '',
     autoPolish: true,
     useFullProjectMemory: false,
+    lastAgentTrace: null,
+    sessionKeys: {},
     sessionKey: ''       // 未持久化时本会话内的 API Key
   };
 
@@ -75,8 +88,38 @@
   const slugPath = slug => `/api/projects/${encodeURIComponent(slug)}`;
 
   // API 设置（含 Key）存 localStorage；仅在用户点击发送时才随请求发出。
-  function readSettings() { try { return JSON.parse(localStorage.getItem(API_SETTINGS_KEY)) || {}; } catch { return {}; } }
-  function saveSettings(s) { localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(s)); }
+  function readRoutingSettings() {
+    try {
+      const current = JSON.parse(localStorage.getItem(AGENT_SETTINGS_KEY));
+      if (current && typeof current === 'object') {
+        return { version: 1, default: current.default || {}, agents: current.agents || {} };
+      }
+    } catch { /* fall through to legacy migration */ }
+    try {
+      const legacy = JSON.parse(localStorage.getItem(API_SETTINGS_KEY));
+      if (legacy && typeof legacy === 'object') {
+        const migrated = { version: 1, default: legacy, agents: {} };
+        localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+    } catch { /* use an empty configuration */ }
+    return { version: 1, default: {}, agents: {} };
+  }
+  function readSettings() { return readRoutingSettings().default || {}; }
+  function settingsForAgent(agentId = '') {
+    const routing = readRoutingSettings();
+    const rawOverride = agentId && routing.agents?.[agentId] ? routing.agents[agentId] : {};
+    const override = Object.fromEntries(Object.entries(rawOverride).filter(([, value]) => value !== '' && value !== null && value !== undefined));
+    return normalizeSettings({ ...(routing.default || {}), ...override });
+  }
+  function saveSettings(s, target = 'default') {
+    const routing = readRoutingSettings();
+    if (target === 'default') routing.default = s;
+    else routing.agents[target] = s;
+    localStorage.setItem(AGENT_SETTINGS_KEY, JSON.stringify(routing));
+    // Keep the old key in sync for older pages or a temporary fallback.
+    if (target === 'default') localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(s));
+  }
 
   function providerFor(settings) {
     if (PROVIDERS[settings.provider]) return settings.provider;
@@ -105,6 +148,10 @@
   }
 
   function settingsForUse() { return normalizeSettings(readSettings()); }
+
+  function effectiveAgentSettings(agentId, draftSettings = null) {
+    return normalizeSettings(draftSettings || settingsForAgent(agentId));
+  }
 
   function geminiEndpoint(settings) {
     return settings.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
@@ -172,6 +219,49 @@
     return content;
   }
 
+  async function askAgent(agentId, messages, draftSettings = null, options = {}) {
+    const settings = effectiveAgentSettings(agentId, draftSettings);
+    const routing = readRoutingSettings();
+    const override = routing.agents?.[agentId] || {};
+    const fallbackUsed = !draftSettings && !Object.values(override).some(value => value !== '' && value !== null && value !== undefined);
+    const key = settings.key || R.sessionKeys[agentId] || R.sessionKey;
+    if (!settings.model || !key) throw new Error('请先在「AI 设置」中配置当前 Agent 的模型和 API Key。');
+    const payload = {
+      agentId,
+      operation: options.operation || '',
+      messages,
+      memoryMode: options.memoryMode || 'none',
+      memoryQuery: options.memoryQuery || '',
+      fallbackUsed,
+      modelConfig: { ...settings, key }
+    };
+    try {
+      const response = await api(`${slugPath(R.active.slug)}/agents/run`, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      const result = response.result || response;
+      if (!result.content) throw new Error('Agent 未返回可用内容');
+      // Keep the latest trace small and transient; it is never persisted.
+      R.lastAgentTrace = {
+        agentId: result.agentId || agentId,
+        skills: result.skills || [],
+        sources: result.sources || [],
+        fallbackUsed: Boolean(result.fallbackUsed),
+        warnings: [...(result.warnings || []), ...(response.runtimeMode === 'shadow' ? ['shadow 模式：本次结果仅用于验证，实际使用旧调用结果'] : [])]
+      };
+      if (response.runtimeMode === 'shadow') return askModel(messages, { ...settings, key });
+      return result.content;
+    } catch (error) {
+      // Only an older local server (404/405) activates the compatibility
+      // request.  Upstream model failures are surfaced once, not retried
+      // through a second provider path.
+      if (!/(404|405|找不到|not found|method)/i.test(String(error.message || ''))) throw error;
+      R.lastAgentTrace = { agentId, skills: [], sources: [], fallbackUsed: true, warnings: [`legacy fallback: ${error.message}`] };
+      return askModel(messages, { ...settings, key });
+    }
+  }
+
   // ------------------------------------------------------------- 项目加载 --
   async function refreshProjects(keepSlug = true) {
     const keep = keepSlug ? R.active?.slug : null;
@@ -200,7 +290,7 @@
   async function loadProject(slug) {
     R.active = R.projects.find(p => p.slug === slug) || null;
     R.date = TODAY;
-    R.log = { source: '', phenomena: '', record: '', images: [], formattedSource: '', planId: '', subexperimentId: '' };
+    R.log = { source: '', phenomena: '', record: '', pitfalls: '', images: [], formattedSource: '', planId: '', subexperimentId: '' };
     R.autoPolish = true;
     R.useFullProjectMemory = false;
     R.conversation = null;
@@ -997,7 +1087,7 @@
         aiSubmit.textContent = 'AI 修改中…';
         editor.setAttribute('contenteditable', 'false');
         try {
-          const result = (await askModel([
+          const result = (await askAgent('text-rewriter', [
             { role: 'system', content: '你是严谨的中文科研实验方案编辑。只根据用户的修改要求改善所给选中文字的表达、结构或清晰度。绝对不得虚构、删除、替换或改变实验事实、数据、单位、条件、观察现象、样品编号、时间、结论、风险、限制或不确定性；信息不足时保留原样。仅返回可直接替换选中文字的纯文本；可保留必要换行，不要添加 Markdown 标记、代码块、标题、说明或引号。' },
             { role: 'user', content: `修改要求：${request}\n\n选中文字：\n${savedText}` }
           ])).trim();
@@ -1278,7 +1368,7 @@
       aiSubmit.textContent = 'AI 修改中…';
       editor.setAttribute('contenteditable', 'false');
       try {
-        const result = (await askModel([
+        const result = (await askAgent('text-rewriter', [
           { role: 'system', content: '你是严谨的中文科研实验方案编辑。只根据用户的修改要求改善所给选中文字的表达、结构或清晰度。绝对不得虚构、删除、替换或改变实验事实、数据、单位、条件、观察现象、样品编号、时间、结论、风险、限制或不确定性；信息不足时保留原样。仅返回可直接替换选中文字的纯文本；可保留必要换行，不要添加 Markdown 标记、代码块、标题、说明或引号。' },
           { role: 'user', content: `修改要求：${request}\n\n选中文字：\n${savedText}` }
         ])).trim();
@@ -2107,7 +2197,7 @@
         const current = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(target.planId)}/content${scopeQuery}`);
         const markdown = editablePlanContent(current.content || '');
         if (!markdown || markdown === '尚未填写实验方案正文。') throw new Error('方案正文为空，未调用 AI');
-        const generated = parseGeneratedPlan(await askModel(planUpgradePrompt(markdown)));
+        const generated = parseGeneratedPlan(await askAgent('plan-auxiliary', planUpgradePrompt(markdown), null, { operation: 'plan.upgrade' }));
         if (String(generated.markdown).replace(/\r\n/g, '\n').trim() !== String(markdown).replace(/\r\n/g, '\n').trim()) {
           throw new Error('AI 返回的正文与原方案不一致，已拒绝保存该项');
         }
@@ -2170,7 +2260,7 @@
 
   async function runPlanGeneration(task) {
     try {
-      const generated = parseGeneratedPlan(await askModel(standardPlanPrompt(task.imported.markdown || task.imported.source || '')));
+      const generated = parseGeneratedPlan(await askAgent('plan-generator', standardPlanPrompt(task.imported.markdown || task.imported.source || ''), null, { operation: 'plan.generate' }));
       const content = generated.markdown;
       const response = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(task.planId)}/content`, {
         method: 'PUT', body: JSON.stringify({ planContent: content, planAuxiliary: generated.auxiliary, subexperimentId: task.subexperimentId })
@@ -2213,7 +2303,7 @@
     book.supplementOpen = true;
     await renderPlanBookView();
     try {
-      const parsed = parseStrictJsonObject(await askModel(planAuxiliaryPrompt(markdown)), 'AI 辅助分析返回');
+      const parsed = parseStrictJsonObject(await askAgent('plan-auxiliary', planAuxiliaryPrompt(markdown), null, { operation: 'plan.auxiliary' }), 'AI 辅助分析返回');
       const auxiliary = {
         cues: Array.isArray(parsed.cues) ? parsed.cues : [],
         recordFields: Array.isArray(parsed.recordFields) ? parsed.recordFields : [],
@@ -2412,7 +2502,7 @@
     if (!R.active) throw new Error('请先选择项目。');
     const source = comparison || await api(planComparisonUrl(planId, subexperimentId));
     if (!source.previous) return source;
-    const analysis = extractPlanAnalysisJson(await askModel(planVersionAnalysisPrompt(source.analysisInput || {})));
+    const analysis = extractPlanAnalysisJson(await askAgent('plan-comparator', planVersionAnalysisPrompt(source.analysisInput || {}), null, { operation: 'plan.compare' }));
     const saved = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/compare`, {
       method: 'PUT',
       body: JSON.stringify({ subexperimentId, analysis })
@@ -2493,6 +2583,7 @@
     const source = typeof log.source === 'string' ? log.source : '';
     const phenomena = typeof log.phenomena === 'string' ? log.phenomena : '';
     const record = typeof log.record === 'string' ? log.record : '';
+    const pitfalls = typeof log.pitfalls === 'string' ? log.pitfalls : '';
     const planId = typeof log.planId === 'string' ? log.planId : '';
     const subexperimentId = typeof log.subexperimentId === 'string' ? log.subexperimentId : '';
     return {
@@ -2500,6 +2591,7 @@
       source,
       phenomena,
       record,
+      pitfalls,
       images: Array.isArray(log.images) ? log.images : [],
       planId,
       planName: typeof log.planName === 'string' ? log.planName : '',
@@ -2508,7 +2600,7 @@
       subexperimentName: typeof log.subexperimentName === 'string' ? log.subexperimentName : '',
       aiContext: typeof log.aiContext === 'string' ? log.aiContext : '',
       includePlanMemory: log.includePlanMemory !== false,
-      formattedSource: source && (phenomena || record) ? source : ''
+      formattedSource: source && (phenomena || record || pitfalls) ? source : ''
     };
   }
 
@@ -2516,7 +2608,8 @@
     if (log.source.trim()) return log.source;
     return [
       log.phenomena.trim() ? `实验现象：\n${log.phenomena.trim()}` : '',
-      log.record.trim() ? `实验记录：\n${log.record.trim()}` : ''
+      log.record.trim() ? `实验记录：\n${log.record.trim()}` : '',
+      log.pitfalls.trim() ? `实验异常与踩坑点：\n${log.pitfalls.trim()}` : ''
     ].filter(Boolean).join('\n\n');
   }
 
@@ -2624,6 +2717,7 @@
       } else if (!autoPolish) {
         R.log.phenomena = '';
         R.log.record = source;
+        R.log.pitfalls = '';
         R.log.formattedSource = '';
       }
       const data = await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(R.log) });
@@ -2669,16 +2763,17 @@
     const contextMessage = context
       ? `\n\n以下是仅用于术语、样品与步骤校对的实验方案记忆。它不是实验已经发生的证据，不能用它补写、修改或推断导入文档中没有的事实：\n\n${context}`
       : '';
-    const reply = await askModel([
-      { role: 'system', content: '你是严谨的中文科研实验日志编辑。请从导入文档中提取明确属于已执行实验的过程、条件、数据、观察现象、结果、异常和后续事项，整理为“实验现象”和“实验记录”两个板块，并润色错别字、语法、表达和结构。背景介绍、文献内容、计划步骤或模板字段若未明确已执行，不得写成实验记录。不得编造、删减、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性；导入文档原文会被另外保存，整理结果必须忠于原意。实验方案记忆只能用于核对术语、样品与步骤，不得作为实验发生的依据。只返回 JSON：{"phenomena":"...","record":"..."}。' },
+    const reply = await askAgent('log-organizer', [
+      { role: 'system', content: '你是严谨的中文科研实验日志编辑。请从导入文档中提取明确属于已执行实验的过程、条件、数据、观察现象、结果、异常和后续事项，整理为“实验现象”和“实验记录”两个板块，并润色错别字、语法、表达和结构。若原文明确记录了异常、失败、原因分析或改进方案，再额外整理“实验异常与踩坑点”；没有明确记录时 pitfalls 必须为空。背景介绍、文献内容、计划步骤或模板字段若未明确已执行，不得写成实验记录。不得编造、删减、替换或推断任何实验事实、数据、单位、样品编号、日期、条件、观察现象、结论或不确定性；导入文档原文会被另外保存，整理结果必须忠于原意。实验方案记忆只能用于核对术语、样品与步骤，不得作为实验发生的依据。只返回 JSON：{"phenomena":"...","record":"...","pitfalls":"..."}。' },
       { role: 'user', content: `# 待提取的导入文档\n\n${source}${contextMessage}` }
-    ]);
+    ], null, { operation: 'log.organize', memoryMode: 'related', memoryQuery: source.slice(0, 600) });
     let parsed;
     try { const hit = reply.match(/\{[\s\S]*\}/); parsed = JSON.parse(hit ? hit[0] : reply); }
     catch { throw new Error('模型未返回可用的日志结构，请检查模型设置后重试。'); }
     R.log.phenomena = typeof parsed.phenomena === 'string' ? parsed.phenomena : '';
     R.log.record = typeof parsed.record === 'string' ? parsed.record : '';
-    if (!R.log.phenomena.trim() && !R.log.record.trim()) throw new Error('模型未生成实验日志内容，请重试。');
+    R.log.pitfalls = typeof parsed.pitfalls === 'string' ? parsed.pitfalls : '';
+    if (!R.log.phenomena.trim() && !R.log.record.trim() && !R.log.pitfalls.trim()) throw new Error('模型未生成实验日志内容，请重试。');
     R.log.formattedSource = source;
   }
 
@@ -2724,8 +2819,8 @@
     ].filter(Boolean).join('\n')).join('\n\n---\n\n');
     const sourceForAi = source.length > 60000 ? `${source.slice(0, 60000)}\n\n[导入原文过长，后续内容未发送给 AI；完整原文仍会保存到日志]` : source;
     const extra = manualMemory.trim() ? `\n\n用户补充校对信息（不能当作实验事实）：\n${manualMemory.trim().slice(0, 4000)}` : '';
-    const reply = await askModel([
-      { role: 'system', content: '你是严谨的中文科研实验日志归档助手。请从历史实验日志中提取明确已经发生的实验过程、条件、数据、观察现象、结果、异常和后续事项，修正错别字、语病、表达和结构，并按实验方案中的子实验分类。背景介绍、文献内容、计划步骤、模板字段和无法确认的内容不要写入实验记录。不得编造、替换、推断或补全任何事实、数据、单位、样品编号、日期、条件、现象或结论。只有与某个子实验明确对应时才分配该子实验；无法判断的内容放入 unassigned。每个子实验最多返回一个 entry。只返回 JSON：{"entries":[{"subexperimentId":"必须来自给定 ID","phenomena":"...","record":"..."}],"unassigned":"..."}。phenomena 和 record 都应是可直接保存的中文 Markdown；没有内容时返回空字符串。' },
+    const reply = await askAgent('log-import-classifier', [
+      { role: 'system', content: '你是严谨的中文科研实验日志归档助手。请从历史实验日志中提取明确已经发生的实验过程、条件、数据、观察现象、结果、异常和后续事项，修正错别字、语病、表达和结构，并按实验方案中的子实验分类。仅当原文明确记录异常、失败、原因分析或改进方案时填写 pitfalls，否则必须为空。背景介绍、文献内容、计划步骤、模板字段和无法确认的内容不要写入实验记录。不得编造、替换、推断或补全任何事实、数据、单位、样品编号、日期、条件、现象或结论。只有与某个子实验明确对应时才分配该子实验；无法判断的内容放入 unassigned。每个子实验最多返回一个 entry。只返回 JSON：{"entries":[{"subexperimentId":"必须来自给定 ID","phenomena":"...","record":"...","pitfalls":"..."}],"unassigned":"..."}。各字段都应是可直接保存的中文 Markdown；没有内容时返回空字符串。' },
       { role: 'user', content: `# 导入文件\n${sourceFilename}\n\n# 待整理的历史日志\n${sourceForAi}${extra}\n\n# 目标实验方案版本与子实验\n${scopeText}` }
     ]);
     const parsed = parseAiJsonObject(reply);
@@ -2742,19 +2837,21 @@
       if (!scopeById.has(subexperimentId)) continue;
       const phenomena = typeof raw.phenomena === 'string' ? raw.phenomena.trim() : '';
       const record = typeof raw.record === 'string' ? raw.record.trim() : '';
-      if (!phenomena && !record) continue;
-      const current = seen.get(subexperimentId) || { subexperimentId, phenomena: [], record: [] };
+      const pitfalls = typeof raw.pitfalls === 'string' ? raw.pitfalls.trim() : '';
+      if (!phenomena && !record && !pitfalls) continue;
+      const current = seen.get(subexperimentId) || { subexperimentId, phenomena: [], record: [], pitfalls: [] };
       if (phenomena) current.phenomena.push(phenomena);
       if (record) current.record.push(record);
+      if (pitfalls) current.pitfalls.push(pitfalls);
       seen.set(subexperimentId, current);
     }
     const unassigned = typeof parsed.unassigned === 'string' ? parsed.unassigned.trim() : '';
     if (unassigned) {
-      const current = seen.get('') || { subexperimentId: '', phenomena: [], record: [] };
+      const current = seen.get('') || { subexperimentId: '', phenomena: [], record: [], pitfalls: [] };
       current.record.push(`待归类的导入信息：\n${unassigned}`);
       seen.set('', current);
     }
-    for (const entry of seen.values()) entries.push({ subexperimentId: entry.subexperimentId, phenomena: entry.phenomena.join('\n\n'), record: entry.record.join('\n\n') });
+    for (const entry of seen.values()) entries.push({ subexperimentId: entry.subexperimentId, phenomena: entry.phenomena.join('\n\n'), record: entry.record.join('\n\n'), pitfalls: entry.pitfalls.join('\n\n') });
     if (!entries.length) throw new Error('AI 未识别到可归档的已执行实验信息。');
     return { planId, entries };
   }
@@ -2900,9 +2997,13 @@
       const msgs = c.messages.length
         ? c.messages.map(m => `<article class="message"><div class="message-avatar ${m.role === 'assistant' ? 'assistant' : ''}">${m.role === 'assistant' ? esc((c.model || 'A').slice(0, 1)) : '我'}</div><div class="message-content"><div class="message-meta">${m.role === 'assistant' ? esc(c.model || 'AI') : '你'} <small>${esc((m.createdAt || '').replace('T', ' ').slice(0, 16))}</small></div><div class="message-bubble">${esc(m.content)}</div></div></article>`).join('')
         : '<div class="empty-state" style="border:0"><span>◌</span><strong>空对话</strong>输入第一条消息后会保存为 Markdown。</div>';
+      const trace = R.lastAgentTrace;
+      const traceHtml = trace
+        ? `<details class="agent-trace"><summary>本次 Agent 路由与来源</summary><div><b>${esc(trace.agentId || 'unknown')}</b>${trace.fallbackUsed ? ' · 使用默认/兼容配置' : ''}<br><span>${esc((trace.skills || []).join(' · '))}</span>${trace.sources?.length ? `<br><small>来源：${esc(trace.sources.map(item => item.path || '').filter(Boolean).join('、'))}</small>` : ''}${trace.warnings?.length ? `<br><small>${esc(trace.warnings.join('；'))}</small>` : ''}</div></details>`
+        : '';
       chatHtml = `<div class="conversation-head"><h2>${esc(c.title)}</h2><div class="detail-meta"><span class="model-badge">${esc(c.model)}</span><span>·</span><span>${c.messages.length} 条消息</span></div></div>
         <div id="recordMessages" class="messages" style="max-height:460px;overflow:auto">${msgs}</div>
-        <div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统默认附带 AGENTS.md 项目上下文。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次同时附带精简项目记忆（含方案基线、版本改动与近期事实）</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
+        ${traceHtml}<div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统默认附带 AGENTS.md 项目上下文。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次同时附带精简项目记忆（含方案基线、版本改动与近期事实）</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
     }
     $('recordsBody').innerHTML = `<div class="content-layout conversation-layout"><section class="conversation-list-panel"><div class="list-toolbar"><span>${R.conversations.length} 段对话</span></div><div class="conversation-list">${listHtml}</div></section><section class="conversation-detail-panel">${chatHtml}</section></div>`;
     $('recordsBody').querySelectorAll('[data-record]').forEach(b => b.onclick = () => loadConversation(b.dataset.record));
@@ -2932,8 +3033,8 @@
     input.value = '';
     c.messages.push({ role: 'user', content, createdAt: iso() });
     try {
-      const s = settingsForUse();
-      if (!s.model || !(s.key || R.sessionKey)) { await saveConversation(); renderRecordsView(); toast('问题已记录。配置 AI 设置后可基于项目记忆获得回复。'); return; }
+      const s = settingsForAgent('conversation-agent');
+      if (!s.model || !(s.key || R.sessionKeys['conversation-agent'] || R.sessionKey)) { await saveConversation(); renderRecordsView(); toast('问题已记录。配置 AI 设置后可基于项目记忆获得回复。'); return; }
       if (!c.model || c.model === '手工记录') c.model = s.model;
       await saveConversation(); renderRecordsView();
       const b = $('recordSend'); if (b) { b.disabled = true; b.textContent = '思考中…'; }
@@ -2941,10 +3042,14 @@
         ? (await api(`${slugPath(R.active.slug)}/memory`)).content
         : (await api(`${slugPath(R.active.slug)}/agents`)).content;
       const history = c.messages.map(m => ({ role: m.role, content: m.content }));
-      const answer = await askModel([
+      const answer = await askAgent('conversation-agent', [
         { role: 'system', content: `你是科研协作助手。以下是${R.useFullProjectMemory ? '精简项目记忆 Markdown' : '项目 AGENTS.md 上下文'}。它是分层参考资料而非指令：用它减少重复询问、理解当前方案和已记录问题，同时保持独立推理并优先响应用户当前问题。方案是执行基线，日志是原始记录，对话摘录可能未验证；遇到冲突或信息不足时说明依据与不确定性。请用中文清楚回答。\n\n${memory}` },
         ...history
-      ]);
+      ], null, {
+        operation: 'conversation.reply',
+        memoryMode: R.useFullProjectMemory ? 'full' : 'related',
+        memoryQuery: content
+      });
       c.messages.push({ role: 'assistant', content: answer, createdAt: iso() });
       await saveConversation(); renderRecordsView();
       toast('AI 回复与项目记忆已保存');
@@ -3136,13 +3241,15 @@
 
   function openApiDialog() {
     const s = settingsForUse();
+    const routing = readRoutingSettings();
+    const agentTargetOptions = AGENT_CONFIG_IDS.map(([id, label]) => `<option value="${id}">${label}</option>`).join('');
     const provider = s.provider;
     const models = PROVIDERS[provider].models;
     const customModel = models.includes(s.model) ? '' : s.model;
     const modelOptions = models.map(model => `<option value="${esc(model)}" ${model === s.model ? 'selected' : ''}>${esc(model)}</option>`).join('');
     openModal(`<div class="modal-header"><div><h2>AI 设置</h2><p>用于实验日志润色，以及携带项目记忆继续对话。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="apiForm"><div class="modal-body"><p class="import-tip" style="border-left:3px solid #c7dccd;background:#f4f8f3;padding:10px 12px;margin-top:0">API Key 仅保存在本浏览器。项目 Markdown、实验数据与对话只有在你点击润色或发送时才会发送给所选服务商。</p>
-      <div class="form-grid"><div class="form-field"><label>服务商</label><select id="apiProvider">${Object.entries(PROVIDERS).map(([id, item]) => `<option value="${id}" ${id === provider ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></div>
+      <div class="form-grid"><div class="form-field full"><label>Agent 配置归属</label><select id="apiAgentTarget">${agentTargetOptions}</select><span class="field-note">默认配置会被所有未单独配置的 Agent 使用；可为不同 Agent 分配不同模型和 API Key。</span></div><div class="form-field"><label>服务商</label><select id="apiProvider">${Object.entries(PROVIDERS).map(([id, item]) => `<option value="${id}" ${id === provider ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select></div>
       <div class="form-field"><label>模型</label><select id="apiModel">${modelOptions}<option value="__custom__" ${customModel ? 'selected' : ''}>自定义模型…</option></select></div>
       <div id="customModelField" class="form-field full" ${customModel ? '' : 'hidden'}><label>自定义模型名称</label><input id="apiCustomModel" maxlength="160" value="${esc(customModel)}" placeholder="填写服务商提供的模型 ID" /></div>
       <div class="form-field full"><label>接口地址（可选）</label><input id="apiEndpoint" type="url" value="${esc(s.endpoint)}" placeholder="留空将使用所选服务商的默认接口" /><span class="field-note" id="providerEndpointHint"></span></div>
@@ -3177,6 +3284,20 @@
         };
         $('apiProvider').addEventListener('change', () => { renderModels(PROVIDERS[$('apiProvider').value].models[0]); updateReasoningControl(); $('apiEndpoint').value = ''; });
         $('apiModel').addEventListener('change', () => { $('customModelField').hidden = $('apiModel').value !== '__custom__'; if ($('apiModel').value === '__custom__') $('apiCustomModel').focus(); });
+        const loadTargetSettings = target => {
+          const raw = target === 'default'
+            ? (routing.default || {})
+            : { ...(routing.default || {}), ...(routing.agents?.[target] || {}) };
+          const targetSettings = normalizeSettings(raw);
+          $('apiProvider').value = targetSettings.provider;
+          renderModels(targetSettings.model);
+          $('apiEndpoint').value = targetSettings.endpoint || '';
+          $('apiReasoning').value = targetSettings.reasoningEffort || 'default';
+          $('apiKey').value = targetSettings.key || R.sessionKeys[target] || (target === 'default' ? R.sessionKey : '');
+          $('apiStore').checked = Boolean(targetSettings.persist);
+          updateReasoningControl();
+        };
+        $('apiAgentTarget').addEventListener('change', () => loadTargetSettings($('apiAgentTarget').value));
         renderModels(s.model);
         updateReasoningControl();
         const readDraftSettings = () => {
@@ -3222,8 +3343,10 @@
           const draft = readDraftSettings();
           if (!draft.model) { toast('请选择模型或填写自定义模型名称'); return; }
           const persist = $('apiStore').checked;
-          R.sessionKey = draft.key;
-          saveSettings({ ...draft, key: persist ? draft.key : '', persist });
+          const target = $('apiAgentTarget').value || 'default';
+          if (target === 'default') R.sessionKey = draft.key;
+          else R.sessionKeys[target] = draft.key;
+          saveSettings({ ...draft, key: persist ? draft.key : '', persist }, target);
           closeModal();
           toast(persist ? 'AI 设置已保存到本浏览器' : 'AI 设置已保存；刷新页面后需重新填写 API Key');
         });
