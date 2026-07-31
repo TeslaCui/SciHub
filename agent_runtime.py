@@ -58,6 +58,16 @@ AGENT_CATALOG: dict[str, dict[str, Any]] = {
         "skills": ["markdown-chunker", "front-matter", "fts-index"],
         "context": "none",
     },
+    "memory-curator": {
+        "operations": {"memory.curate", "memory.propose"},
+        "skills": ["memory-extract", "evidence-trace", "strict-json", "fact-preservation"],
+        "context": "none",
+    },
+    "conversation-compactor": {
+        "operations": {"conversation.compact", "chat.compact"},
+        "skills": ["conversation-summary", "strict-json", "source-trace"],
+        "context": "none",
+    },
 }
 
 OPERATION_ALIASES = {
@@ -186,6 +196,14 @@ def prepare_messages(
     if mode not in {"none", "related", "full"}:
         warnings.append("unknown memoryMode; treated as none")
         mode = "none"
+    definition = AGENT_CATALOG.get(agent_id, {})
+    context_policy = definition.get("context", "none")
+    if context_policy == "none" and mode != "none":
+        warnings.append(f"{agent_id} does not allow project memory context; memoryMode was restricted to none")
+        mode = "none"
+    elif context_policy == "related" and mode == "full" and agent_id != "conversation-agent":
+        warnings.append(f"{agent_id} is restricted to related project memory; full memory was reduced")
+        mode = "related"
     if memory_search and mode != "none" and query:
         limit = 8 if mode == "related" else 24
         context_budget = 24000 if mode == "related" else 60000
@@ -296,7 +314,7 @@ def validate_agent_content(agent_id: str, content: str) -> list[str]:
     warnings: list[str] = []
     if not str(content or "").strip():
         raise RuntimeError("Agent returned empty content")
-    if agent_id in {"plan-generator", "plan-auxiliary", "plan-comparator", "log-organizer", "log-import-classifier"}:
+    if agent_id in {"plan-generator", "plan-auxiliary", "plan-comparator", "log-organizer", "log-import-classifier", "memory-curator", "conversation-compactor"}:
         candidate = str(content).strip()
         candidate = candidate.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         try:

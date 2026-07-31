@@ -786,6 +786,38 @@ class MemoryIndex:
         results.sort(key=lambda hit: (-hit.score, hit.source_path, hit.chunk_id))
         return results[:limit]
 
+    def read_chunk(
+        self,
+        *,
+        source_path: str = "",
+        chunk_id: int | None = None,
+        max_chars: int = 8000,
+    ) -> dict[str, Any] | None:
+        """Read one indexed chunk with provenance, without exposing SQL to callers."""
+
+        self.index(update_summary=False)
+        limit = max(1, min(int(max_chars or 8000), 24000))
+        conn = self.connection
+        row: sqlite3.Row | None = None
+        if chunk_id is not None:
+            try:
+                row = conn.execute("SELECT * FROM chunks WHERE id = ?", (int(chunk_id),)).fetchone()
+            except (TypeError, ValueError, sqlite3.Error):
+                row = None
+        elif source_path:
+            normalized = str(source_path).replace("\\", "/").lstrip("/")
+            row = conn.execute(
+                "SELECT * FROM chunks WHERE source_path = ? ORDER BY ordinal LIMIT 1",
+                (normalized,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = self._row_to_result(row, 0.0).to_dict()
+        if len(result.get("content", "")) > limit:
+            result["content"] = result["content"][:limit].rstrip() + "\n[片段已按读取预算截断]"
+            result["excerpt"] = result["content"]
+        return result
+
     def status(self) -> dict[str, Any]:
         conn = self.connection
         documents = int(conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
@@ -814,6 +846,11 @@ class MemoryIndex:
             metadata = json.loads(row["metadata_json"] or "{}")
             if not isinstance(metadata, dict):
                 metadata = {}
+            evidence = _metadata_text(metadata, "evidence_status", "verification_status") or _verification_status(metadata)
+            # Model suggestions and unconfirmed candidates may be searchable,
+            # but they must never become automatic experimental pitfall facts.
+            if evidence.casefold() in {"model_suggestion", "pending_confirmation", "待确认", "模型建议"}:
+                continue
             date = _metadata_text(metadata, "date", "experiment_date", "performed_at", "created_at", "updated_at", "imported_at") or "未注明日期"
             sample = _metadata_text(metadata, "sample_id", "id", "name", "experiment_id") or row["title"] or "未注明实验"
             tags = _metadata_text(metadata, "tags", "tag") or "未注明"

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "scihub-memory": {
+      "command": "<SCIHUB_PYTHON>",
+      "args": [
+        "<SCIHUB_ROOT>\\scihub_mcp_server.py",
+        "--projects-root",
+        "<SCIHUB_ROOT>\\科研项目"
+      ]
+    }
+  }
+}

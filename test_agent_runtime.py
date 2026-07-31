@@ -66,6 +66,22 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertLessEqual(len(reference), 25000)
         self.assertTrue(warnings)
 
+    def test_agent_context_policy_blocks_unrelated_memory(self):
+        payload = {
+            "agentId": "text-rewriter",
+            "messages": [{"role": "user", "content": "rewrite"}],
+            "memoryMode": "full",
+            "memoryQuery": "unrelated",
+        }
+        messages, sources, warnings = prepare_messages(
+            payload,
+            lambda query, agent_id, limit: [{"path": "other.md", "heading": "x", "excerpt": "should not be included"}],
+            "text-rewriter",
+        )
+        self.assertEqual(sources, [])
+        self.assertTrue(any("does not allow project memory" in warning for warning in warnings))
+        self.assertNotIn("should not be included", repr(messages))
+
     def test_non_https_provider_endpoint_is_rejected(self):
         with self.assertRaises(ValueError):
             invoke_provider({"provider": "openai", "model": "m", "key": "k", "endpoint": "http://localhost"}, [])
