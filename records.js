@@ -56,6 +56,7 @@
     planBook: null,
     planEditor: null,
     planGeneration: null,
+    planUpgrade: null,
     conversations: [],
     conversation: null,
     agents: '',
@@ -270,7 +271,10 @@
     // 以子实验为组切换其在不同方案版本中的方案书。
     const visible = Boolean(R.active && currentView() === 'planBook' && R.planBook);
     section.hidden = !visible;
-    if (!visible) return;
+    if (!visible) {
+      list.innerHTML = '';
+      return;
+    }
     const openedPlan = R.plans.find(item => item.id === R.planBook.planId);
     if (!openedPlan) {
       list.innerHTML = '<div class="plan-book-switcher-empty">当前实验方案不可用。</div>';
@@ -294,13 +298,19 @@
     });
     const selectedValue = `${R.planBook.planId}::${R.planBook.subexperimentId || ''}`;
     const selectors = [...groups.values()].map(group => {
-      const versionOptions = group.items
+      const orderedItems = group.items
         .sort((a, b) => String(b.plan.createdAt || '').localeCompare(String(a.plan.createdAt || '')))
+      // 进入 V1/V2 后，侧栏中每一个子实验都默认跟随这个版本；
+      // 用户仍可在各自下拉中切换该子实验的其它版本。
+      const versionMatchedItem = orderedItems.find(({ plan }) => plan.id === openedPlan.id) || orderedItems[0];
+      const selectedGroupValue = `${versionMatchedItem.plan.id}::${versionMatchedItem.subexperiment.id || ''}`;
+      const versionOptions = orderedItems
         .map(({ plan, subexperiment }) => {
           const value = `${plan.id}::${subexperiment.id || ''}`;
-          const selected = value === selectedValue;
+          const selected = value === selectedGroupValue;
           const version = plan.version || '未命名版本';
-          return `<option value="${esc(value)}" ${selected ? 'selected' : ''} title="${esc(`${plan.name} · ${version}`)}">${esc(`${version}${selected ? '（当前查看）' : ''}`)}</option>`;
+          const isOpenedBook = value === selectedValue;
+          return `<option value="${esc(value)}" ${selected ? 'selected' : ''} title="${esc(`${plan.name} · ${version}`)}">${esc(`${version}${isOpenedBook ? '（当前查看）' : ''}`)}</option>`;
         }).join('');
       const isCurrentGroup = group.items.some(({ plan, subexperiment }) => `${plan.id}::${subexperiment.id || ''}` === selectedValue);
       const selectLabel = `选择 ${group.label} 的方案版本`;
@@ -374,6 +384,82 @@
     return projectPath(planFolder, log.subexperimentId ? subexperimentFolder : '', '实验日志', `${date}.md`);
   }
 
+  function planUpgradeTargets() {
+    return R.plans.flatMap(plan => {
+      if (plan.storage === 'legacy') return [];
+      const scopes = plan.subexperiments?.length
+        ? plan.subexperiments.map(item => ({ ...item, subexperimentId: item.id }))
+        : [{ name: plan.name, needsPlanUpdate: plan.needsPlanUpdate, subexperimentId: '' }];
+      return scopes
+        .filter(scope => scope.needsPlanUpdate)
+        .map(scope => ({
+          planId: plan.id,
+          subexperimentId: scope.subexperimentId || '',
+          label: `${plan.version || '未命名版本'} · ${scope.name || plan.name}`
+        }));
+    });
+  }
+
+  function planPreviewButtonMarkup(planId, subexperimentId = '', needsUpdate = false) {
+    const subexperimentAttribute = subexperimentId ? ` data-subexperiment-id="${esc(subexperimentId)}"` : '';
+    const dot = needsUpdate ? '<i class="plan-update-dot" aria-label="有可用方案功能更新" title="方案可更新为当前 AI 功能"></i>' : '';
+    return `<button class="text-button plan-preview-with-update${needsUpdate ? ' needs-plan-update' : ''}" data-preview-plan="${esc(planId)}"${subexperimentAttribute}>查看实验方案${dot}</button>`;
+  }
+
+  function previousPlanForInheritance(plan) {
+    const ordered = [...R.plans].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    const index = ordered.findIndex(item => item.id === plan?.id);
+    return index > 0 ? ordered[index - 1] : null;
+  }
+
+  function inheritableSubexperimentSource(plan, subexperiment) {
+    if (!plan || plan.storage === 'legacy' || !subexperiment || subexperiment.hasPlanContent === true) return null;
+    const previous = previousPlanForInheritance(plan);
+    const source = previous?.subexperiments?.find(item => String(item.name || '').toLocaleLowerCase() === String(subexperiment.name || '').toLocaleLowerCase());
+    return source?.hasPlanContent === true ? { plan: previous, subexperiment: source } : null;
+  }
+
+  function planInheritanceButtonMarkup(plan, subexperiment) {
+    const source = inheritableSubexperimentSource(plan, subexperiment);
+    if (!source) return '';
+    const version = source.plan.version || '上一版本';
+    return `<button class="text-button plan-inherit-book" data-inherit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(subexperiment.id)}" title="不调用 AI；仅复制上一版本同名子实验已保存的方案正文">沿用 ${esc(version)} 方案书</button>`;
+  }
+
+  async function inheritSubexperimentPlanBook(planId, subexperimentId, button) {
+    if (!R.active) { toast('请先选择项目'); return; }
+    const plan = R.plans.find(item => item.id === planId);
+    const subexperiment = plan?.subexperiments?.find(item => item.id === subexperimentId);
+    const source = inheritableSubexperimentSource(plan, subexperiment);
+    if (!source) { toast('当前子实验不满足沿用条件；可能已有方案正文，或上一版本没有同名方案书。'); renderPlansView(); return; }
+
+    const idleText = button?.textContent || `沿用 ${source.plan.version || '上一版本'} 方案书`;
+    if (button) { button.disabled = true; button.textContent = '沿用中…'; }
+    try {
+      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/subexperiments/${encodeURIComponent(subexperimentId)}/inherit-plan`, { method: 'POST' });
+      R.plans = R.plans.map(item => item.id === planId ? response.plan : item);
+      await loadAgents();
+      renderPlansView();
+      renderProjectSidebar();
+      toast(`已沿用 ${source.plan.version || '上一版本'} 的“${subexperiment.name}”方案书，未调用 AI。`);
+    } catch (error) {
+      toast(`沿用方案书失败：${error.message}`);
+      if (button?.isConnected) { button.disabled = false; button.textContent = idleText; }
+    }
+  }
+
+  function planUpgradeBannerMarkup(targets) {
+    const task = R.planUpgrade?.projectSlug === R.active?.slug ? R.planUpgrade : null;
+    if (!targets.length && !task) return '';
+    const running = task?.status === 'running';
+    const current = running && task.current ? `正在更新 ${task.current}/${task.total}：${esc(task.label || '读取方案正文…')}` : '';
+    const description = running
+      ? `${current}<small>将按顺序处理；单项失败不会中断其余方案。</small>`
+      : `可将旧方案升级为当前 AI 功能：四色提示、智能记录表与待确认项。升级仅以现有方案正文为依据，不补写实验事实。`;
+    const count = running ? task.total : targets.length;
+    return `<section class="plan-upgrade-banner" aria-live="polite"><div><b>${running ? '正在一键更新方案书' : '方案功能可更新'}</b><p>${description}</p></div><button id="upgradePlanBooksButton" class="secondary-button" type="button" ${running ? 'disabled' : ''}>${running ? 'AI 更新中…' : `↻ 一键更新方案书（${count} 项）`}</button></section>`;
+  }
+
   function renderPlansView() {
     if (!requireProject('plansProjectTitle', 'plansBody')) return;
     $('plansProjectTitle').textContent = R.active.name;
@@ -382,6 +468,7 @@
       $('plansEmptyCreate').onclick = openPlanDialog;
       return;
     }
+    const upgradeTargets = planUpgradeTargets();
     // 方案页按版本建立时间倒序展示：最新版本在最上方；编辑旧版本不会改变版本顺序。
     const cards = [...R.plans]
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
@@ -392,7 +479,8 @@
         ? plan.subexperiments.map(item => {
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
           const subexperimentPath = projectPath(plan.folder || '实验方案', item.folder || '', '实验方案.md');
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button><button class="text-button" data-preview-plan="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">查看实验方案</button><button class="text-button" data-edit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">编辑方案书</button></div></li>`;
+          const inheritanceButton = planInheritanceButtonMarkup(plan, item);
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button>${inheritanceButton}${planPreviewButtonMarkup(plan.id, item.id, Boolean(item.needsPlanUpdate))}<button class="text-button" data-edit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">编辑方案书</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
@@ -401,12 +489,13 @@
       return `<article class="plan-card">
         <div class="plan-card-head"><div><span class="plan-version">${esc(plan.version)}</span><h2>${esc(plan.name)}</h2></div><div><span class="plan-log-count">${relatedLogs.length} 条关联日志</span>${editable ? `<div class="plan-card-actions"><button class="text-button" data-edit-plan="${esc(plan.id)}">编辑方案信息</button><button class="text-button danger-button" data-delete-plan="${esc(plan.id)}">删除方案</button></div>` : ''}</div></div>
         <p class="plan-description">${esc(plan.description || '尚未填写方案说明。')}</p>
-        <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `<button class="text-button" data-preview-plan="${esc(plan.id)}">查看实验方案</button><button class="text-button" data-edit-plan-book="${esc(plan.id)}">编辑方案书</button>`}</div></div>
+        <div class="plan-files"><div class="plan-section-label">方案书：${esc(planDocumentPath)}</div>${planEntriesHtml(plan.entries)}<div class="plan-file-actions">${hasSubexperiments ? '<span class="plan-file-hint">此方案已有子实验；请在对应子实验中查看和管理方案书。</span>' : `${planPreviewButtonMarkup(plan.id, '', Boolean(plan.needsPlanUpdate))}<button class="text-button" data-edit-plan-book="${esc(plan.id)}">编辑方案书</button>`}</div></div>
         <div class="plan-subexperiments"><div class="plan-section-head"><div class="plan-section-label">子实验</div><button class="text-button" data-add-subexperiment="${esc(plan.id)}">+ 添加子实验</button></div><ul>${subexperiments}</ul></div>
-        <div class="plan-card-foot"><span>${esc(planFolderPath)}/ · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span><button class="secondary-button" data-start-log="${esc(plan.id)}">关联此方案记录日志</button></div>
+        <div class="plan-card-foot"><span>${esc(planFolderPath)}/ · ${esc((plan.updatedAt || '').slice(0, 10) || '刚刚')}</span></div>
       </article>`;
       }).join('');
-    $('plansBody').innerHTML = `<div class="plans-grid">${cards}</div>`;
+    $('plansBody').innerHTML = `${planUpgradeBannerMarkup(upgradeTargets)}<div class="plans-grid">${cards}</div>`;
+    $('upgradePlanBooksButton')?.addEventListener('click', () => startPlanUpgrade(upgradeTargets));
     $('plansBody').querySelectorAll('[data-start-log]').forEach(button => {
       button.onclick = () => startPlanLog(button.dataset.startLog, button.dataset.startSubexperiment || '');
     });
@@ -415,6 +504,9 @@
     });
     $('plansBody').querySelectorAll('[data-preview-plan]').forEach(button => {
       button.onclick = () => openPlanBookPage(button.dataset.previewPlan, button.dataset.subexperimentId || '');
+    });
+    $('plansBody').querySelectorAll('[data-inherit-plan-book]').forEach(button => {
+      button.onclick = () => inheritSubexperimentPlanBook(button.dataset.inheritPlanBook, button.dataset.subexperimentId || '', button);
     });
     $('plansBody').querySelectorAll('[data-edit-plan-book]').forEach(button => {
       button.onclick = () => openPlanContentEditor(button.dataset.editPlanBook, button.dataset.subexperimentId || '');
@@ -647,8 +739,44 @@
 
   function standardPlanPrompt(sourceMarkdown) {
     return [
-      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充；其中已明确的关键动作、条件、参数、时间、顺序或停启条件须用 **粗体** 标记。风险与注意事项中，已明确的重要风险、禁忌、个人防护、异常处理或停止条件也须用 **粗体** 标记。不得为了突出显示而新增或推断任何事实。“材料与仪器”中的试剂、耗材和设备必须写成一个连续自然段，项目之间用中文逗号分隔，不要使用项目符号、编号、卡片或表格。版式应紧凑：使用简洁段落或列表，避免无意义的空行、重复说明和空白板块。不要输出 YAML front matter、一级标题或“以下是方案”等说明。' },
-      { role: 'user', content: `请读取以下已转换的 Markdown 资料，并生成标准实验方案：\n\n${sourceMarkdown}` }
+      { role: 'system', content: '你是一名严谨的科研实验方案编辑。请仅基于用户提供的 Markdown 资料，生成可由研究者审核的中文 Markdown 实验方案。必须使用以下三级标题：### 实验目的、### 研究假设与实验设计、### 材料与仪器、### 实验分组与变量、### 操作步骤、### 记录与数据处理、### 预期结果与判定标准、### 风险与注意事项、### 待确认项。原资料中没有的试剂、仪器、参数、剂量、时间、结论和现象一律不得虚构；缺失的信息必须明确写“待补充”。操作步骤只能重组、澄清已提供的动作或列为待补充，不得为强调而补写任何事实。“材料与仪器”中的试剂、耗材和设备必须写成一个连续自然段，项目之间用中文逗号分隔，不要使用项目符号、编号、卡片或表格。版式应紧凑：使用简洁段落或列表，避免无意义的空行、重复说明和空白板块。\n\n必须只返回一个可解析的 JSON 对象，不要 Markdown 代码块、说明文字或 YAML。格式严格为：{"markdown":"方案正文","cues":[{"kind":"key|data|caution|pending","text":"正文中原样存在的短语","step":"可选的操作步骤原文短语"}],"recordFields":[{"step":"操作步骤中原样存在的短语","name":"只含数据名称，例如称量质量或反应温度"}],"pending":[{"field":"待补充字段","reason":"原资料未说明的具体原因"}]}。markdown 中不写颜色标签、HTML 注释或 AI 猜测。cues 只标记短语：key=已明确关键操作或参数，data=需要记录的数据，caution=风险/注意事项/停止或异常条件，pending=资料缺失且必须补充的信息。text 必须逐字出现在 markdown 的非标题正文中，不能跨行、不能是标题、不能是一整段或长句；同一段最多 3 条。recordFields 必须按操作步骤顺序，name 只能是名称，绝不填写实际数值或单位。资料没有必须补充的信息时 pending 返回空数组。' },
+      { role: 'user', content: `请读取以下已转换的 Markdown 资料，并生成标准实验方案及其辅助分析：\n\n${sourceMarkdown}` }
+    ];
+  }
+
+  function planUpgradePrompt(existingMarkdown) {
+    return [
+      { role: 'system', content: '你正在为既有科研实验方案补齐新版辅助功能。给你的 Markdown 正文是唯一事实来源。markdown 字段必须逐字复制现有正文（仅可去掉首尾空白），不得润色、重排、增删、替换、推断或纠正任何文字或实验事实。必须保留其中每一项已知的试剂、材料、数值、单位、温度、时间、设备、条件、操作、现象、结论与不确定性。必须只返回一个可解析 JSON 对象，不要 Markdown 代码块、说明文字或 YAML。格式严格为：{"markdown":"方案正文","cues":[{"kind":"key|data|caution|pending","text":"正文中原样存在的短语","step":"可选的操作步骤原文短语"}],"recordFields":[{"step":"操作步骤中原样存在的短语","name":"只含数据名称，例如称量质量或反应温度"}],"pending":[{"field":"待补充字段","reason":"原资料未说明的具体原因"}]}。markdown 中不写颜色标签、HTML 注释或 AI 猜测。cues 只标记非标题正文中原样存在的短语，不能跨行、不能是标题、不能是一整段或长句；同一段最多 3 条。key=已明确关键操作或参数，data=需要记录的数据，caution=风险/注意事项/停止或异常条件，pending=资料缺失且必须补充的信息。recordFields 按操作步骤顺序，name 只能是数据名称，绝不填写实际数值或单位。资料没有必须补充的信息时 pending 返回空数组。' },
+      { role: 'user', content: `请在不改变以下既有方案任何实验事实的前提下，返回升级后的正文与当前辅助分析：\n\n${existingMarkdown}` }
+    ];
+  }
+
+  function parseStrictJsonObject(raw, label = 'AI 返回') {
+    const source = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    let parsed;
+    try { parsed = JSON.parse(source); } catch { throw new Error(`${label}不是有效 JSON，请重新分析。`); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${label}格式无效，请重新分析。`);
+    return parsed;
+  }
+
+  function parseGeneratedPlan(raw) {
+    const parsed = parseStrictJsonObject(raw, 'AI 方案返回');
+    const markdown = String(parsed.markdown || '').trim();
+    if (!markdown) throw new Error('AI 未返回可保存的方案正文。');
+    return {
+      markdown,
+      auxiliary: {
+        cues: Array.isArray(parsed.cues) ? parsed.cues : [],
+        recordFields: Array.isArray(parsed.recordFields) ? parsed.recordFields : [],
+        pending: Array.isArray(parsed.pending) ? parsed.pending : []
+      }
+    };
+  }
+
+  function planAuxiliaryPrompt(markdown) {
+    return [
+      { role: 'system', content: '你是科研方案的辅助审阅员。仅根据给定 Markdown 正文提取可验证的辅助信息，绝不补写实验事实、数值、单位、条件或结论。必须只返回 JSON，不要代码块或说明：{"cues":[{"kind":"key|data|caution|pending","text":"正文非标题中原样存在的短语","step":"可选操作步骤原文短语"}],"recordFields":[{"step":"操作步骤中原样存在的短语","name":"仅数据名称，不含数值或单位"}],"pending":[{"field":"待补充字段","reason":"原资料未说明的原因"}]}。四色提示只用短语，不能跨行、不能用标题、不能标整段或长句；每段最多 3 条。key=关键操作/参数，data=需要记录的数据，caution=风险或停止/异常条件，pending=必须补充的信息。recordFields 按步骤顺序，实际数值和单位必须留空。没有必须补充的信息时 pending 返回空数组。' },
+      { role: 'user', content: `请分析以下实验方案正文：\n\n${markdown}` }
     ];
   }
 
@@ -1216,31 +1344,72 @@
     refreshPreview();
   }
 
-  function inlineExecutionHtml(value, emphasisClass = '') {
+  function planCueClass(kind) {
+    return ({ key: 'execution-cue-key', data: 'execution-cue-data', caution: 'execution-cue-caution', pending: 'execution-cue-pending' })[kind] || '';
+  }
+
+  function replaceExecutionCue(html, text, cueClass) {
+    const phrase = esc(String(text || '').trim());
+    if (!phrase || !cueClass || !html.includes(phrase)) return html;
+    return html.replace(phrase, `<mark class="${cueClass}">${phrase}</mark>`);
+  }
+
+  function inlineExecutionHtml(value, emphasisClass = '', cues = []) {
     const strong = emphasisClass ? `<strong class="${emphasisClass}">$1</strong>` : '<strong>$1</strong>';
-    return esc(value)
+    let html = esc(value)
       .replace(/\*\*(.+?)\*\*/g, strong)
       .replace(/`(.+?)`/g, '<code>$1</code>')
       .replace(/_(.+?)_/g, '<em>$1</em>');
+    const seen = new Set();
+    [...(Array.isArray(cues) ? cues : [])]
+      .filter(cue => cue && typeof cue === 'object' && planCueClass(cue.kind) && String(cue.text || '').trim())
+      .sort((left, right) => String(right.text).length - String(left.text).length)
+      .forEach(cue => {
+        const text = String(cue.text).trim();
+        if (seen.has(text)) return;
+        seen.add(text);
+        html = replaceExecutionCue(html, text, planCueClass(cue.kind));
+      });
+    return html;
   }
 
-  function executionPlanHtml(content) {
+  function executionRecordFieldsForLine(value, auxiliary) {
+    const line = String(value || '').replace(/\*\*|[_`]/g, '').replace(/^\s*(?:[-*]\s+|\d+[.)]\s+|>\s*)/, '').trim();
+    if (!line || !auxiliary || !Array.isArray(auxiliary.recordFields)) return [];
+    return [...new Set(auxiliary.recordFields
+      .filter(field => field && typeof field === 'object' && String(field.step || '').trim() && String(field.name || '').trim())
+      .filter(field => line.includes(String(field.step).trim()) || String(field.step).trim().includes(line))
+      .map(field => String(field.name).trim()))];
+  }
+
+  function executionRecordHintHtml(value, currentSection, auxiliary, showHighlights) {
+    if (!showHighlights || !/(?:操作|实验)步骤/.test(currentSection || '')) return '';
+    const names = executionRecordFieldsForLine(value, auxiliary);
+    return names.length ? `<span class="execution-record-hint">记录：${esc(names.join('、'))}</span>` : '';
+  }
+
+  function executionPlanHtml(content, { auxiliary = null, showHighlights = true } = {}) {
     const blocks = [];
     let list = null;
     let currentSection = '';
-    const emphasisClass = () => {
-      if (currentSection === '操作步骤') return 'execution-key-step';
-      if (/(?:风险|注意)/.test(currentSection)) return 'execution-key-caution';
-      return '';
+    const emphasisClass = () => '';
+    const cues = value => {
+      if (!showHighlights || !Array.isArray(auxiliary?.cues)) return [];
+      const line = String(value || '').replace(/\*\*|[_`]/g, '').trim();
+      return auxiliary.cues.filter(cue => {
+        const text = String(cue?.text || '').trim();
+        const step = String(cue?.step || '').trim();
+        return text && line.includes(text) && (!step || line.includes(step) || step.includes(line));
+      });
     };
     const flushList = () => {
       if (!list) return;
       if (list.materials) {
-        blocks.push(`<p class="execution-materials-paragraph">${list.items.map(item => inlineExecutionHtml(item, list.emphasisClass)).join('，')}</p>`);
+        blocks.push(`<p class="execution-materials-paragraph">${list.items.map(item => inlineExecutionHtml(item, list.emphasisClass, cues(item))).join('，')}</p>`);
         list = null;
         return;
       }
-      blocks.push(`<${list.type} class="execution-list${list.materials ? ' materials-list' : ''}">${list.items.map(item => `<li>${inlineExecutionHtml(item, list.emphasisClass)}</li>`).join('')}</${list.type}>`);
+      blocks.push(`<${list.type} class="execution-list${list.materials ? ' materials-list' : ''}">${list.items.map(item => `<li>${inlineExecutionHtml(item, list.emphasisClass, cues(item))}${executionRecordHintHtml(item, currentSection, auxiliary, showHighlights)}</li>`).join('')}</${list.type}>`);
       list = null;
     };
     editablePlanContent(content).split(/\r?\n/).forEach(raw => {
@@ -1264,8 +1433,8 @@
         return;
       }
       flushList();
-      if (line.startsWith('> ')) { blocks.push(`<aside>${inlineExecutionHtml(line.slice(2), emphasisClass())}</aside>`); return; }
-      blocks.push(`<p>${inlineExecutionHtml(line, emphasisClass())}</p>`);
+      if (line.startsWith('> ')) { blocks.push(`<aside>${inlineExecutionHtml(line.slice(2), emphasisClass(), cues(line.slice(2)))}${executionRecordHintHtml(line.slice(2), currentSection, auxiliary, showHighlights)}</aside>`); return; }
+      blocks.push(`<p>${inlineExecutionHtml(line, emphasisClass(), cues(line))}${executionRecordHintHtml(line, currentSection, auxiliary, showHighlights)}</p>`);
     });
     flushList();
     return blocks.join('') || '<div class="execution-empty">尚未生成实验执行方案。请先导入资料并使用 AI 生成，或编辑方案正文后保存。</div>';
@@ -1349,9 +1518,12 @@
       : (PLAN_LAYOUT_OPTIONS.some(([value]) => value === style?.layout) ? style.layout : PLAN_STYLE_DEFAULT.layout);
   }
 
-  function planRecordSheetHtml() {
-    const rows = Array.from({ length: 7 }, () => '<tr><td></td><td></td><td></td><td></td></tr>').join('');
-    return `<section class="execution-record-sheet"><h2>实验记录表</h2><p>用于执行本方案时同步记录关键参数、现象和原始数据。</p><table><tbody><tr><th>实验日期</th><td></td></tr><tr><th>执行人</th><td></td></tr><tr><th>样品 / 批次</th><td></td></tr><tr><th>仪器 / 设备</th><td></td></tr></tbody></table><h3>步骤与数据记录</h3><table class="execution-record-table"><thead><tr><th>步骤</th><th>执行时间</th><th>关键参数、现象与原始数据</th><th>签名</th></tr></thead><tbody>${rows}</tbody></table><h3>偏差与处理</h3><table class="execution-record-table"><thead><tr><th>发现时间</th><th colspan="2">偏差或异常与处理措施</th><th>复核人</th></tr></thead><tbody><tr><td></td><td colspan="2"></td><td></td></tr><tr><td></td><td colspan="2"></td><td></td></tr></tbody></table></section>`;
+  function planRecordSheetHtml(auxiliary) {
+    const fields = Array.isArray(auxiliary?.recordFields) ? auxiliary.recordFields : [];
+    const rows = fields.length
+      ? fields.map(field => `<tr><td>${esc(field.step || '')}</td><td>${esc(field.name || '')}</td><td></td><td></td><td></td></tr>`).join('')
+      : '<tr><td>未识别可预填的数据名称</td><td></td><td></td><td></td><td></td></tr>';
+    return `<section class="execution-record-sheet"><h2>实验记录表</h2><p>数据名称由 AI 根据原方案整理；实际数值、单位和备注请在执行时填写。</p><table class="execution-record-table"><thead><tr><th>步骤</th><th>数据名称</th><th>实际数值</th><th>单位</th><th>备注</th></tr></thead><tbody>${rows}</tbody></table></section>`;
   }
 
   function planA4PageMarkup(plan, scope, presentation, layoutMode, pageNumber, firstPage = false, recordSheet = false) {
@@ -1361,11 +1533,11 @@
     return `<article class="execution-a4-page${recordSheet ? ' execution-record-sheet-page' : ''}" data-execution-plan-page data-layout="${layoutMode}" style="${planStyleAttribute(presentation)}"><div class="execution-running-head"><span>SciHub · 实验方案书</span><span>${esc(plan.version || '')}</span></div>${title}<div class="execution-document-body"></div><div class="execution-page-foot">SciHub 本地科研记录工作台 <span>· 第 ${pageNumber} 页</span></div></article>`;
   }
 
-  function renderPlanA4Pages(host, { plan, scope, presentation, layoutMode, content, includeRecordSheet }) {
+  function renderPlanA4Pages(host, { plan, scope, presentation, layoutMode, content, includeRecordSheet, auxiliary = null, showHighlights = true }) {
     if (!host) return;
     host.innerHTML = '';
     const source = document.createElement('template');
-    source.innerHTML = executionPlanHtml(content);
+    source.innerHTML = executionPlanHtml(content, { auxiliary, showHighlights });
     const blocks = [...source.content.children];
     let pageNumber = 0;
     let page;
@@ -1504,14 +1676,32 @@
     blocks.forEach(placeBlock);
     if (includeRecordSheet) {
       addPage(false, true);
-      body.innerHTML = planRecordSheetHtml();
+      body.innerHTML = planRecordSheetHtml(auxiliary);
     }
   }
 
-  function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode) {
+  function planAiSupplementMarkup(auxiliaryState, expanded, taskRunning = false) {
+    const status = auxiliaryState?.status || 'missing';
+    const pending = status === 'fresh' && Array.isArray(auxiliaryState?.data?.pending) ? auxiliaryState.data.pending : [];
+    const label = taskRunning ? 'AI 分析中…' : status === 'stale' ? '重新 AI 分析' : 'AI补充';
+    const statusText = taskRunning ? '正在根据当前正文重新分析。' : status === 'fresh' ? '已缓存' : status === 'stale' ? '正文已编辑，分析已过期' : '尚未生成辅助分析';
+    let detail = '';
+    if (expanded && status === 'fresh') {
+      detail = pending.length
+        ? `<ul>${pending.map(item => `<li><b>待补充：${esc(item.field || '')}</b><span>— ${esc(item.reason || '')}</span></li>`).join('')}</ul>`
+        : '<p>未识别必须补充的信息。</p>';
+    } else if (expanded && status === 'stale') {
+      detail = '<p>正文已编辑，缓存结果不再展示。点击“重新 AI 分析”后才会使用当前方案更新提示与待确认项。</p>';
+    } else if (expanded && status === 'missing') {
+      detail = '<p>旧方案尚无辅助分析。点击“AI补充”可只分析当前正文，不会改写正文内容。</p>';
+    }
+    return `<section class="plan-ai-supplement ${status === 'stale' ? 'plan-ai-stale' : ''}"><div class="plan-ai-supplement-head"><div><b>待确认项</b><small>${esc(statusText)}</small></div><button id="planSupplementButton" type="button" class="text-button" ${taskRunning ? 'disabled' : ''}>${label}</button></div>${detail}</section>`;
+  }
+
+  function planSectionControlsMarkup(sections, selectedSections, includeRecordSheet, layoutMode, showHighlights, auxiliaryState, supplementOpen, auxiliaryTask) {
     const options = sections.map(section => `<label><input type="checkbox" data-plan-section value="${esc(section.key)}" ${selectedSections.includes(section.key) ? 'checked' : ''} /><span>${esc(section.title)}</span></label>`).join('');
     const layoutOptions = PLAN_LAYOUT_OPTIONS.map(([value, label]) => `<option value="${value}" ${value === layoutMode ? 'selected' : ''}>${label}</option>`).join('');
-    return `<aside class="plan-display-controls"><div class="plan-controls-drag-handle" title="拖动此处调整位置；面板会随页面滚动保持可见；双击恢复默认位置"><span>⠿</span><small>拖动</small></div><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成可打印填写的步骤、数据与偏差记录表。</small></span></label></aside>`;
+    return `<aside class="plan-display-controls"><div class="plan-controls-drag-handle" title="拖动此处调整位置；面板会随页面滚动保持可见；双击恢复默认位置"><span>⠿</span><small>拖动</small></div><div><p class="eyebrow">输出内容</p><h2>显示板块</h2><p>勾选的内容会立即显示在中间预览，并随导出方案一同保留。</p></div><label class="plan-layout-mode"><span>排版模式</span><select id="planLayoutMode">${layoutOptions}</select><small>紧凑模式会压缩材料、仪器等清单；宽松模式保持逐项清晰。</small></label><div class="plan-display-options">${options}</div><label class="plan-highlight-toggle"><input id="planHighlightToggle" type="checkbox" ${showHighlights ? 'checked' : ''} /><span><b>显示重点提示</b><small>显示四色短语提示及步骤内的“记录”提示；关闭不改写正文或导出内容。</small></span></label><label class="plan-record-sheet-toggle"><input id="planRecordSheetToggle" type="checkbox" ${includeRecordSheet ? 'checked' : ''} /><span><b>附带实验记录表</b><small>生成按步骤排序的总表，只预填数据名称。</small></span></label>${planAiSupplementMarkup(auxiliaryState, supplementOpen, Boolean(auxiliaryTask?.status === 'running'))}</aside>`;
   }
 
   function openPlanBookPage(planId, subexperimentId = '', imported = null) {
@@ -1519,7 +1709,18 @@
     if (!plan || !R.active) { toast('未找到实验方案'); return; }
     const previous = R.planBook;
     const sameBook = previous?.planId === planId && previous?.subexperimentId === subexperimentId;
-    R.planBook = { planId, subexperimentId, imported, selectedSections: sameBook ? previous.selectedSections : null, includeRecordSheet: sameBook ? Boolean(previous.includeRecordSheet) : false, layoutMode: sameBook ? previous.layoutMode : null };
+    R.planBook = {
+      planId,
+      subexperimentId,
+      imported,
+      selectedSections: sameBook ? previous.selectedSections : null,
+      includeRecordSheet: sameBook ? Boolean(previous.includeRecordSheet) : false,
+      showHighlights: sameBook ? previous.showHighlights !== false : true,
+      layoutMode: sameBook ? previous.layoutMode : null,
+      supplementOpen: sameBook ? Boolean(previous.supplementOpen) : false,
+      auxiliary: sameBook ? previous.auxiliary : null,
+      auxiliaryTask: sameBook ? previous.auxiliaryTask : null,
+    };
     window.switchView('planBook');
   }
 
@@ -1767,6 +1968,7 @@
     host.innerHTML = '<div class="empty-state"><span>◌</span><strong>正在载入实验方案书…</strong></div>';
     let content = '';
     let rawContent = '';
+    let auxiliaryState = book.auxiliary || { status: 'missing' };
     if (editorState) {
       content = editorState.content;
       rawContent = planContentWithStyle(content, editorState.presentation);
@@ -1775,6 +1977,8 @@
         const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content${scope.query}`);
         rawContent = response.content || '';
         content = editablePlanContent(rawContent);
+        auxiliaryState = response.auxiliary || { status: 'missing' };
+        book.auxiliary = auxiliaryState;
       } catch (error) {
         host.innerHTML = `<div class="empty-state"><span>!</span><strong>无法读取实验方案书</strong><p>${esc(error.message)}</p></div>`;
         return;
@@ -1800,7 +2004,7 @@
       : isEditing
         ? `<div class="plan-book-edit-layout">${planEditorTopPanelMarkup(editorState)}${planEditableA4Markup(plan, scope, editorState)}</div>`
         : content
-        ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap has-floating-controls"><div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode)}</div><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
+        ? `<div class="plan-book-preview-layout"><div class="plan-a4-preview-wrap has-floating-controls"><div id="planControlsLayer" class="plan-controls-layer">${planSectionControlsMarkup(sections, selectedSections, book.includeRecordSheet, layoutMode, book.showHighlights !== false, auxiliaryState, book.supplementOpen, book.auxiliaryTask)}</div><div id="executionPlanPages" class="execution-a4-pages"></div></div></div>`
         : '<div class="plan-book-empty"><h2>尚未创建实验方案书</h2><p>可导入已有实验书，或直接手动编写。两种方式的内容都会保存为 Markdown。</p><div class="plan-book-actions"><button id="importEmptyPlanBookButton" type="button" class="primary-button">⇧ 导入实验书</button><button id="createPlanBookButton" type="button" class="secondary-button">✎ 手动编辑方案书</button></div></div>';
     const currentContentReady = Boolean(content && !imported && !task && !comparison);
     const canEditPlanBook = Boolean(!imported && !task);
@@ -1835,7 +2039,9 @@
         presentation: currentPresentation,
         layoutMode: isEditing ? editorState.presentation.layout : planLayoutMode(currentPresentation, book),
         content: visiblePlanContent(currentContent, currentSelectedSections),
-        includeRecordSheet: Boolean(book.includeRecordSheet)
+        includeRecordSheet: Boolean(book.includeRecordSheet),
+        auxiliary: auxiliaryState?.status === 'fresh' ? auxiliaryState.data : null,
+        showHighlights: book.showHighlights !== false
       });
     };
     if (!isEditing && content && !imported && !task && !comparison) refreshA4Pages();
@@ -1850,12 +2056,92 @@
         book.includeRecordSheet = event.target.checked;
         refreshA4Pages();
       });
+      $('planHighlightToggle')?.addEventListener('change', event => {
+        book.showHighlights = event.target.checked;
+        refreshA4Pages();
+      });
       $('planLayoutMode')?.addEventListener('change', event => {
         book.layoutMode = event.target.value;
         refreshA4Pages();
       });
+      $('planSupplementButton')?.addEventListener('click', async () => {
+        if (book.auxiliaryTask?.status === 'running') return;
+        if (auxiliaryState?.status === 'fresh') {
+          book.supplementOpen = !book.supplementOpen;
+          await renderPlanBookView();
+          return;
+        }
+        await refreshPlanAuxiliary(book, content);
+      });
       enablePlanControlsDragging(book);
     }
+  }
+
+  function startPlanUpgrade(targets = planUpgradeTargets()) {
+    if (!R.active || R.planUpgrade?.status === 'running') return;
+    if (!targets.length) { toast('没有需要升级的方案书'); return; }
+    const task = {
+      status: 'running',
+      projectSlug: R.active.slug,
+      targets: targets.map(target => ({ ...target })),
+      total: targets.length,
+      current: 0,
+      completed: 0,
+      failed: [],
+      label: '',
+      startedAt: Date.now()
+    };
+    R.planUpgrade = task;
+    renderPlansView();
+    runPlanUpgrade(task);
+  }
+
+  async function runPlanUpgrade(task) {
+    for (let index = 0; index < task.targets.length; index += 1) {
+      const target = task.targets[index];
+      task.current = index + 1;
+      task.label = target.label;
+      if (R.active?.slug === task.projectSlug) renderPlansView();
+      try {
+        const scopeQuery = target.subexperimentId ? `?subexperimentId=${encodeURIComponent(target.subexperimentId)}` : '';
+        const current = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(target.planId)}/content${scopeQuery}`);
+        const markdown = editablePlanContent(current.content || '');
+        if (!markdown || markdown === '尚未填写实验方案正文。') throw new Error('方案正文为空，未调用 AI');
+        const generated = parseGeneratedPlan(await askModel(planUpgradePrompt(markdown)));
+        if (String(generated.markdown).replace(/\r\n/g, '\n').trim() !== String(markdown).replace(/\r\n/g, '\n').trim()) {
+          throw new Error('AI 返回的正文与原方案不一致，已拒绝保存该项');
+        }
+        const response = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(target.planId)}/content`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            planContent: planContentWithStyle(generated.markdown, planPresentationStyle(current.content || '')),
+            planAuxiliary: generated.auxiliary,
+            subexperimentId: target.subexperimentId
+          })
+        });
+        task.completed += 1;
+        if (R.active?.slug === task.projectSlug) {
+          R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+        }
+      } catch (error) {
+        task.failed.push({ label: target.label, message: error.message || '未知错误' });
+      }
+    }
+    task.status = 'completed';
+    const failureCount = task.failed.length;
+    if (R.active?.slug === task.projectSlug) {
+      try {
+        await loadProject(task.projectSlug);
+      } catch {
+        // 单项接口已返回成功；列表刷新失败时仍保留已更新的本地状态。
+      }
+      R.planUpgrade = null;
+      renderPlansView();
+    } else if (R.planUpgrade === task) {
+      R.planUpgrade = null;
+    }
+    const summary = `方案书更新完成：${task.completed}/${task.total} 项成功`;
+    toast(failureCount ? `${summary}，${failureCount} 项失败（可稍后重试）` : summary);
   }
 
   function generatePlanBook(book, scope) {
@@ -1884,10 +2170,10 @@
 
   async function runPlanGeneration(task) {
     try {
-      const content = (await askModel(standardPlanPrompt(task.imported.markdown || task.imported.source || ''))).trim();
-      if (!content) throw new Error('AI 未返回可保存的方案内容');
+      const generated = parseGeneratedPlan(await askModel(standardPlanPrompt(task.imported.markdown || task.imported.source || '')));
+      const content = generated.markdown;
       const response = await api(`${slugPath(task.projectSlug)}/plans/${encodeURIComponent(task.planId)}/content`, {
-        method: 'PUT', body: JSON.stringify({ planContent: content, subexperimentId: task.subexperimentId })
+        method: 'PUT', body: JSON.stringify({ planContent: content, planAuxiliary: generated.auxiliary, subexperimentId: task.subexperimentId })
       });
       try {
         await synchroniseImpactedPlanVersionAnalyses(task.planId, task.subexperimentId);
@@ -1917,6 +2203,35 @@
       stopPlanTask(task);
       if (R.active?.slug === task.projectSlug && currentView() === 'planBook') renderPlanBookView();
       toast(`生成实验方案书失败：${error.message}`);
+    }
+  }
+
+  async function refreshPlanAuxiliary(book, markdown) {
+    if (!R.active || book.auxiliaryTask?.status === 'running') return;
+    const task = { status: 'running' };
+    book.auxiliaryTask = task;
+    book.supplementOpen = true;
+    await renderPlanBookView();
+    try {
+      const parsed = parseStrictJsonObject(await askModel(planAuxiliaryPrompt(markdown)), 'AI 辅助分析返回');
+      const auxiliary = {
+        cues: Array.isArray(parsed.cues) ? parsed.cues : [],
+        recordFields: Array.isArray(parsed.recordFields) ? parsed.recordFields : [],
+        pending: Array.isArray(parsed.pending) ? parsed.pending : []
+      };
+      const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(book.planId)}/content`, {
+        method: 'PUT', body: JSON.stringify({ planAuxiliary: auxiliary, subexperimentId: book.subexperimentId })
+      });
+      R.plans = R.plans.map(item => item.id === response.plan.id ? response.plan : item);
+      book.auxiliaryTask = null;
+      book.auxiliary = null;
+      await loadAgents();
+      await renderPlanBookView();
+      toast('AI 辅助分析已更新');
+    } catch (error) {
+      if (book.auxiliaryTask === task) book.auxiliaryTask = null;
+      await renderPlanBookView();
+      toast(`AI 辅助分析失败：${error.message}`);
     }
   }
 
@@ -2367,15 +2682,99 @@
     R.log.formattedSource = source;
   }
 
+  function importPlanOptionsMarkup() {
+    const ordered = [...R.plans].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    const selected = R.log.planId && ordered.some(plan => plan.id === R.log.planId) ? R.log.planId : (ordered[0]?.id || '');
+    return { selected, html: ordered.length
+      ? ordered.map(plan => `<option value="${esc(plan.id)}" ${plan.id === selected ? 'selected' : ''}>${esc(plan.name)} · ${esc(plan.version)}</option>`).join('')
+      : '<option value="">暂无可用实验方案</option>' };
+  }
+
+  async function importPlanContext(planId) {
+    const plan = R.plans.find(item => item.id === planId);
+    if (!plan) throw new Error('未找到所选实验方案版本。');
+    const scopes = plan.subexperiments?.length ? plan.subexperiments : [{ id: '', name: plan.name, description: plan.description || '' }];
+    const items = await Promise.all(scopes.map(async scope => {
+      const query = scope.id ? `?subexperimentId=${encodeURIComponent(scope.id)}` : '';
+      let content = '';
+      try {
+        const response = await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(plan.id)}/content${query}`);
+        content = editablePlanContent(response.content || '').trim().slice(0, 7000);
+      } catch { /* 没有正文时仍用子实验名称和说明参与分类。 */ }
+      return { id: scope.id || '', name: scope.name || plan.name, description: scope.description || '', content };
+    }));
+    return { plan, scopes: items };
+  }
+
+  function parseAiJsonObject(reply) {
+    const hit = String(reply || '').match(/\{[\s\S]*\}/);
+    if (!hit) throw new Error('模型未返回可用的 JSON 分类结果，请检查模型设置后重试。');
+    try { return JSON.parse(hit[0]); }
+    catch { throw new Error('模型返回的分类结果不是有效 JSON，请重试。'); }
+  }
+
+  async function classifyImportedLogWithAi(source, planId, sourceFilename, manualMemory = '') {
+    const context = await importPlanContext(planId);
+    const scopeById = new Map(context.scopes.map(scope => [scope.id, scope]));
+    const scopeText = context.scopes.map(scope => [
+      `子实验 ID：${scope.id || '(整体方案)'}`,
+      `名称：${scope.name}`,
+      scope.description ? `说明：${scope.description}` : '',
+      scope.content ? `方案正文：\n${scope.content}` : '方案正文：未填写'
+    ].filter(Boolean).join('\n')).join('\n\n---\n\n');
+    const sourceForAi = source.length > 60000 ? `${source.slice(0, 60000)}\n\n[导入原文过长，后续内容未发送给 AI；完整原文仍会保存到日志]` : source;
+    const extra = manualMemory.trim() ? `\n\n用户补充校对信息（不能当作实验事实）：\n${manualMemory.trim().slice(0, 4000)}` : '';
+    const reply = await askModel([
+      { role: 'system', content: '你是严谨的中文科研实验日志归档助手。请从历史实验日志中提取明确已经发生的实验过程、条件、数据、观察现象、结果、异常和后续事项，修正错别字、语病、表达和结构，并按实验方案中的子实验分类。背景介绍、文献内容、计划步骤、模板字段和无法确认的内容不要写入实验记录。不得编造、替换、推断或补全任何事实、数据、单位、样品编号、日期、条件、现象或结论。只有与某个子实验明确对应时才分配该子实验；无法判断的内容放入 unassigned。每个子实验最多返回一个 entry。只返回 JSON：{"entries":[{"subexperimentId":"必须来自给定 ID","phenomena":"...","record":"..."}],"unassigned":"..."}。phenomena 和 record 都应是可直接保存的中文 Markdown；没有内容时返回空字符串。' },
+      { role: 'user', content: `# 导入文件\n${sourceFilename}\n\n# 待整理的历史日志\n${sourceForAi}${extra}\n\n# 目标实验方案版本与子实验\n${scopeText}` }
+    ]);
+    const parsed = parseAiJsonObject(reply);
+    const entries = [];
+    const seen = new Map();
+    for (const raw of Array.isArray(parsed.entries) ? parsed.entries : []) {
+      if (!raw || typeof raw !== 'object') continue;
+      let subexperimentId = typeof raw.subexperimentId === 'string' ? raw.subexperimentId.trim() : '';
+      if (!scopeById.has(subexperimentId)) {
+        const name = typeof raw.subexperimentName === 'string' ? raw.subexperimentName.trim().toLocaleLowerCase() : '';
+        const matched = context.scopes.find(scope => scope.name.toLocaleLowerCase() === name);
+        subexperimentId = matched ? matched.id : '';
+      }
+      if (!scopeById.has(subexperimentId)) continue;
+      const phenomena = typeof raw.phenomena === 'string' ? raw.phenomena.trim() : '';
+      const record = typeof raw.record === 'string' ? raw.record.trim() : '';
+      if (!phenomena && !record) continue;
+      const current = seen.get(subexperimentId) || { subexperimentId, phenomena: [], record: [] };
+      if (phenomena) current.phenomena.push(phenomena);
+      if (record) current.record.push(record);
+      seen.set(subexperimentId, current);
+    }
+    const unassigned = typeof parsed.unassigned === 'string' ? parsed.unassigned.trim() : '';
+    if (unassigned) {
+      const current = seen.get('') || { subexperimentId: '', phenomena: [], record: [] };
+      current.record.push(`待归类的导入信息：\n${unassigned}`);
+      seen.set('', current);
+    }
+    for (const entry of seen.values()) entries.push({ subexperimentId: entry.subexperimentId, phenomena: entry.phenomena.join('\n\n'), record: entry.record.join('\n\n') });
+    if (!entries.length) throw new Error('AI 未识别到可归档的已执行实验信息。');
+    return { planId, entries };
+  }
+
   function openLogImport() {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
-    const associationHint = R.log.planId
-      ? `将自动读取当前关联的“${esc(logAssociationText(R.log))}”作为校对上下文。`
-      : '可先在日志页面选择关联实验方案，或在下方直接粘贴方案记忆。';
-    openModal(`<div class="modal-header"><div><h2>导入文档生成日志</h2><p>支持 Word（.docx）、PDF、Markdown 与文本。文档仅在本机转换；原始输入和图片信息会写入实验日志 Markdown。</p></div><button class="close-button" data-close-modal>×</button></div>
-      <div class="modal-body"><div class="form-grid"><div class="form-field full"><label>选择文档</label><input id="logImportFile" type="file" accept=".docx,.pdf,.md,.markdown,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/markdown,text/plain" /><small class="field-note">PDF 需包含可提取的文字；扫描件请先 OCR。Word 目前支持 .docx 格式。</small></div><label class="auto-polish-toggle form-field full"><input id="logImportUseAi" type="checkbox" checked /><span>使用 AI 提取并整理有用实验日志</span><small>只提取明确已执行的实验信息；原始导入内容会完整保留。</small></label><label class="auto-polish-toggle form-field full"><input id="logImportUsePlanMemory" type="checkbox" ${R.log.planId ? 'checked' : 'disabled'} /><span>使用当前关联实验方案进行校对</span><small>${associationHint}</small></label><label class="form-field full"><span>实验方案记忆（可选）</span><textarea id="logImportPlanMemory" style="min-height:120px" placeholder="可粘贴样品编号、变量范围、步骤名称、判定标准或方案摘要；仅供 AI 比对术语，不会作为实验事实写入日志。"></textarea></label></div><p class="import-tip">导入后会生成当前日期的实验日志。仅当勾选 AI 整理时，文档内容和上述方案记忆才会发送给你已配置的模型接口。</p></div>
-      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="logImportConfirm" type="button" class="primary-button">导入并生成日志</button></div>`,
-      () => { $('logImportConfirm').onclick = importLogDocument; });
+    const planOptions = importPlanOptionsMarkup();
+    const importDate = R.date || iso().slice(0, 10);
+    openModal(`<div class="modal-header"><div><h2>导入历史实验日志</h2><p>导入 Word、PPT/PPTX、PDF、Markdown 或文本后，AI 会提取有用实验信息、润色并按子实验归档。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <div class="modal-body"><div class="form-grid"><div class="form-field full"><label>选择历史日志文件</label><input id="logImportFile" type="file" accept=".docx,.ppt,.pptx,.pdf,.md,.markdown,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/pdf,text/markdown,text/plain" /><small class="field-note">支持 Word、PPT/PPTX、PDF、Markdown 和文本，单文件不超过 15 MB。扫描 PDF 请先 OCR；旧版 PPT 建议另存为 PPTX。</small></div><div class="form-field"><label>实验日期</label><input id="logImportDate" type="date" value="${esc(importDate)}" /></div><div class="form-field"><label>归档到实验方案版本</label><select id="logImportPlan" required>${planOptions.html}</select></div><div class="form-field full"><label>补充校对信息（可选）</label><textarea id="logImportPlanMemory" style="min-height:90px" placeholder="可补充样品别名、子实验对应关系等；不会作为实验事实写入日志。"></textarea></div></div><p class="import-tip">AI 只整理原文明确记录的实验事实；无法判断所属子实验的信息会保存到该方案的“整体方案”日志，完整原文也会保留。</p></div>
+      <div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="logImportConfirm" type="button" class="primary-button">导入并 AI 分类</button></div>`,
+      () => {
+        $('logImportDate').addEventListener('change', event => { event.currentTarget.dataset.userEdited = '1'; });
+        $('logImportFile').addEventListener('change', event => {
+          const file = event.currentTarget.files[0];
+          const date = $('logImportDate');
+          if (file && date && !date.dataset.userEdited && file.lastModified) date.value = new Date(file.lastModified).toISOString().slice(0, 10);
+        });
+        $('logImportConfirm').onclick = importLogDocument;
+      });
   }
 
   function fileToBase64(file) {
@@ -2390,33 +2789,29 @@
 
   async function importLogDocument() {
     const file = $('logImportFile').files[0];
+    const planId = $('logImportPlan').value;
+    const importDate = $('logImportDate').value;
     if (!file) { toast('请选择要导入的文档'); return; }
+    if (!planId) { toast('请选择实验方案版本'); return; }
+    if (!importDate) { toast('请选择实验日期'); return; }
     if (file.size > 15 * 1024 * 1024) { toast('文档超过 15 MB，暂不能导入'); return; }
     const button = $('logImportConfirm');
-    button.disabled = true; button.textContent = '正在导入…';
+    button.disabled = true; button.textContent = 'AI 提取与分类中…';
     try {
-      const imported = await api(`${slugPath(R.active.slug)}/logs/${R.date}/import`, {
-        method: 'POST', body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) })
-      });
+      const imported = await api(`${slugPath(R.active.slug)}/logs/${importDate}/import`, { method: 'POST', body: JSON.stringify({ filename: file.name, contentBase64: await fileToBase64(file) }) });
       const source = (imported.source || '').trim();
       if (!source) throw new Error('文档中没有可导入的文本内容。');
-      R.log = {
-        source,
-        phenomena: '',
-        record: '',
-        images: imported.images || [],
-        formattedSource: '',
-        planId: R.log.planId || '',
-        subexperimentId: R.log.subexperimentId || '',
-        aiContext: $('logImportPlanMemory')?.value.trim() || '',
-        includePlanMemory: Boolean($('logImportUsePlanMemory')?.checked)
-      };
-      R.autoPolish = Boolean($('logImportUseAi')?.checked);
+      const classified = await classifyImportedLogWithAi(source, planId, file.name, $('logImportPlanMemory')?.value || '');
+      const result = await api(`${slugPath(R.active.slug)}/logs/${importDate}/import-classified`, { method: 'POST', body: JSON.stringify({ ...classified, source, sourceFilename: file.name, images: imported.images || [] }) });
       closeModal();
+      await refreshProjects(true);
+      await loadProject(R.active.slug);
+      const first = result.logs?.[0];
+      if (first) { R.date = first.date; R.log = normalizeLog(first); }
       renderLogsView();
-      await saveLog(true);
+      toast(`已导入并分类 ${result.count || result.logs?.length || 0} 条实验日志，原文已保留。`);
     } catch (e) { toast(`文档导入失败：${e.message}`); }
-    finally { const current = $('logImportConfirm'); if (current) { current.disabled = false; current.textContent = '导入并生成日志'; } }
+    finally { const current = $('logImportConfirm'); if (current) { current.disabled = false; current.textContent = '导入并 AI 分类'; } }
   }
 
   async function exportLog() {

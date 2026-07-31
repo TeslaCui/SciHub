@@ -56,6 +56,15 @@ PLAN_FONT_SIZES = {9, 10, 11, 12, 13, 14, 16}
 PLAN_LAYOUT_MODES = {"compact", "spacious"}
 PLAN_ANALYSIS_META_KEY = "version_analysis"
 PLAN_ANALYSIS_MAX_CHANGES = 80
+PLAN_AUXILIARY_META_KEY = "plan_auxiliary"
+PLAN_AUXILIARY_CUE_KINDS = {"key", "data", "caution", "pending"}
+PLAN_AUXILIARY_MAX_CUES = 72
+PLAN_AUXILIARY_MAX_RECORD_FIELDS = 48
+PLAN_AUXILIARY_MAX_PENDING = 36
+PLAN_CAPABILITY_META_KEY = "ai_plan_capability_revision"
+# 递增此值即可把“新增的方案生成能力”标记为可升级版本；旧正文不会被自动改写。
+PLAN_CAPABILITY_REVISION = 2
+PLAN_CAPABILITY_LABEL = "四色提示、智能记录表与待确认项"
 
 AUTO_START = "<!-- AUTO-UPDATE:START -->"
 AUTO_END = "<!-- AUTO-UPDATE:END -->"
@@ -679,21 +688,26 @@ def compact_log_memory_section(project: dict, heading_level: int) -> Optional[st
     return "\n".join(lines)
 
 
-def compact_conversation_memory_section(project: dict, heading_level: int) -> Optional[str]:
+def compact_conversation_memory_section(project: dict, heading_level: int) -> str:
+    """保留少量近期对话重点，但明确它们不是已验证实验事实。"""
     directory = project["dir"] / CONVERSATIONS_FOLDER
+    heading = f"{'#' * heading_level} 近期对话重点（未验证对话信息）\n\n"
     if not directory.is_dir():
-        return None
-    paths = sorted(directory.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)[:3]
-    keyword = re.compile(r"结论|问题|异常|失败|风险|注意|待验证|下一步|建议|原因|优化")
+        return heading + "- 暂无可提取的对话重点。"
+    paths = sorted(directory.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)[:4]
+    keyword = re.compile(r"结论|问题|异常|失败|风险|注意|待验证|下一步|建议|原因|优化|要求|需要|请|不能|应当|待补充")
     lines = []
     for path in paths:
         doc = read_markdown_document(path)
         fragments = []
         for match in MESSAGE_RE.finditer(doc["content"]):
             for part in re.split(r"(?<=[。；;！？!?])\s*", match.group(3)):
-                text = memory_text(part, 160)
+                text = memory_text(part, 120)
                 if text and keyword.search(text):
-                    fragments.append(text)
+                    role = "用户要求" if match.group(1) == "user" else "AI 建议/讨论"
+                    candidate = f"{role}：{text}"
+                    if candidate not in fragments:
+                        fragments.append(candidate)
                 if len(fragments) >= 2:
                     break
             if len(fragments) >= 2:
@@ -701,8 +715,8 @@ def compact_conversation_memory_section(project: dict, heading_level: int) -> Op
         if fragments:
             lines.append(f"- {meta_value(doc['meta'], 'title', path.stem)}：{'；'.join(fragments)}")
     if not lines:
-        return None
-    return f"{'#' * heading_level} 近期讨论要点（未验证）\n\n" + "\n".join(lines)
+        lines.append("- 暂无可提取的对话重点。")
+    return heading + "\n".join(lines)
 
 
 def compact_manual_memory(project: dict) -> str:
@@ -736,9 +750,7 @@ def compact_project_memory_sections(project: dict, heading_level: int = 2) -> li
     logs = compact_log_memory_section(project, heading_level)
     if logs:
         sections.append(logs)
-    conversations = compact_conversation_memory_section(project, heading_level)
-    if conversations:
-        sections.append(conversations)
+    sections.append(compact_conversation_memory_section(project, heading_level))
     return sections
 
 
@@ -853,12 +865,14 @@ def read_folder_subexperiments(plan_dir: Path, plan_id: str) -> list[dict]:
             continue
         if meta_value(doc["meta"], "plan_id") != plan_id:
             continue
+        plan_state = plan_document_update_state(child / SUBEXPERIMENT_PLAN_FILE_NAME)
         subexperiments.append({
             "id": meta_value(doc["meta"], "id", child.name),
             "name": meta_value(doc["meta"], "name", child.name),
             "description": meta_value(doc["meta"], "description"),
             "folder": child.name,
             "entries": list_workspace_entries(child, {SUBEXPERIMENT_FILE_NAME, SUBEXPERIMENT_PLAN_FILE_NAME, LOGS_FOLDER}),
+            **plan_state,
         })
     return subexperiments
 
@@ -870,6 +884,9 @@ def read_folder_plan(path: Path) -> dict:
     plan_dir = path.parent
     plan_id = meta_value(doc["meta"], "id")
     subexperiments = read_folder_subexperiments(plan_dir, plan_id)
+    root_state = plan_document_update_state(path)
+    has_subexperiments = bool(subexperiments)
+    update_count = sum(1 for item in subexperiments if item.get("needsPlanUpdate")) if has_subexperiments else int(root_state["needsPlanUpdate"])
     return {
         "id": plan_id,
         "name": meta_value(doc["meta"], "name", plan_dir.name),
@@ -882,6 +899,9 @@ def read_folder_plan(path: Path) -> dict:
         "storage": "folder",
         "entries": list_workspace_entries(plan_dir, {PLAN_FILE_NAME, LOGS_FOLDER, *(item["folder"] for item in subexperiments)}),
         "subexperiments": subexperiments,
+        **root_state,
+        "planUpdateCount": update_count,
+        "needsPlanUpdate": bool(update_count),
     }
 
 
@@ -902,6 +922,10 @@ def read_legacy_plan(path: Path) -> dict:
         "storage": "legacy",
         "entries": [],
         "subexperiments": parse_subexperiments(doc["content"]),
+        "hasPlanContent": False,
+        "planCapabilityRevision": 0,
+        "planUpdateCount": 0,
+        "needsPlanUpdate": False,
     }
 
 
@@ -1084,7 +1108,10 @@ def synchronise_existing_project(project: dict) -> list[str]:
 
     agents_path = project["dir"] / "AGENTS.md"
     agents_missing = not agents_path.is_file()
-    agents_needs_memory_upgrade = agents_missing or "自动更新的精简项目上下文" not in agents_path.read_text(encoding="utf-8")
+    agents_needs_memory_upgrade = agents_missing or any(
+        marker not in agents_path.read_text(encoding="utf-8")
+        for marker in ("自动更新的精简项目上下文", "近期对话重点（未验证对话信息）")
+    )
     if changes or agents_needs_memory_upgrade:
         update_agents(project)
         if agents_missing:
@@ -1299,6 +1326,183 @@ def replace_plan_content(content: str, plan_content: str) -> str:
     return content.rstrip() + "\n\n" + section + "\n"
 
 
+def plan_auxiliary_body(content: str) -> str:
+    """取出方案书正文并忽略纯版式注释，供辅助分析绑定指纹。"""
+    marked = re.search(
+        r"(?s)<!--\s*PLAN-CONTENT:START\s*-->(.*?)<!--\s*PLAN-CONTENT:END\s*-->", content or ""
+    )
+    source = marked.group(1) if marked else (content or "")
+    return PLAN_STYLE_RE.sub("", source).strip()
+
+
+def plan_auxiliary_fingerprint(content: str) -> str:
+    return hashlib.sha256(plan_auxiliary_body(content).encode("utf-8")).hexdigest()
+
+
+def plan_auxiliary_reference_lines(content: str) -> list[tuple[int, str]]:
+    """返回非标题正文行，短语和步骤锚点只能来自这些原文行。"""
+    lines: list[tuple[int, str]] = []
+    for index, raw in enumerate(plan_auxiliary_body(content).splitlines()):
+        line = raw.strip()
+        if not line or line.startswith("<!--") or re.match(r"^#{1,6}\s+", line):
+            continue
+        line = re.sub(r"^(?:[-*]\s+|\d+[.)]\s+|>\s*)", "", line).strip()
+        text = re.sub(r"[*_`]", "", line).strip()
+        if text:
+            lines.append((index, text))
+    return lines
+
+
+def clean_plan_auxiliary_value(value: Any, limit: int) -> str:
+    return one_line(value)[:limit]
+
+
+def normalize_plan_auxiliary(value: Any, content: str) -> dict:
+    """校验模型生成的短语提示，拒绝长句、标题、虚构锚点与可填数值。"""
+    if not isinstance(value, dict):
+        raise ApiError("方案辅助分析结果格式无效。")
+    reference_lines = plan_auxiliary_reference_lines(content)
+    if not reference_lines:
+        reference_lines = []
+
+    raw_cues = value.get("cues", [])
+    if not isinstance(raw_cues, list):
+        raise ApiError("方案辅助分析中的 cues 必须是列表。")
+    cues: list[dict] = []
+    seen_cues = set()
+    per_line: dict[int, int] = {}
+    for raw in raw_cues[:PLAN_AUXILIARY_MAX_CUES]:
+        if not isinstance(raw, dict):
+            continue
+        kind = clean_plan_auxiliary_value(raw.get("kind"), 16).casefold()
+        text = clean_plan_auxiliary_value(raw.get("text"), 48)
+        if kind not in PLAN_AUXILIARY_CUE_KINDS or not text:
+            continue
+        match_index = next((index for index, line in reference_lines if text in line), None)
+        if match_index is None:
+            continue
+        line = next(line for index, line in reference_lines if index == match_index)
+        # 允许短操作行的完整提示，但长段落只能标记其中少量、可核对的短语。
+        if text.strip("。；;，,！!?？") == line.strip("。；;，,！!?？") or len(text) > max(12, int(len(line) * 0.68)):
+            continue
+        if per_line.get(match_index, 0) >= 3:
+            continue
+        key = (kind, text)
+        if key in seen_cues:
+            continue
+        seen_cues.add(key)
+        per_line[match_index] = per_line.get(match_index, 0) + 1
+        # Persist the matched source line as anchor.  This prevents a generic phrase
+        # such as “待补充” from being highlighted repeatedly in other paragraphs.
+        cues.append({"kind": kind, "text": text, "step": line})
+    cues.sort(key=lambda item: next((index for index, line in reference_lines if item["text"] in line), 10**6))
+
+    raw_fields = value.get("recordFields", [])
+    if not isinstance(raw_fields, list):
+        raise ApiError("方案辅助分析中的 recordFields 必须是列表。")
+    fields: list[dict] = []
+    seen_fields = set()
+    forbidden_value = re.compile(r"\d|(?:°\s*[CF]|℃|\b(?:mg|g|kg|mL|uL|μL|rpm|min|h|s)\b|%)", re.IGNORECASE)
+    for raw in raw_fields[:PLAN_AUXILIARY_MAX_RECORD_FIELDS]:
+        if not isinstance(raw, dict):
+            continue
+        step = clean_plan_auxiliary_value(raw.get("step"), 180)
+        name = clean_plan_auxiliary_value(raw.get("name"), 64)
+        if not step or not name or forbidden_value.search(name):
+            continue
+        match_index = next((
+            index for index, line in reference_lines if step in line or line in step
+        ), None)
+        if match_index is None:
+            continue
+        key = (match_index, name)
+        if key in seen_fields:
+            continue
+        seen_fields.add(key)
+        source_step = next(line for index, line in reference_lines if index == match_index)
+        fields.append({"step": source_step, "name": name, "_order": match_index})
+    fields.sort(key=lambda item: item["_order"])
+    for item in fields:
+        item.pop("_order", None)
+
+    raw_pending = value.get("pending", [])
+    if not isinstance(raw_pending, list):
+        raise ApiError("方案辅助分析中的 pending 必须是列表。")
+    pending: list[dict] = []
+    seen_pending = set()
+    for raw in raw_pending[:PLAN_AUXILIARY_MAX_PENDING]:
+        if not isinstance(raw, dict):
+            continue
+        field = clean_plan_auxiliary_value(raw.get("field"), 80)
+        reason = clean_plan_auxiliary_value(raw.get("reason"), 220)
+        if not field or not reason:
+            continue
+        key = (field, reason)
+        if key in seen_pending:
+            continue
+        seen_pending.add(key)
+        pending.append({"field": field, "reason": reason})
+    return {"schema": 1, "cues": cues, "recordFields": fields, "pending": pending}
+
+
+def encode_plan_auxiliary(value: dict) -> str:
+    raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_plan_auxiliary(value: Any) -> Optional[dict]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+        return decoded if isinstance(decoded, dict) else None
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def plan_capability_revision(meta: dict) -> int:
+    """读取方案随正文保存的功能版本；缺失字段等同于旧版本。"""
+    try:
+        return max(0, int(one_line(meta.get(PLAN_CAPABILITY_META_KEY))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def plan_document_update_state(path: Path) -> dict:
+    """判断已有方案正文是否可升级，空白/占位方案不提示。"""
+    doc = read_markdown_document(path)
+    content = doc.get("content", "")
+    body = plan_auxiliary_body(content)
+    has_plan_content = bool(
+        re.search(r"<!--\s*PLAN-CONTENT:START\s*-->", content)
+        and body
+        and body not in {"尚未填写实验方案正文。", "尚未填写实验方案正文", "待补充"}
+    )
+    revision = plan_capability_revision(doc.get("meta", {}))
+    return {
+        "hasPlanContent": has_plan_content,
+        "planCapabilityRevision": revision,
+        "needsPlanUpdate": bool(has_plan_content and revision < PLAN_CAPABILITY_REVISION),
+    }
+
+
+def stored_plan_auxiliary(doc: dict) -> dict:
+    """返回 fresh / stale / missing 三种状态；只有 fresh 可用于预览和导出。"""
+    raw = decode_plan_auxiliary(doc.get("meta", {}).get(PLAN_AUXILIARY_META_KEY))
+    if not raw:
+        return {"status": "missing"}
+    try:
+        normalized = normalize_plan_auxiliary(raw, doc.get("content", ""))
+    except ApiError:
+        return {"status": "missing"}
+    basis = raw.get("basis") if isinstance(raw.get("basis"), dict) else {}
+    if basis.get("content") != plan_auxiliary_fingerprint(doc.get("content", "")):
+        return {"status": "stale"}
+    normalized["basis"] = {"updatedAt": clean_plan_auxiliary_value(basis.get("updated_at"), 80)}
+    return {"status": "fresh", "data": normalized}
+
+
 def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     """更新由 SciHub 创建的方案说明，同时保留用户在方案文件中的其他内容。"""
     plan = read_plan(project, plan_id)
@@ -1367,27 +1571,56 @@ def update_plan(project: dict, plan_id: str, payload: dict) -> dict:
     return read_plan(project, plan_id)
 
 
-def update_plan_content(project: dict, plan_id: str, plan_content: str, subexperiment_id: str = "") -> dict:
+def update_plan_content(
+    project: dict, plan_id: str, plan_content: str, subexperiment_id: str = "",
+    plan_auxiliary: Any = None, replace_auxiliary: bool = False,
+) -> dict:
     """保存 AI 生成或用户审核后的方案正文；持久化内容始终为 Markdown。"""
     plan, subexperiment, path = plan_content_target(project, plan_id, subexperiment_id)
     if plan["storage"] != "folder" or not plan["folder"]:
         raise ApiError("旧版单文件方案暂不支持写入方案正文；请新建 V1/V2 文件夹方案。")
     doc = read_markdown_document(path)
+    meta = dict(doc["meta"])
+    if replace_auxiliary:
+        auxiliary = normalize_plan_auxiliary(plan_auxiliary, plan_content)
+        auxiliary["basis"] = {
+            "content": plan_auxiliary_fingerprint(plan_content),
+            "updated_at": now_iso(),
+        }
+        meta[PLAN_AUXILIARY_META_KEY] = encode_plan_auxiliary(auxiliary)
+        # 只有“正文 + 当前辅助能力”一起生成/升级时才消除可更新提示；
+        # 单独点击 AI 补充不会把旧方案误标记为已升级。
+        meta[PLAN_CAPABILITY_META_KEY] = str(PLAN_CAPABILITY_REVISION)
     if subexperiment:
         # 正文一旦保存，原有 AI 版本参数分析不再对应当前文本，必须重新同步。
-        doc["meta"].pop(PLAN_ANALYSIS_META_KEY, None)
+        meta.pop(PLAN_ANALYSIS_META_KEY, None)
         write_markdown(
             path,
-            subexperiment_plan_document(plan, subexperiment, plan_content, doc["meta"], doc["content"]),
+            subexperiment_plan_document(plan, subexperiment, plan_content, meta, doc["content"]),
         )
         return read_plan(project, plan_id)
-    meta = dict(doc["meta"])
     meta["updated_at"] = now_iso()
     meta.pop(PLAN_ANALYSIS_META_KEY, None)
     write_markdown(
         path,
         front_matter(meta) + replace_plan_content(doc["content"], plan_content).rstrip() + "\n",
     )
+    return read_plan(project, plan_id)
+
+
+def update_plan_auxiliary(project: dict, plan_id: str, plan_auxiliary: Any, subexperiment_id: str = "") -> dict:
+    """只更新方案辅助分析，不改写正文，也不影响版本参数改动分析。"""
+    plan, _, path = plan_content_target(project, plan_id, subexperiment_id)
+    doc = read_markdown_document(path)
+    auxiliary = normalize_plan_auxiliary(plan_auxiliary, doc["content"])
+    auxiliary["basis"] = {
+        "content": plan_auxiliary_fingerprint(doc["content"]),
+        "updated_at": now_iso(),
+    }
+    meta = dict(doc["meta"])
+    meta[PLAN_AUXILIARY_META_KEY] = encode_plan_auxiliary(auxiliary)
+    meta["updated_at"] = now_iso()
+    write_markdown(path, front_matter(meta) + doc["content"].rstrip() + "\n")
     return read_plan(project, plan_id)
 
 
@@ -1495,6 +1728,59 @@ def plan_markdown_content(project: dict, plan_id: str, subexperiment_id: str = "
     """读取方案正文；不返回 front matter，避免将内部元数据用于版本对比。"""
     plan, _, path = plan_content_target(project, plan_id, subexperiment_id)
     return plan, read_markdown_document(path)["content"].strip()
+
+
+def inherit_previous_subexperiment_plan(project: dict, plan_id: str, subexperiment_id: str) -> dict:
+    """将上一版本同名子实验的空白方案书沿用到当前版本，不覆盖已有正文。"""
+    plan, subexperiment, target_path = plan_content_target(project, plan_id, subexperiment_id)
+    if plan["storage"] != "folder" or not plan["folder"] or not subexperiment:
+        raise ApiError("仅文件夹式方案中的子实验支持沿用方案书。")
+
+    target_doc = read_markdown_document(target_path)
+    if plan_document_update_state(target_path)["hasPlanContent"]:
+        raise ApiError("当前子实验已有方案正文，不能沿用以免覆盖已有内容。")
+
+    previous = previous_plan(project, plan_id)
+    if not previous:
+        raise ApiError("当前方案没有上一版本可沿用。")
+    source_subexperiment = next(
+        (item for item in previous.get("subexperiments", []) if item.get("name", "").casefold() == subexperiment["name"].casefold()),
+        None,
+    )
+    if not source_subexperiment or not source_subexperiment.get("hasPlanContent"):
+        raise ApiError("上一版本没有同名且已填写方案书的子实验。")
+
+    _, _, source_path = plan_content_target(project, previous["id"], source_subexperiment["id"])
+    source_doc = read_markdown_document(source_path)
+    source_match = re.search(
+        r"(?s)<!--\s*PLAN-CONTENT:START\s*-->(.*?)<!--\s*PLAN-CONTENT:END\s*-->",
+        source_doc.get("content", ""),
+    )
+    if not source_match or not plan_document_update_state(source_path)["hasPlanContent"]:
+        raise ApiError("上一版本的方案正文不可用，无法沿用。")
+
+    # 只复制受 SciHub 管理的正文区域，以保留其中的版式注释；不复制其他文件、日志或来源版本的元数据。
+    source_content = source_match.group(1).strip()
+    target_meta = dict(target_doc.get("meta", {}))
+    target_meta.pop(PLAN_ANALYSIS_META_KEY, None)
+
+    auxiliary_state = stored_plan_auxiliary(source_doc)
+    if auxiliary_state.get("status") == "fresh":
+        target_meta[PLAN_AUXILIARY_META_KEY] = source_doc["meta"][PLAN_AUXILIARY_META_KEY]
+    else:
+        target_meta.pop(PLAN_AUXILIARY_META_KEY, None)
+
+    if PLAN_CAPABILITY_META_KEY in source_doc.get("meta", {}):
+        target_meta[PLAN_CAPABILITY_META_KEY] = source_doc["meta"][PLAN_CAPABILITY_META_KEY]
+    else:
+        target_meta.pop(PLAN_CAPABILITY_META_KEY, None)
+    target_meta["updated_at"] = now_iso()
+
+    write_markdown(
+        target_path,
+        subexperiment_plan_document(plan, subexperiment, source_content, target_meta, target_doc.get("content", "")),
+    )
+    return read_plan(project, plan_id)
 
 
 def previous_plan(project: dict, plan_id: str) -> Optional[dict]:
@@ -1846,6 +2132,9 @@ def write_log(project: dict, date: str, payload: dict) -> dict:
         "updated_at": now,
         **association,
     }
+    source_filename = one_line(payload.get("sourceFilename"))
+    if source_filename:
+        meta["source_filename"] = source_filename
     source = str(payload.get("source", ""))
     phenomena = str(payload.get("phenomena", ""))
     record = str(payload.get("record", ""))
@@ -2060,6 +2349,51 @@ def extract_docx_source(content: bytes) -> tuple[str, list[str]]:
     return source, images
 
 
+def extract_pptx_source(content: bytes) -> tuple[str, list[str]]:
+    """以标准库读取 PPTX 的幻灯片文字和媒体清单，不保存二进制原件。"""
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            slide_names = [name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)]
+            slide_names.sort(key=lambda name: int(re.search(r"(\d+)", name).group(1)))
+            slides = []
+            for index, member in enumerate(slide_names, start=1):
+                root = ElementTree.fromstring(archive.read(member))
+                paragraphs = []
+                for paragraph in root.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}p"):
+                    text = "".join(node.text or "" for node in paragraph.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}t")).strip()
+                    if text:
+                        paragraphs.append(text)
+                if paragraphs:
+                    slides.append(f"## 第 {index} 页\n\n" + "\n".join(paragraphs))
+            media = []
+            for member in sorted(name for name in archive.namelist() if name.startswith("ppt/media/") and not name.endswith("/")):
+                data = archive.read(member)
+                media_name = Path(member).name
+                mime = mimetypes.guess_type(media_name)[0] or "未知类型"
+                media.append(f"{media_name} · {mime} · {len(data):,} 字节")
+    except (KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+        raise ApiError("无法读取 PowerPoint 文件，请确认文件是有效的 .pptx。")
+    source = "\n\n".join(slides)
+    if not source:
+        raise ApiError("PowerPoint 文件中没有可导入的文字内容。")
+    return source, media
+
+
+def extract_legacy_ppt_source(content: bytes) -> tuple[str, list[str]]:
+    """尽力提取旧版二进制 PPT 中的可读文本；建议用户另存为 PPTX 以获得完整结果。"""
+    candidates: list[str] = []
+    for encoding in ("utf-16le", "utf-16be", "cp1252"):
+        decoded = content.decode(encoding, errors="ignore")
+        for match in re.findall(r"[A-Za-z0-9\u3400-\u4dbf\u4e00-\u9fff][A-Za-z0-9\u3400-\u4dbf\u4e00-\u9fff\s，。；：、（）()【】\[\].,;:!?！？%+-]{2,}", decoded):
+            value = re.sub(r"\s+", " ", match).strip()
+            if len(value) >= 3 and value not in candidates:
+                candidates.append(value)
+    if not candidates:
+        raise ApiError("旧版 .ppt 未提取到文字；请先在 PowerPoint 中另存为 .pptx 后再导入。")
+    warning = "（旧版 .ppt 为兼容性提取，可能不完整；建议另存为 .pptx。）"
+    return "## 旧版 PPT 可提取文字\n\n" + warning + "\n\n" + "\n\n".join(candidates[:400]), []
+
+
 def extract_pdf_source(content: bytes) -> tuple[str, list[str]]:
     """从 PDF 提取可选择文本；扫描件没有文字层时会给出明确提示。"""
     try:
@@ -2098,6 +2432,10 @@ def extract_imported_document(payload: dict, allowed_extensions: set[str]) -> di
         source, images = extract_docx_source(content)
     elif suffix == ".pdf":
         source, images = extract_pdf_source(content)
+    elif suffix == ".pptx":
+        source, images = extract_pptx_source(content)
+    elif suffix == ".ppt":
+        source, images = extract_legacy_ppt_source(content)
     else:
         source, images = decode_text_document(content), []
     return {
@@ -2108,9 +2446,74 @@ def extract_imported_document(payload: dict, allowed_extensions: set[str]) -> di
     }
 
 
+def write_classified_import_logs(project: dict, date: str, payload: dict) -> dict:
+    """将 AI 分类后的导入日志一次性写入方案或多个子实验，禁止覆盖同日期已有日志。"""
+    if not DATE_RE.match(date):
+        raise ApiError("实验日期无效。")
+    plan_id = one_line(payload.get("planId"))
+    if not plan_id:
+        raise ApiError("请选择要归档的实验方案版本。")
+    plan = read_plan(project, plan_id)
+    if plan["storage"] != "folder" or not plan.get("folder"):
+        raise ApiError("旧版单文件方案不能接收分类日志，请先使用文件夹式方案。")
+    source = str(payload.get("source", "")).strip()
+    if not source:
+        raise ApiError("导入原文为空，无法归档。")
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ApiError("AI 分类结果无效。")
+
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for raw in raw_entries:
+        if not isinstance(raw, dict):
+            continue
+        subexperiment_id = one_line(raw.get("subexperimentId"))
+        phenomena = str(raw.get("phenomena", "")).strip()
+        record = str(raw.get("record", "")).strip()
+        if not phenomena and not record:
+            continue
+        if subexperiment_id:
+            subexperiment = next((item for item in plan.get("subexperiments", []) if item.get("id") == subexperiment_id), None)
+            if not subexperiment:
+                raise ApiError("AI 返回了当前方案不存在的子实验，已停止写入。")
+        bucket = grouped.setdefault(subexperiment_id, {"phenomena": [], "record": []})
+        if phenomena:
+            bucket["phenomena"].append(phenomena)
+        if record:
+            bucket["record"].append(record)
+    if not grouped:
+        raise ApiError("AI 未识别到可归档的已执行实验信息。")
+
+    associations = {}
+    for subexperiment_id in grouped:
+        association = resolve_plan_association(project, {"planId": plan_id, "subexperimentId": subexperiment_id})
+        path = log_path(project, date, association)
+        if path.exists():
+            label = association["subexperiment_name"] or association["plan_name"]
+            raise ApiError(f"{date} 的“{label}”日志已存在，为避免覆盖请更换导入日期。")
+        associations[subexperiment_id] = association
+
+    images = payload.get("images", [])
+    source_filename = one_line(payload.get("sourceFilename"))
+    result = []
+    for subexperiment_id, bucket in grouped.items():
+        association = associations[subexperiment_id]
+        write_log(project, date, {
+            "planId": plan_id,
+            "subexperimentId": subexperiment_id,
+            "source": source,
+            "sourceFilename": source_filename,
+            "images": images,
+            "phenomena": "\n\n".join(bucket["phenomena"]),
+            "record": "\n\n".join(bucket["record"]),
+        })
+        result.append(read_log(project, date, association))
+    return {"logs": result, "count": len(result)}
+
+
 def import_log_document(payload: dict) -> dict:
     """读取实验日志来源文件；原文件不落盘，日志仍以 Markdown 保存。"""
-    return extract_imported_document(payload, {".docx", ".pdf", ".md", ".markdown", ".txt"})
+    return extract_imported_document(payload, {".docx", ".pdf", ".pptx", ".ppt", ".md", ".markdown", ".txt"})
 
 
 def source_document_markdown(document: dict) -> str:
@@ -2143,7 +2546,7 @@ def import_plan_source_document(project: dict, plan_id: str, payload: dict) -> d
         raise ApiError("旧版单文件方案不能导入资料；请新建 V1/V2 文件夹方案。")
     if plan["subexperiments"] and not subexperiment:
         raise ApiError("该方案包含子实验，请在对应子实验中导入方案文件。")
-    document = extract_imported_document(payload, {".docx", ".pdf", ".md", ".markdown", ".txt"})
+    document = extract_imported_document(payload, {".docx", ".pdf", ".pptx", ".ppt", ".md", ".markdown", ".txt"})
     directory = plan_workspace_dir(project, plan_id, subexperiment_id) / PLAN_IMPORTS_FOLDER
     base = safe_folder_name(Path(document["filename"]).stem or "导入资料", "导入资料文件名")
     path = directory / f"{base}.md"
@@ -2256,30 +2659,120 @@ def filter_plan_content_sections(content: str, selected_sections: Optional[list[
 def exportable_plan_content(
     project: dict, plan_id: str, subexperiment_id: str, selected_sections: Optional[list[str]],
     layout_override: Optional[str] = None,
-) -> tuple[dict, dict, str]:
-    """返回导出所需的方案、版式和经筛选的 Markdown，不改写项目资料。"""
-    plan, content = plan_markdown_content(project, plan_id, subexperiment_id)
+) -> tuple[dict, dict, str, Optional[dict]]:
+    """返回导出所需的方案、版式、筛选正文和仍有效的辅助分析。"""
+    plan, _, path = plan_content_target(project, plan_id, subexperiment_id)
+    doc = read_markdown_document(path)
+    content = doc["content"].strip()
     style = plan_presentation_style(content)
     if layout_override in PLAN_LAYOUT_MODES:
         style["layout"] = layout_override
     content = PLAN_STYLE_RE.sub("", content)
     content = filter_plan_content_sections(content, selected_sections)
-    return plan, style, content.strip()
+    auxiliary_state = stored_plan_auxiliary(doc)
+    auxiliary = auxiliary_state.get("data") if auxiliary_state.get("status") == "fresh" else None
+    return plan, style, content.strip(), auxiliary
 
 
-def experiment_record_sheet_markdown() -> str:
-    """导出时可附带的实验记录表；仅生成到下载文件，不写回项目 Markdown。"""
+def record_fields_for_content(record_fields: list[dict], content: str) -> list[dict]:
+    """只保留当前选中板块中的字段，并保持 AI 按步骤返回的顺序。"""
+    lines = [line for _, line in plan_auxiliary_reference_lines(content)]
+    fields = []
+    for field in record_fields:
+        step = one_line(field.get("step"))
+        name = one_line(field.get("name"))
+        if step and name and any(step in line or line in step for line in lines):
+            fields.append({"step": step, "name": name})
+    return fields
+
+
+def plan_content_with_record_hints(content: str, record_fields: list[dict]) -> str:
+    """在导出副本中补入可读的记录提示，不改变项目正文 Markdown。"""
+    if not record_fields:
+        return content
+    rendered: list[str] = []
+    for raw in content.splitlines():
+        rendered.append(raw)
+        line = raw.strip()
+        if not line or line.startswith("<!--") or re.match(r"^#{1,6}\s+", line):
+            continue
+        plain = re.sub(r"^(?:[-*]\s+|\d+[.)]\s+|>\s*)", "", line)
+        plain = re.sub(r"[*_`]", "", plain).strip()
+        names = [
+            field["name"] for field in record_fields
+            if field["step"] in plain or plain in field["step"]
+        ]
+        if names:
+            rendered.append("> 记录：" + "、".join(dict.fromkeys(names)))
+    return "\n".join(rendered)
+
+
+def experiment_record_sheet_markdown(record_fields: list[dict]) -> str:
+    """生成一张按步骤排序的智能记录总表；数值和单位始终留空。"""
+    rows = "\n".join(
+        f"| {field['step']} | {field['name']} |  |  |  |" for field in record_fields
+    ) or "| 未识别可预填的数据名称 |  |  |  |  |"
     return (
         "\n\n---\n\n## 实验记录表\n\n"
-        "> 用于执行本方案时同步记录关键参数、现象和原始数据。\n\n"
-        "| 项目 | 记录 |\n| --- | --- |\n"
-        "| 实验日期 |  |\n| 执行人 |  |\n| 样品 / 批次 |  |\n| 仪器 / 设备 |  |\n\n"
-        "### 步骤与数据记录\n\n"
-        "| 步骤 | 执行时间 | 关键参数、现象与原始数据 | 签名 |\n"
-        "| --- | --- | --- | --- |\n"
-        + "\n".join("|  |  |  |  |" for _ in range(8))
-        + "\n\n### 偏差与处理\n\n| 发现时间 | 偏差或异常 | 处理措施 | 复核人 |\n| --- | --- | --- | --- |\n|  |  |  |  |\n"
+        "> 数据名称由 AI 根据原方案整理；实际数值、单位和备注请在执行时填写。\n\n"
+        "| 步骤 | 数据名称 | 实际数值 | 单位 | 备注 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        + rows + "\n"
     )
+
+
+PLAN_CUE_COLORS = {
+    "key": "1F6749",
+    "data": "1F5E9D",
+    "caution": "9A6A13",
+    "pending": "A13D3D",
+}
+
+
+def cue_spans(value: str, cues: list[dict]) -> list[tuple[int, int, str]]:
+    """找出正文行中的短语范围；标题调用方不会传入 cues。"""
+    plain = markdown_line_text(value)
+    candidates: list[tuple[int, int, str]] = []
+    for cue in cues:
+        text = one_line(cue.get("text"))
+        kind = one_line(cue.get("kind")).casefold()
+        if not text or kind not in PLAN_CUE_COLORS:
+            continue
+        start = plain.find(text)
+        if start >= 0:
+            candidates.append((start, start + len(text), kind))
+    accepted: list[tuple[int, int, str]] = []
+    for candidate in sorted(candidates, key=lambda item: (item[0], -(item[1] - item[0]))):
+        if not any(candidate[0] < end and start < candidate[1] for start, end, _ in accepted):
+            accepted.append(candidate)
+    return sorted(accepted)
+
+
+def markdown_runs_with_cues(value: str, cues: list[dict]) -> list[tuple[str, bool, str]]:
+    """将 Markdown 粗体片段按短语提示再细分，供 Word/PDF 使用。"""
+    plain = markdown_line_text(value)
+    line_cues = [
+        cue for cue in cues
+        if one_line(cue.get("text")) in plain
+        and (not one_line(cue.get("step")) or one_line(cue.get("step")) in plain or plain in one_line(cue.get("step")))
+    ]
+    spans = cue_spans(value, line_cues)
+    cursor = 0
+    rendered: list[tuple[str, bool, str]] = []
+    for fragment, is_bold in markdown_inline_parts(value):
+        end = cursor + len(fragment)
+        points = {cursor, end}
+        for start, stop, _ in spans:
+            if start < end and stop > cursor:
+                points.update({max(start, cursor), min(stop, end)})
+        positions = sorted(points)
+        for start, stop in zip(positions, positions[1:]):
+            if start == stop:
+                continue
+            kind = next((kind for left, right, kind in spans if left <= start and stop <= right), "")
+            rendered.append((fragment[start - cursor:stop - cursor], is_bold, kind))
+        cursor = end
+    return rendered
 
 
 def export_plan_markdown(
@@ -2287,43 +2780,26 @@ def export_plan_markdown(
     selected_sections: Optional[list[str]] = None, layout_override: Optional[str] = None,
 ) -> bytes:
     """导出供人阅读或复用的原生 Markdown，不修改项目中的源文件。"""
-    _, _, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    _, _, content, auxiliary = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    record_fields = record_fields_for_content((auxiliary or {}).get("recordFields", []), content)
+    content = plan_content_with_record_hints(content, record_fields)
     if include_record_sheet:
-        content = content.rstrip() + experiment_record_sheet_markdown()
+        content = content.rstrip() + experiment_record_sheet_markdown(record_fields)
     return (content.rstrip() + "\n").encode("utf-8")
 
 
-def append_docx_record_sheet(document, set_font, pt, cm) -> None:
-    """为可打印的实验执行方案附加一页手写记录表。"""
+def append_docx_record_sheet(document, set_font, pt, cm, record_fields: list[dict]) -> None:
+    """为可打印的实验执行方案附加一张按步骤排序的智能记录总表。"""
     document.add_page_break()
     heading = document.add_heading("实验记录表", level=1)
     heading.paragraph_format.space_after = pt(5)
-    note = document.add_paragraph("用于执行本方案时同步记录关键参数、现象和原始数据。")
+    note = document.add_paragraph("数据名称由 AI 根据原方案整理；实际数值、单位和备注请在执行时填写。")
     note.paragraph_format.space_after = pt(10)
-
-    metadata = document.add_table(rows=4, cols=2)
-    metadata.style = "Table Grid"
-    metadata.autofit = False
-    for row, (label, value) in zip(metadata.rows, (("实验日期", ""), ("执行人", ""), ("样品 / 批次", ""), ("仪器 / 设备", ""))):
-        row.cells[0].width = cm(3.2)
-        row.cells[1].width = cm(13.8)
-        row.cells[0].text = label
-        row.cells[1].text = value
-        for cell in row.cells:
-            for paragraph in cell.paragraphs:
-                paragraph.paragraph_format.space_after = pt(2)
-                for run in paragraph.runs:
-                    set_font(run, 10.5)
-        for run in row.cells[0].paragraphs[0].runs:
-            run.bold = True
-
-    document.add_paragraph()
-    document.add_heading("步骤与数据记录", level=2)
-    table = document.add_table(rows=9, cols=4)
+    table = document.add_table(rows=max(1, len(record_fields)) + 1, cols=5)
     table.style = "Table Grid"
     table.autofit = False
-    headers = ("步骤", "执行时间", "关键参数、现象与原始数据", "签名")
-    widths = (cm(1.6), cm(2.8), cm(10.2), cm(2.4))
+    headers = ("步骤", "数据名称", "实际数值", "单位", "备注")
+    widths = (cm(4.3), cm(3.5), cm(3.0), cm(2.0), cm(4.2))
     for index, cell in enumerate(table.rows[0].cells):
         cell.width = widths[index]
         cell.text = headers[index]
@@ -2331,31 +2807,15 @@ def append_docx_record_sheet(document, set_font, pt, cm) -> None:
             for run in paragraph.runs:
                 run.bold = True
                 set_font(run, 9.5)
-    for row in table.rows[1:]:
+    for row_index, row in enumerate(table.rows[1:]):
+        field = record_fields[row_index] if row_index < len(record_fields) else {"step": "未识别可预填的数据名称", "name": ""}
         for index, cell in enumerate(row.cells):
             cell.width = widths[index]
-            cell.text = "\n"
+            cell.text = field["step"] if index == 0 else field["name"] if index == 1 else "\n"
             for paragraph in cell.paragraphs:
                 paragraph.paragraph_format.space_after = pt(2)
                 for run in paragraph.runs:
                     set_font(run, 9.5)
-
-    document.add_paragraph()
-    document.add_heading("偏差与处理", level=2)
-    deviations = document.add_table(rows=3, cols=4)
-    deviations.style = "Table Grid"
-    deviations.autofit = False
-    headers = ("发现时间", "偏差或异常", "处理措施", "复核人")
-    widths = (cm(3.0), cm(6.0), cm(6.0), cm(2.0))
-    for row_index, row in enumerate(deviations.rows):
-        for index, cell in enumerate(row.cells):
-            cell.width = widths[index]
-            cell.text = headers[index] if row_index == 0 else "\n"
-            for paragraph in cell.paragraphs:
-                paragraph.paragraph_format.space_after = pt(2)
-                for run in paragraph.runs:
-                    set_font(run, 9.5)
-                    run.bold = row_index == 0
 
 
 def export_plan_docx(
@@ -2371,7 +2831,10 @@ def export_plan_docx(
     except ImportError as error:
         raise ApiError("Word 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
-    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    _, presentation, content, auxiliary = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    record_fields = record_fields_for_content((auxiliary or {}).get("recordFields", []), content)
+    cues = (auxiliary or {}).get("cues", [])
+    content = plan_content_with_record_hints(content, record_fields)
     title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     document = Document()
     section = document.sections[0]
@@ -2393,11 +2856,10 @@ def export_plan_docx(
         if color:
             target.font.color.rgb = RGBColor.from_string(color)
 
-    def add_markdown_runs(paragraph, value: str, emphasis: str = "") -> None:
-        emphasis_color = {"step": "1F6749", "caution": "994C42"}.get(emphasis)
-        for fragment, is_bold in markdown_inline_parts(value):
+    def add_markdown_runs(paragraph, value: str, line_cues: list[dict] | None = None, record_hint: bool = False) -> None:
+        for fragment, is_bold, cue_kind in markdown_runs_with_cues(value, line_cues or []):
             run = paragraph.add_run(fragment)
-            set_font(run, body_size, emphasis_color if is_bold else None)
+            set_font(run, body_size, PLAN_CUE_COLORS.get(cue_kind) or ("1F5E9D" if record_hint else None))
             run.bold = is_bold
 
     normal = document.styles["Normal"]
@@ -2460,7 +2922,7 @@ def export_plan_docx(
             else:
                 flush_compact_material_items()
                 paragraph = document.add_paragraph(style="List Bullet")
-                add_markdown_runs(paragraph, item_source, important_plan_emphasis(current_section))
+                add_markdown_runs(paragraph, item_source, cues)
         elif numbered := re.match(r"^\d+[.)]\s+(.+)$", line):
             item_source = numbered.group(1)
             item = markdown_line_text(item_source)
@@ -2469,51 +2931,40 @@ def export_plan_docx(
             else:
                 flush_compact_material_items()
                 paragraph = document.add_paragraph(style="List Number")
-                add_markdown_runs(paragraph, item_source, important_plan_emphasis(current_section))
+                add_markdown_runs(paragraph, item_source, cues)
         elif line.startswith("> "):
             flush_compact_material_items()
             paragraph = document.add_paragraph()
-            add_markdown_runs(paragraph, line[2:], important_plan_emphasis(current_section))
+            is_record_hint = line.startswith("> 记录：")
+            add_markdown_runs(paragraph, line[2:], cues, is_record_hint)
             paragraph.paragraph_format.left_indent = Inches(0.25)
-            for run in paragraph.runs:
-                run.italic = True
+            if not is_record_hint:
+                for run in paragraph.runs:
+                    run.italic = True
         elif not re.fullmatch(r"[-*_]{3,}", line):
             flush_compact_material_items()
             paragraph = document.add_paragraph()
-            add_markdown_runs(paragraph, line, important_plan_emphasis(current_section))
+            add_markdown_runs(paragraph, line, cues)
     flush_compact_material_items()
     if include_record_sheet:
-        append_docx_record_sheet(document, set_font, Pt, Cm)
+        append_docx_record_sheet(document, set_font, Pt, Cm, record_fields)
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
 
 
-def append_pdf_record_sheet(story: list, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle) -> None:
-    """在 PDF 下载文件尾部生成适合打印填写的实验记录页。"""
+def append_pdf_record_sheet(story: list, h1, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle, record_fields: list[dict]) -> None:
+    """在 PDF 下载文件尾部生成一张按步骤排序的智能记录总表。"""
     story.extend([
         PageBreak(),
         Paragraph("实验记录表", h1),
-        Paragraph("用于执行本方案时同步记录关键参数、现象和原始数据。", body),
+        Paragraph("数据名称由 AI 根据原方案整理；实际数值、单位和备注请在执行时填写。", body),
     ])
-    metadata = Table(
-        [["实验日期", ""], ["执行人", ""], ["样品 / 批次", ""], ["仪器 / 设备", ""]],
-        colWidths=[3.3 * cm, 13.7 * cm],
-    )
-    metadata.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
-        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0F5F0")),
-        ("FONTNAME", (0, 0), (-1, -1), font_name),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-        ("FONTNAME", (0, 0), (0, -1), font_name),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.extend([metadata, Spacer(1, 14), Paragraph("步骤与数据记录", h2)])
-    headers = ["步骤", "执行时间", "关键参数、现象与原始数据", "签名"]
-    rows = [headers] + [["", "", "\n", ""] for _ in range(8)]
-    records = Table(rows, colWidths=[1.5 * cm, 2.7 * cm, 10.4 * cm, 2.4 * cm], repeatRows=1)
+    headers = ["步骤", "数据名称", "实际数值", "单位", "备注"]
+    rows = [headers] + [[field["step"], field["name"], "", "", ""] for field in record_fields]
+    if len(rows) == 1:
+        rows.append(["未识别可预填的数据名称", "", "", "", ""])
+    records = Table(rows, colWidths=[4.3 * cm, 3.5 * cm, 3.0 * cm, 2.0 * cm, 4.2 * cm], repeatRows=1)
     records.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF5")),
@@ -2522,24 +2973,9 @@ def append_pdf_record_sheet(story: list, h1, h2, body, font_name, colors, cm, Pa
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (0, 0), (1, -1), "CENTER"),
-        ("ALIGN", (3, 0), (3, -1), "CENTER"),
+        ("ALIGN", (2, 0), (3, -1), "CENTER"),
     ]))
-    story.extend([records, Spacer(1, 14), Paragraph("偏差与处理", h2)])
-    deviations = Table(
-        [["发现时间", "偏差或异常", "处理措施", "复核人"], ["", "\n", "\n", ""], ["", "\n", "\n", ""]],
-        colWidths=[3.0 * cm, 6.0 * cm, 6.0 * cm, 2.0 * cm],
-    )
-    deviations.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#B9C5BA")),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF5")),
-        ("FONTNAME", (0, 0), (-1, -1), font_name),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-    ]))
-    story.append(deviations)
+    story.extend([Spacer(1, 8), records])
 
 
 def export_plan_pdf(
@@ -2559,7 +2995,10 @@ def export_plan_pdf(
     except ImportError as error:
         raise ApiError("PDF 导出组件未安装，请先执行启动脚本中的依赖安装。") from error
     plan, subexperiment, _ = plan_content_target(project, plan_id, subexperiment_id)
-    _, presentation, content = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    _, presentation, content, auxiliary = exportable_plan_content(project, plan_id, subexperiment_id, selected_sections, layout_override)
+    record_fields = record_fields_for_content((auxiliary or {}).get("recordFields", []), content)
+    cues = (auxiliary or {}).get("cues", [])
+    content = plan_content_with_record_hints(content, record_fields)
     title_text = f"{plan['name']} · {plan['version']}" + (f" · {subexperiment['name']}" if subexperiment else "")
     font_name = "STSong-Light"
     try:
@@ -2612,15 +3051,17 @@ def export_plan_pdf(
         story.append(Paragraph("• " + xml_escape("； ".join(compact_material_items)), body))
         compact_material_items.clear()
 
-    def pdf_markdown_markup(value: str, emphasis: str = "") -> str:
-        emphasis_color = {"step": "#1F6749", "caution": "#994C42"}.get(emphasis)
+    def pdf_markdown_markup(value: str, line_cues: list[dict] | None = None, record_hint: bool = False) -> str:
         rendered = []
-        for fragment, is_bold in markdown_inline_parts(value):
+        for fragment, is_bold, cue_kind in markdown_runs_with_cues(value, line_cues or []):
             text = xml_escape(fragment)
-            if is_bold and emphasis_color:
-                rendered.append(f'<b><font color="{emphasis_color}">{text}</font></b>')
+            cue_color = PLAN_CUE_COLORS.get(cue_kind) or ("1F5E9D" if record_hint else "")
+            if is_bold and cue_color:
+                rendered.append(f'<b><font color="#{cue_color}">{text}</font></b>')
             elif is_bold:
                 rendered.append(f"<b>{text}</b>")
+            elif cue_color:
+                rendered.append(f'<font color="#{cue_color}">{text}</font>')
             else:
                 rendered.append(text)
         return "".join(rendered)
@@ -2649,7 +3090,7 @@ def export_plan_pdf(
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                story.append(Paragraph("• " + pdf_markdown_markup(item_source, important_plan_emphasis(current_section)), body))
+                story.append(Paragraph("• " + pdf_markdown_markup(item_source, cues), body))
         elif numbered := re.match(r"^(\d+[.)]\s+)(.+)$", line):
             item_source = numbered.group(2)
             item = markdown_line_text(item_source)
@@ -2657,19 +3098,19 @@ def export_plan_pdf(
                 compact_material_items.append(item)
             else:
                 flush_compact_material_items()
-                story.append(Paragraph(xml_escape(numbered.group(1)) + pdf_markdown_markup(item_source, important_plan_emphasis(current_section)), body))
+                story.append(Paragraph(xml_escape(numbered.group(1)) + pdf_markdown_markup(item_source, cues), body))
         elif line.startswith("> "):
             flush_compact_material_items()
-            story.append(Paragraph(pdf_markdown_markup(line[2:], important_plan_emphasis(current_section)), callout))
+            story.append(Paragraph(pdf_markdown_markup(line[2:], cues, line.startswith("> 记录：")), callout))
         elif re.fullmatch(r"[-*_]{3,}", line):
             flush_compact_material_items()
             story.append(Spacer(1, 6))
         else:
             flush_compact_material_items()
-            story.append(Paragraph(pdf_markdown_markup(line, important_plan_emphasis(current_section)), body))
+            story.append(Paragraph(pdf_markdown_markup(line, cues), body))
     flush_compact_material_items()
     if include_record_sheet:
-        append_pdf_record_sheet(story, h1, h2, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle)
+        append_pdf_record_sheet(story, h1, body, font_name, colors, cm, PageBreak, Paragraph, Spacer, Table, TableStyle, record_fields)
     document.build(story)
     return buffer.getvalue()
 
@@ -3023,14 +3464,28 @@ class SciHubHandler(BaseHTTPRequestHandler):
             return
         if method == "GET" and len(segments) == 6 and segments[5] == "content":
             subexperiment_id = one_line(self._query().get("subexperimentId"))
-            plan, content = plan_markdown_content(project, segments[4], subexperiment_id)
-            self._send_json(HTTPStatus.OK, {"plan": plan, "content": content})
+            plan, _, path = plan_content_target(project, segments[4], subexperiment_id)
+            doc = read_markdown_document(path)
+            self._send_json(HTTPStatus.OK, {
+                "plan": plan,
+                "content": doc["content"].strip(),
+                "auxiliary": stored_plan_auxiliary(doc),
+            })
             return
         if method == "PUT" and len(segments) == 6 and segments[5] == "content":
             payload = self._read_json()
-            plan = update_plan_content(
-                project, segments[4], str(payload.get("planContent", "")), one_line(payload.get("subexperimentId"))
-            )
+            subexperiment_id = one_line(payload.get("subexperimentId"))
+            if "planContent" not in payload and "planAuxiliary" in payload:
+                plan = update_plan_auxiliary(project, segments[4], payload.get("planAuxiliary"), subexperiment_id)
+            else:
+                plan = update_plan_content(
+                    project,
+                    segments[4],
+                    str(payload.get("planContent", "")),
+                    subexperiment_id,
+                    payload.get("planAuxiliary"),
+                    "planAuxiliary" in payload,
+                )
             update_agents(project)
             self._send_json(HTTPStatus.OK, {"plan": plan})
             return
@@ -3112,6 +3567,11 @@ class SciHubHandler(BaseHTTPRequestHandler):
             update_agents(project)
             self._send_json(HTTPStatus.CREATED, {"plan": plan})
             return
+        if method == "POST" and len(segments) == 8 and segments[5] == "subexperiments" and segments[7] == "inherit-plan":
+            plan = inherit_previous_subexperiment_plan(project, segments[4], segments[6])
+            update_agents(project)
+            self._send_json(HTTPStatus.OK, {"plan": plan})
+            return
         if method == "GET" and len(segments) == 8 and segments[5] == "subexperiments" and segments[7] == "delete-preview":
             self._send_json(HTTPStatus.OK, subexperiment_deletion_preview(project, segments[4], segments[6]))
             return
@@ -3156,6 +3616,12 @@ class SciHubHandler(BaseHTTPRequestHandler):
                 "text/markdown; charset=utf-8",
                 {"Content-Disposition": disposition},
             )
+            return
+        if method == "POST" and len(segments) == 6 and segments[5] == "import-classified":
+            payload = self._read_json()
+            result = write_classified_import_logs(project, segments[4], payload)
+            update_agents(project)
+            self._send_json(HTTPStatus.CREATED, result)
             return
         if method == "POST" and len(segments) == 6 and segments[5] == "import":
             self._send_json(HTTPStatus.OK, import_log_document(self._read_json()))
