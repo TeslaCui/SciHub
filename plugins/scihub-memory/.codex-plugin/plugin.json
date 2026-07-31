@@ -1,0 +1,24 @@
+{
+  "name": "scihub-memory",
+  "version": "0.1.0",
+  "description": "Connect a Codex project conversation to a selected SciHub project memory without loading the whole project.",
+  "author": {
+    "name": "SciHub",
+    "url": "https://localhost/scihub"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "SciHub Memory",
+    "shortDescription": "按项目按需读取和记录 SciHub 记忆。",
+    "longDescription": "在 Codex 项目对话开头选择 SciHub 项目后，插件通过本地 MCP Gateway 按需检索相关 Markdown 片段，并把可复用信息记录到待确认记忆区。未选择项目时不会访问任何 SciHub 资料。",
+    "developerName": "SciHub",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "使用 SciHub Memory 插件，项目是 <slug>，查询与当前问题相关的历史记忆。",
+      "使用 SciHub Memory 插件，项目是 <slug>，记录本次对话中可复用的候选记忆。",
+      "列出项目 <slug> 的待确认记忆，不要自动确认。"
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

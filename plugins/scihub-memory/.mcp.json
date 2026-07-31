@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "scihub-memory": {
+      "command": "D:\\LeStoreDownload\\Anaconda\\python.exe",
+      "args": [
+        "D:\\myApp\\SciHub\\scihub_mcp_server.py",
+        "--projects-root",
+        "D:\\myApp\\SciHub\\科研项目"
+      ]
+    }
+  }
+}

@@ -118,6 +118,17 @@ Codex 或 Claude 在思考过程中可以调用 `scihub_memory_record` 实时记
 
 Codex 的项目配置可参考 [codex-project-config.example.toml](D:/myApp/SciHub/codex-project-config.example.toml)。SciHub 界面或 `GET /api/projects/<slug>/mcp/config` 可生成当前机器的实际路径。绑定配置只服务当前研究项目；其他 Codex 任务、其他工作区和普通对话不受影响。
 
+### SciHub Memory Codex 插件
+
+仓库内的 [plugins/scihub-memory](D:/myApp/SciHub/plugins/scihub-memory) 已封装 MCP Gateway 和 `project-memory` Skill。插件安装后，项目对话只需在开头说明：
+
+```text
+使用 SciHub Memory 插件，项目是 <项目 slug>。
+请按需读取与当前问题相关的项目记忆；发现可复用信息时记录为待确认候选。
+```
+
+插件会把 `projectSlug` 传给每次记忆工具调用；未明确选择项目时不读取任何 SciHub 资料。模型可调用 `scihub_memory_record` 实时写入候选 JSONL，但正式 Markdown 仍需用户确认。安装后建议重启 Codex 或新建任务，让插件和 MCP 工具加载。
+
 Google Drive 同步使用 Google Drive for desktop 提供的本地目录。进入“项目记忆”，选择项目专属同步目录后点击“立即同步”。SciHub 使用 SHA-256 清单处理单边变更；双边同时修改时保留双方文件并报告冲突，不自动删除文件。SQLite 索引不上传，另一台设备会从 Markdown 自动重建。
 
 ## 文件结构

@@ -29,6 +29,7 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - `memory_index.py`：项目 Markdown 分块、SQLite FTS5/纯 Python 回退检索、增量哈希索引、来源追踪与 `PITFALLS_SUMMARY.md` 自动区域维护。
 - `memory_gateway.py`：待确认记忆事件、确认后 Markdown 记忆、对话摘要状态和 Google Drive 本地目录安全同步。
 - `scihub_mcp_server.py`：本地 MCP stdio Memory Gateway；支持 `--project-dir` 项目绑定模式，只暴露当前项目范围内的受限搜索、读取、候选记忆、压缩和同步工具，不暴露原始 SQLite 或任意文件写入。
+- `plugins/scihub-memory/`：Codex 插件源；包含项目记忆 Skill、MCP 配置和个人 marketplace 清单。插件要求对话明确给出项目 slug，未选择项目时不调用记忆。
 - `index.html`：只包含实验日志、对话记录、项目记忆三个视图。
 - `app.js`：轻量导航、提示消息和项目创建入口。
 - `records.js`：项目、Markdown 文件和三个核心视图的逻辑；也负责 GPT、Gemini、Claude、DeepSeek 的 AI 设置、当前表单配置的连通性测试、GPT / DeepSeek 原生推理强度、单输入框的自动日志整理、DOCX/Markdown/文本导入、Markdown 导出和 `AGENTS.md` 预览。
