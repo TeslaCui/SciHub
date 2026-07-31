@@ -113,6 +113,34 @@ class MemoryGatewayTests(unittest.TestCase):
         result = handle_message(gateway, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "scihub_memory_context", "arguments": {"projectSlug": "demo", "question": "接触"}}})
         self.assertIn("接触不良", result["result"]["structuredContent"]["context"])
 
+    def test_project_bound_mcp_isolates_and_records_pending_memory(self) -> None:
+        gateway = Gateway(self.projects, project_dir=self.project)
+        tools = handle_message(gateway, {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+        context_tool = next(item for item in tools["result"]["tools"] if item["name"] == "scihub_memory_context")
+        self.assertNotIn("projectSlug", context_tool["inputSchema"]["required"])
+        recorded = handle_message(gateway, {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "scihub_memory_record",
+                "arguments": {
+                    "type": "decision",
+                    "proposedText": "后续复核夹具接触状态。",
+                    "evidenceStatus": "model_suggestion",
+                },
+            },
+        })
+        self.assertEqual(len(recorded["result"]["structuredContent"]["candidates"]), 1)
+        self.assertEqual(len(MemoryEventStore(self.project).list_pending()), 1)
+        cross_project = handle_message(gateway, {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "scihub_memory_status", "arguments": {"projectSlug": "other"}},
+        })
+        self.assertIn("拒绝跨项目访问", cross_project["error"]["message"])
+
     def test_http_memory_and_sync_extensions(self) -> None:
         import scihub_server
 
@@ -131,6 +159,11 @@ class MemoryGatewayTests(unittest.TestCase):
             with urllib.request.urlopen(request, timeout=5) as response:
                 context = json.loads(response.read().decode("utf-8"))
             self.assertIn("接触不良", context["context"])
+            with urllib.request.urlopen(f"{base}/mcp/config", timeout=5) as response:
+                config = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(config["projectSlug"], "demo")
+            self.assertIn("--project-dir", config["server"]["args"])
+            self.assertEqual(config["isolation"]["mode"], "project-bound")
         finally:
             server.shutdown()
             server.server_close()

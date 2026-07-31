@@ -19,6 +19,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -238,6 +239,39 @@ def load_project(slug: str) -> dict:
     except (OSError, ValueError, RuntimeError):
         project["memoryIndexWarning"] = True
     return project
+
+
+def mcp_connection_config(project: dict) -> dict[str, Any]:
+    """Return client-ready, project-bound MCP settings without credentials."""
+
+    python_executable = str(Path(sys.executable).resolve())
+    server_script = str((ROOT / "scihub_mcp_server.py").resolve())
+    project_directory = str(Path(project["dir"]).resolve())
+    command = {
+        "command": python_executable,
+        "args": [server_script, "--project-dir", project_directory],
+    }
+    toml_quote = lambda value: json.dumps(str(value), ensure_ascii=False)
+    toml = "\n".join(
+        [
+            "[mcp_servers.scihub-memory]",
+            f"command = {toml_quote(python_executable)}",
+            f"args = [{', '.join(toml_quote(value) for value in command['args'])}]",
+            "startup_timeout_sec = 120",
+            "",
+        ]
+    )
+    return {
+        "projectSlug": project["slug"],
+        "projectDir": project_directory,
+        "server": command,
+        "claude": {"mcpServers": {"scihub-memory": command}},
+        "codexToml": toml,
+        "isolation": {
+            "mode": "project-bound",
+            "description": "此连接只允许访问当前项目；其他 Codex/Claude 项目不会共享或读取该项目记忆。",
+        },
+    }
 
 
 def write_project_readme(project: dict, name: str, description: str, important: str) -> None:
@@ -3809,6 +3843,10 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._handle_memory(project, segments)
             return
 
+        if len(segments) >= 4 and segments[3] == "mcp":
+            self._handle_mcp(project, segments)
+            return
+
         if len(segments) >= 4 and segments[3] == "sync":
             self._handle_sync(project, segments)
             return
@@ -4135,6 +4173,12 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, decide_memory_candidate(project, segments[5], decision, patch))
             return
         raise ApiError("找不到项目记忆接口", HTTPStatus.NOT_FOUND)
+
+    def _handle_mcp(self, project: dict, segments: list):
+        if self.command == "GET" and len(segments) == 5 and segments[4] == "config":
+            self._send_json(HTTPStatus.OK, mcp_connection_config(project))
+            return
+        raise ApiError("找不到 MCP 连接配置接口", HTTPStatus.NOT_FOUND)
 
     def _handle_sync(self, project: dict, segments: list):
         method = self.command

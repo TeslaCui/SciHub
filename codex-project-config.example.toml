@@ -1,0 +1,12 @@
+# Copy this block into the Codex project configuration for one SciHub project.
+# The fixed project directory prevents this MCP connection from reading any
+# other SciHub project.
+
+[mcp_servers.scihub-memory]
+command = "<SCIHUB_PYTHON>"
+args = [
+  "<SCIHUB_ROOT>\\scihub_mcp_server.py",
+  "--project-dir",
+  "<SCI_PROJECT_DIR>"
+]
+startup_timeout_sec = 120

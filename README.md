@@ -89,30 +89,34 @@ AI 设置支持“默认配置”和各专职 Agent 的独立配置。未单独�
 
 SciHub 使用进程内的确定性 Router，把明确的界面操作路由给对应 Agent，不使用额外模型判断任务类型。Agent 只获得其任务需要的上下文；项目检索结果作为带来源的参考资料处理，不能改变系统规则或触发文件操作。
 
-SciHub 也提供本地 MCP Memory Gateway。启动 `scihub_mcp_server.py` 后，Codex 或 Claude 可通过 `scihub_memory_context`、`scihub_memory_search` 和 `scihub_memory_read` 按问题读取相关片段，不需要把整个项目文件树一次性发送给模型。MCP 工具只返回当前项目的有限参考资料，并要求保留来源路径和证据状态。
+SciHub 也提供本地 MCP Memory Gateway。建议为每个 Codex/Claude 项目使用绑定模式启动：`scihub_mcp_server.py --project-dir <项目目录>`。这样工具无需反复传 `projectSlug`，并且进程只能访问这个项目，项目外的 Codex/Claude 对话不会读取或修改它。Codex 或 Claude 可通过 `scihub_memory_context`、`scihub_memory_search` 和 `scihub_memory_read` 按问题读取相关片段，不需要把整个项目文件树一次性发送给模型。MCP 工具只返回当前项目的有限参考资料，并要求保留来源路径和证据状态。
 
 可通过环境变量 `SCIHUB_AGENT_MODE=legacy|shadow|active` 控制切换：`legacy` 强制使用旧调用，`shadow` 同时验证新 Agent 但实际采用旧结果，`active` 使用新 Agent 并仅在本机服务不支持新接口时回退。当前默认是已经过回归验证的 `active`。
 
 项目 Markdown 始终是唯一事实源。`.scihub/memory.sqlite3`、`memory-state.json` 与 `index-status.json` 仅是可重建的派生索引；SQLite 支持 FTS5 时使用全文检索，不支持时自动改用纯 Python 检索。实验相关问题会优先召回 `PITFALLS_SUMMARY.md` 和“实验异常与踩坑点”段落。
 
-本地 Agent 接口为 `POST /api/projects/<slug>/agents/run`；记忆检索、状态和重建接口分别为 `POST .../memory/search`、`GET .../memory/status` 和 `POST .../memory/rebuild`。这些接口是现有日志、方案、对话和 `/api/proxy` 接口之外的兼容扩展。
+本地 Agent 接口为 `POST /api/projects/<slug>/agents/run`；记忆检索、状态和重建接口分别为 `POST .../memory/search`、`GET .../memory/status` 和 `POST .../memory/rebuild`。`GET /api/projects/<slug>/mcp/config` 会返回当前项目专属的 Codex TOML 和 Claude JSON 配置。以上接口是现有日志、方案、对话和 `/api/proxy` 接口之外的兼容扩展。
 
 记忆提取 Agent 会把对话中的候选事实、决策、踩坑或待办追加到 `.scihub/memory-events.jsonl`，不会未经确认写入正式记忆。用户确认后才会生成 `memory/confirmed/*.md` 并刷新索引。长对话达到阈值后可生成 `.scihub/conversation-state.json` 摘要；原始对话 Markdown 不会删除，后续请求默认使用摘要、近期消息和按需检索片段。
 
+Codex 或 Claude 在思考过程中可以调用 `scihub_memory_record` 实时记录候选事实、决定、踩坑或待办；该工具只写入待确认 JSONL。只有用户在 SciHub“待确认记忆”面板中确认，或显式调用 `scihub_memory_confirm` 后，才会写入 `memory/confirmed/*.md`。因此模型可以实时记录，但不能未经确认篡改正式科研资料。
+
 ### 外部 AI 与 Google Drive 同步
 
-可将本地 MCP Server 配置到 Codex 或 Claude 的 MCP 设置中（命令路径按本机 Python 修改）：
+可将本地 MCP Server 配置到 Codex 或 Claude 的 MCP 设置中（命令路径按本机 Python 修改）。项目绑定配置示例：
 
 ```json
 {
   "mcpServers": {
     "scihub-memory": {
       "command": "D:\\LeStoreDownload\\Anaconda\\python.exe",
-      "args": ["D:\\myApp\\SciHub\\scihub_mcp_server.py", "--projects-root", "D:\\myApp\\SciHub\\科研项目"]
+      "args": ["D:\\myApp\\SciHub\\scihub_mcp_server.py", "--project-dir", "D:\\myApp\\SciHub\\科研项目\\<项目 slug>"]
     }
   }
 }
 ```
+
+Codex 的项目配置可参考 [codex-project-config.example.toml](D:/myApp/SciHub/codex-project-config.example.toml)。SciHub 界面或 `GET /api/projects/<slug>/mcp/config` 可生成当前机器的实际路径。绑定配置只服务当前研究项目；其他 Codex 任务、其他工作区和普通对话不受影响。
 
 Google Drive 同步使用 Google Drive for desktop 提供的本地目录。进入“项目记忆”，选择项目专属同步目录后点击“立即同步”。SciHub 使用 SHA-256 清单处理单边变更；双边同时修改时保留双方文件并报告冲突，不自动删除文件。SQLite 索引不上传，另一台设备会从 Markdown 自动重建。
 

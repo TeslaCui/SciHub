@@ -3191,10 +3191,11 @@
         <div class="record-foot"><span class="record-hint">项目路径：科研项目/${esc(p.slug)}/</span><button id="saveMemBtn" class="primary-button">保存项目记忆</button></div>
         <div class="record-agents"><div class="record-field-head"><span>AGENTS.md（自动更新）</span></div><pre class="agents-preview">${esc(R.agents || '正在读取 AGENTS.md…')}</pre></div>
         ${pendingHtml}
-        <div class="memory-sync-panel"><div class="record-field-head"><span>Google Drive 本地同步</span></div><div class="form-field full"><label>同步目录</label><div style="display:flex;gap:8px"><input id="syncRootInput" value="${esc(syncRoot)}" placeholder="选择 Google Drive for desktop 的本地目录" style="flex:1" /><button id="chooseSyncRoot" class="secondary-button" type="button">选择目录</button></div><small class="field-note">只同步当前项目；SQLite 索引在另一台设备自动重建，不会自动删除文件。</small></div><div class="record-foot"><span id="syncStatusText" class="record-hint">${esc(syncLabel)}</span><div style="display:flex;gap:8px"><button id="saveSyncButton" class="secondary-button" type="button">保存配置</button><button id="runSyncButton" class="primary-button" type="button">立即同步</button></div></div></div>
+        <div class="memory-sync-panel"><div class="record-field-head"><span>Google Drive 本地同步</span></div><div class="form-field full"><label>同步目录</label><div style="display:flex;gap:8px"><input id="syncRootInput" value="${esc(syncRoot)}" placeholder="选择 Google Drive for desktop 的本地目录" style="flex:1" /><button id="chooseSyncRoot" class="secondary-button" type="button">选择目录</button></div><small class="field-note">只同步当前项目；SQLite 索引在另一台设备自动重建，不会自动删除文件。</small></div><div class="record-foot"><span id="syncStatusText" class="record-hint">${esc(syncLabel)}</span><div style="display:flex;gap:8px"><button id="mcpConfigButton" class="secondary-button" type="button">连接 Codex/Claude</button><button id="saveSyncButton" class="secondary-button" type="button">保存配置</button><button id="runSyncButton" class="primary-button" type="button">立即同步</button></div></div></div>
       </div>`;
     $('saveMemBtn').onclick = saveProjectInfo;
     $('chooseSyncRoot').onclick = chooseSyncRoot;
+    $('mcpConfigButton').onclick = showMcpConnectionConfig;
     $('saveSyncButton').onclick = saveSyncConfig;
     $('runSyncButton').onclick = runProjectSync;
     $('memoryBody').querySelectorAll('[data-memory-id]').forEach(item => {
@@ -3232,6 +3233,23 @@
       const input = $('syncRootInput');
       if (input && result.path) input.value = result.path;
     } catch (error) { toast(`选择同步目录失败：${error.message}`); }
+  }
+
+  async function showMcpConnectionConfig() {
+    if (!R.active) return;
+    try {
+      const config = await api(`${slugPath(R.active.slug)}/mcp/config`);
+      const codexToml = config.codexToml || '';
+      const claudeJson = JSON.stringify(config.claude || {}, null, 2);
+      openModal(`<div class="modal-header"><div><h2>连接 Codex / Claude</h2><p>这是当前项目专属的 MCP 配置。该连接绑定到 ${esc(config.projectDir || R.active.slug)}，不会访问其他 SciHub 项目。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body"><div class="form-field full"><label>Codex 项目配置（config.toml）</label><textarea id="mcpCodexConfig" readonly style="min-height:150px;font-family:monospace">${esc(codexToml)}</textarea></div><div class="form-field full"><label>Claude Desktop 配置（JSON）</label><textarea id="mcpClaudeConfig" readonly style="min-height:150px;font-family:monospace">${esc(claudeJson)}</textarea></div></div><div class="modal-footer"><button id="copyMcpConfigButton" class="primary-button" type="button">复制 Codex 配置</button><button class="secondary-button" data-close-modal type="button">关闭</button></div>`, () => {
+        $('copyMcpConfigButton').onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(codexToml);
+            toast('Codex MCP 配置已复制');
+          } catch { toast('复制失败，请手动复制配置'); }
+        };
+      });
+    } catch (error) { toast(`读取 MCP 配置失败：${error.message}`); }
   }
 
   async function saveSyncConfig() {
