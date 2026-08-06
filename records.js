@@ -68,6 +68,7 @@
     logs: [],
     logEditorOpen: false,
     logNoteSelection: null,
+    logSelection: new Set(),
     logFilters: { planId: '', subexperimentId: '' },
     plans: [],
     planBook: null,
@@ -527,6 +528,7 @@
     R.date = TODAY;
     R.log = { source: '', phenomena: '', record: '', pitfalls: '', images: [], notes: [], highlights: [], sampleId: '', process: '', status: '', tags: '', tempCelsius: '', formattedSource: '', planId: '', subexperimentId: '' };
     R.logEditorOpen = false;
+    R.logSelection.clear();
     R.logFilters = { planId: '', subexperimentId: '' };
     R.autoPolish = true;
     R.useFullProjectMemory = false;
@@ -2960,6 +2962,50 @@
     return `<section class="log-image-board"><div class="log-image-board-head"><div><p class="eyebrow">图片板块</p><h2>导入文档图片</h2><p>图片不做内容识别，仅保留文件/页码元数据，并按 AI 归档结果关联到对应日志。</p></div><span>${withImages.reduce((sum, log) => sum + log.images.length, 0)} 项图片信息</span></div><div class="log-image-board-grid">${withImages.map(log => `<article class="log-image-board-card"><div><b>${esc(log.date || '')}</b><strong>${esc(logListAssociationLabel(log))}</strong></div>${logImagesMarkup(log, true)}</article>`).join('')}</div></section>`;
   }
 
+  function setupLogSelectionControls(body, filtered) {
+    const visibleIndexes = filtered.map(log => R.logs.indexOf(log)).filter(index => index >= 0);
+    body.querySelector('.logs-summary')?.insertAdjacentHTML('beforebegin', '<div class="logs-batch-controls"><label><input id="logsSelectAll" type="checkbox" /> 全选当前筛选结果</label><span id="logsSelectedCount">已选 0 条</span><button id="logsBatchDelete" type="button" class="text-button danger-button" disabled>批量删除</button></div>');
+    body.querySelectorAll('.log-entry-card').forEach((card, position) => {
+      const index = visibleIndexes[position];
+      const actions = card.querySelector('.log-entry-head-actions');
+      if (!actions || index === undefined) return;
+      const label = document.createElement('label');
+      label.className = 'log-select-checkbox';
+      label.innerHTML = '<input type="checkbox" data-log-select-index="' + index + '" /><span>选择</span>';
+      actions.prepend(label);
+      const checkbox = label.querySelector('input');
+      checkbox.checked = R.logSelection.has(index);
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) R.logSelection.add(index);
+        else R.logSelection.delete(index);
+        updateLogSelectionControls(body, visibleIndexes);
+      });
+    });
+    body.querySelector('#logsSelectAll')?.addEventListener('change', event => {
+      visibleIndexes.forEach(index => event.target.checked ? R.logSelection.add(index) : R.logSelection.delete(index));
+      body.querySelectorAll('[data-log-select-index]').forEach(input => { input.checked = event.target.checked; });
+      updateLogSelectionControls(body, visibleIndexes);
+    });
+    body.querySelector('#logsBatchDelete')?.addEventListener('click', () => {
+      const selected = visibleIndexes.map(index => R.logs[index]).filter((log, position) => log && R.logSelection.has(visibleIndexes[position]));
+      openBatchLogDeleteDialog(selected);
+    });
+    updateLogSelectionControls(body, visibleIndexes);
+  }
+
+  function updateLogSelectionControls(body, visibleIndexes) {
+    const selectedCount = visibleIndexes.filter(index => R.logSelection.has(index)).length;
+    const selectAll = body.querySelector('#logsSelectAll');
+    if (selectAll) {
+      selectAll.checked = visibleIndexes.length > 0 && selectedCount === visibleIndexes.length;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < visibleIndexes.length;
+    }
+    const count = body.querySelector('#logsSelectedCount');
+    if (count) count.textContent = '已选 ' + selectedCount + ' 条';
+    const batchButton = body.querySelector('#logsBatchDelete');
+    if (batchButton) batchButton.disabled = selectedCount === 0;
+  }
+  // Batch log selection helpers
   function renderLogListView() {
     const planFilter = R.logFilters.planId;
     const subFilter = R.logFilters.subexperimentId;
@@ -2979,7 +3025,8 @@
         const highlights = Array.isArray(log.highlights) && log.highlights.length ? log.highlights : deriveLogHighlights(log);
         const sampleMeta = [log.sampleId && `样品：${log.sampleId}`, log.process && `过程：${log.process}`, log.status && `状态：${log.status}`, log.tags && `标签：${log.tags}`, log.tempCelsius && `参数：${log.tempCelsius}`].filter(Boolean).join(' · ');
         return `<article class="log-entry-card"><div class="log-entry-head"><div><p class="eyebrow">${esc(dateLabel)}</p><h2>${esc(logListAssociationLabel(log))}</h2></div><div class="log-entry-head-actions"><small>${esc(log.updatedAt ? new Date(log.updatedAt).toLocaleString('zh-CN') : '')}</small>${log.sampleId ? `<button class="text-button" data-trace-log-sample="${esc(log.sampleId)}">查看追溯</button>` : ''}<button class="secondary-button" data-edit-log-index="${R.logs.indexOf(log)}">编辑日志</button><button class="text-button danger-button" data-delete-log-index="${R.logs.indexOf(log)}">删除</button></div></div>${sampleMeta ? `<div class="log-entry-sample-meta">${highlightLogText(sampleMeta, highlights)}</div>` : ''}<div class="log-entry-sections">${logListSection('实验现象', log.phenomena, highlights)}${logListSection('实验记录', log.record, highlights)}${logListSection('实验异常与踩坑点', log.pitfalls, highlights)}${logImagesMarkup(log)}${source ? `<details class="log-entry-source"><summary>查看原始输入</summary><p>${highlightLogText(source, highlights)}</p></details>` : ''}</div></article>`;
-      }).join('')}</div>${logImageBoardMarkup(filtered)}`;
+      }).join('')}</div>`;
+      setupLogSelectionControls(body, filtered);
       body.querySelectorAll('[data-edit-log-index]').forEach(button => {
         button.onclick = () => openLogEditor(R.logs[Number(button.dataset.editLogIndex)]);
       });
@@ -2991,10 +3038,12 @@
       });
     }
     $('logsPlanFilter').onchange = event => {
+      R.logSelection.clear();
       R.logFilters = { planId: event.target.value, subexperimentId: '' };
       renderLogsView();
     };
     $('logsSubexperimentFilter').onchange = event => {
+      R.logSelection.clear();
       R.logFilters.subexperimentId = event.target.value;
       renderLogsView();
     };
@@ -3053,6 +3102,39 @@
         ? '当前 SciHub 服务尚未加载删除接口，请重启「启动 SciHub.cmd」后再试。'
         : `读取删除清单失败：${message}`);
     }
+  }
+
+  async function openBatchLogDeleteDialog(logs) {
+    if (!R.active || !Array.isArray(logs) || !logs.length) { toast('请先选择要删除的实验日志'); return; }
+    let previews;
+    try {
+      previews = await Promise.all(logs.map(async log => ({ log, preview: await api(`${slugPath(R.active.slug)}/logs/${encodeURIComponent(log.date)}/delete-preview${logQuery(log)}`) })));
+    } catch (error) {
+      toast('读取批量删除清单失败：' + (error.message || error));
+      return;
+    }
+    const fileList = previews.map(item => '<li><b>' + esc(item.log.date) + '</b> · ' + esc(logListAssociationLabel(item.log)) + '<code>' + esc(item.preview.path || '') + '</code></li>').join('');
+    openModal('<div class="modal-header"><div><h2>批量删除实验日志</h2><p>将只删除下列已选中的日志 Markdown 文件，不会删除实验方案或其他项目资料。</p></div><button class="close-button" data-close-modal>×</button></div>'
+      + '<form id="batchDeleteLogForm"><div class="modal-body"><div class="delete-warning"><b>共 ' + previews.length + ' 条日志</b><br>请逐项核对文件路径；删除后无法恢复。</div><ul class="delete-target-list">' + fileList + '</ul><label class="batch-delete-ack"><input id="batchDeleteLogAck" type="checkbox" required /> 我已核对上面的日志文件路径，并确认删除</label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">确认批量删除</button></div></form>', () => {
+      $('batchDeleteLogForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = $('batchDeleteLogForm').querySelector('[type=submit]');
+        button.disabled = true;
+        const entries = previews.map(item => ({ date: item.log.date, planId: item.log.planId || '', subexperimentId: item.log.subexperimentId || '', confirmation: item.preview.confirmation }));
+        try {
+          await api(`${slugPath(R.active.slug)}/logs/batch-delete`, { method: 'DELETE', body: JSON.stringify({ entries }) });
+          closeModal();
+          R.logSelection.clear();
+          await loadProject(R.active.slug);
+          R.logEditorOpen = false;
+          renderLogsView();
+          toast('批量删除实验日志完成');
+        } catch (error) {
+          button.disabled = false;
+          toast('批量删除实验日志失败：' + (error.message || error));
+        }
+      });
+    });
   }
 
   function renderLogsView() {
@@ -3163,6 +3245,14 @@
           </div>
         </div>
       </div>`;
+    const logPanel = $('logsBody').querySelector('.record-panel');
+    if (logPanel) {
+      const logLayout = document.createElement('div');
+      logLayout.className = 'log-editor-layout';
+      logPanel.parentNode.insertBefore(logLayout, logPanel);
+      logLayout.appendChild(logPanel);
+      logLayout.insertAdjacentHTML('beforeend', `${logNotesSidebarMarkup(l.notes)}<div id="logNoteContextMenu" class="log-note-context-menu" hidden><button type="button" id="recordLogNoteContextButton">✎ 记录笔记</button></div>`);
+    }
     $('logDate').onchange = e => loadLog(e.target.value);
     $('logPlan').onchange = e => {
       const next = { ...R.log, planId: e.target.value, subexperimentId: '' };
@@ -3178,8 +3268,8 @@
       $('logSourceCount').textContent = `${e.target.value.length} 字`;
       $('exportLogBtn').disabled = !e.target.value.trim();
     };
-    $('logSource').addEventListener('contextmenu', showLogNoteContextMenu);
-    $('recordLogNoteContextButton').onclick = () => openLogNoteDialog();
+    $('logSource')?.addEventListener('contextmenu', showLogNoteContextMenu);
+    $('recordLogNoteContextButton')?.addEventListener('click', () => openLogNoteDialog());
     document.addEventListener('click', hideLogNoteContextMenu, { once: true });
     document.querySelectorAll('[data-log-note-id]').forEach(button => {
       button.onclick = () => focusLogNote((R.log.notes || []).find(note => note.id === button.dataset.logNoteId));
@@ -4029,7 +4119,7 @@
     const syncRoot = syncRootFor(p.slug);
     const syncLabel = R.syncStatus?.configured ? `本地文件：${R.syncStatus.localFiles || 0} · 云端文件：${R.syncStatus.remoteFiles || 0} · 冲突：${R.syncStatus.conflicts?.length || 0}` : '尚未配置同步目录';
     $('memoryBody').innerHTML = `
-      <div class="log-editor-layout"><div class="record-panel">
+      <div class="record-panel">
         <div class="form-field full"><label>项目名称</label><input id="memName" maxlength="80" value="${esc(p.name)}" /></div>
         <div class="form-field full"><label>项目说明</label><textarea id="memDesc" style="min-height:70px" maxlength="800">${esc(p.description || '')}</textarea></div>
         <div class="form-field full"><label>重要信息</label><textarea id="memImportant" style="min-height:110px" maxlength="2000" placeholder="已知事实、样品编号、固定约束、待验证事项。会同步进入 AGENTS.md。">${esc(p.importantInfo || '')}</textarea></div>
@@ -4038,7 +4128,7 @@
         ${pendingHtml}
         ${databaseHtml}
         <div class="memory-sync-panel"><div class="record-field-head"><span>Google Drive 本地同步</span></div><div class="form-field full"><label>同步目录</label><div style="display:flex;gap:8px"><input id="syncRootInput" value="${esc(syncRoot)}" placeholder="选择 Google Drive for desktop 的本地目录" style="flex:1" /><button id="chooseSyncRoot" class="secondary-button" type="button">选择目录</button></div><small class="field-note">只同步当前项目；SQLite 索引在另一台设备自动重建，不会自动删除文件。</small></div><div class="record-foot"><span id="syncStatusText" class="record-hint">${esc(syncLabel)}</span><div style="display:flex;gap:8px"><button id="mcpConfigButton" class="secondary-button" type="button">连接 Codex/Claude</button><button id="saveSyncButton" class="secondary-button" type="button">保存配置</button><button id="runSyncButton" class="primary-button" type="button">立即同步</button></div></div></div>
-      </div>${logNotesSidebarMarkup(l.notes)}<div id="logNoteContextMenu" class="log-note-context-menu" hidden><button type="button" id="recordLogNoteContextButton">✎ 记录笔记</button></div></div>`;
+      </div>`;
     $('saveMemBtn').onclick = saveProjectInfo;
     $('chooseSyncRoot').onclick = chooseSyncRoot;
     $('mcpConfigButton').onclick = showMcpConnectionConfig;

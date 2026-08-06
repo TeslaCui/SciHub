@@ -3188,6 +3188,44 @@ def delete_log(project: dict, date: str, query: Optional[dict], confirmation: st
     update_agents(project)
 
 
+def batch_delete_logs(project: dict, entries: Any) -> list[str]:
+    """Delete an explicitly confirmed set of individual log Markdown files.
+
+    Every target is resolved and validated before any file is removed.  The
+    confirmation token is tied to the exact relative path returned by the
+    delete-preview endpoint, so this endpoint never accepts a directory or a
+    wildcard selection.
+    """
+    if not isinstance(entries, list) or not entries:
+        raise ApiError("至少选择一条实验日志后再批量删除。", HTTPStatus.BAD_REQUEST)
+    if len(entries) > 500:
+        raise ApiError("单次最多批量删除 500 条实验日志。", HTTPStatus.BAD_REQUEST)
+    prepared: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for item in entries:
+        if not isinstance(item, dict):
+            raise ApiError("批量删除参数无效。", HTTPStatus.BAD_REQUEST)
+        date = one_line(item.get("date"))
+        if not date:
+            raise ApiError("批量删除缺少实验日期。", HTTPStatus.BAD_REQUEST)
+        query = {
+            "planId": one_line(item.get("planId")),
+            "subexperimentId": one_line(item.get("subexperimentId")),
+        }
+        target, relative, _ = log_deletion_target(project, date, query)
+        confirmation = one_line(item.get("confirmation"))
+        if confirmation != f"DELETE {relative}":
+            raise ApiError("批量删除确认短语不匹配，未删除实验日志。", HTTPStatus.BAD_REQUEST)
+        if relative in seen:
+            raise ApiError("批量删除包含重复的日志文件。", HTTPStatus.BAD_REQUEST)
+        seen.add(relative)
+        prepared.append((target, relative))
+    for target, _ in prepared:
+        target.unlink()
+    update_agents(project)
+    return [relative for _, relative in prepared]
+
+
 def legacy_export_project_markdown(project: dict) -> bytes:
     """把项目内全部 Markdown 合并为一份保留目录层级的 Markdown。"""
     root = project["dir"]
@@ -4720,6 +4758,11 @@ class SciHubHandler(BaseHTTPRequestHandler):
         method = self.command
         if method == "GET" and len(segments) == 4:
             self._send_json(HTTPStatus.OK, {"logs": list_logs(project)})
+            return
+        if method == "DELETE" and len(segments) == 5 and segments[4] == "batch-delete":
+            payload = self._read_json()
+            deleted = batch_delete_logs(project, payload.get("entries"))
+            self._send_json(HTTPStatus.OK, {"deleted": True, "paths": deleted})
             return
         if method == "GET" and len(segments) == 6 and segments[5] == "delete-preview":
             self._send_json(HTTPStatus.OK, log_deletion_preview(project, segments[4], self._query()))
