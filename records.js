@@ -3276,6 +3276,41 @@
     });
   }
 
+  function appendLogImageFiles(files, source = '选择') {
+    const entries = [...(files || [])].filter(file => file && (String(file.type || '').startsWith('image/') || /\.(avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i.test(file.name || ''))).map((file, index) => {
+      const type = file.type || 'image/*';
+      const extension = type.split('/')[1] || 'png';
+      const name = file.name || `${source === '粘贴' ? 'pasted-image' : 'image'}-${Date.now()}-${index + 1}.${extension}`;
+      return `${name} · ${type} · ${Number(file.size || 0).toLocaleString()} 字节`;
+    });
+    if (!entries.length) { toast('未检测到可导入的图片'); return; }
+    R.log.images = [...new Set([...(R.log.images || []), ...entries])].slice(0, 100);
+    refreshLogImageEditor();
+  }
+
+  function pastedImageFiles(event) {
+    const direct = [...(event.clipboardData?.files || [])].filter(file => String(file.type || '').startsWith('image/'));
+    if (direct.length) return direct;
+    return [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && String(item.type || '').startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
+  }
+
+  function setupLogImageInteractions() {
+    const list = $('logImageEditorList');
+    const section = list?.closest('.log-image-editor');
+    if (!section) return;
+    if (!section.querySelector('#logImageDropZone')) section.querySelector('.record-field-head')?.insertAdjacentHTML('afterend', '<div id="logImageDropZone" class="log-image-drop-zone">将图片拖到这里，或点击输入框后粘贴截图</div>');
+    const dropZone = section.querySelector('#logImageDropZone');
+    ['dragenter', 'dragover'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.add('is-dragging'); }));
+    ['dragleave', 'drop'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove('is-dragging'); }));
+    dropZone.addEventListener('drop', event => appendLogImageFiles(event.dataTransfer?.files, '拖入'));
+    section.addEventListener('paste', event => {
+      const files = pastedImageFiles(event);
+      if (!files.length) return;
+      event.preventDefault();
+      appendLogImageFiles(files, '粘贴');
+    });
+  }
+
   function renderLogEditorView() {
     if (!requireProject('logsProjectTitle', 'logsBody')) return;
     $('logsProjectTitle').textContent = R.active.name;
@@ -3322,11 +3357,10 @@
       logPanel.insertAdjacentHTML('beforeend', logImageEditorMarkup(l.images));
     }
     refreshLogImageEditor();
+    setupLogImageInteractions();
     $('logImageFiles')?.addEventListener('change', event => {
-      const entries = [...(event.target.files || [])].map(file => `${file.name} · ${file.type || 'image/*'} · ${file.size.toLocaleString()} 字节`);
-      R.log.images = [...new Set([...(R.log.images || []), ...entries])].slice(0, 100);
+      appendLogImageFiles(event.target.files);
       event.target.value = '';
-      refreshLogImageEditor();
     });
     $('addLogImageRef')?.addEventListener('click', () => {
       const input = $('logImageRefInput');
