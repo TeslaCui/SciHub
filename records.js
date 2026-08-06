@@ -3259,6 +3259,23 @@
     textarea.setSelectionRange(index, index + note.quote.length);
   }
 
+  function logImageEditorMarkup(images = []) {
+    return '<section class="log-image-editor"><div class="record-field-head"><span>日志图片</span><small>可添加或删除图片元数据；保存日志后写入 Markdown</small></div><div class="log-image-editor-actions"><label class="secondary-button image-file-picker"><input id="logImageFiles" type="file" accept="image/*" multiple />选择图片文件</label><div class="log-image-manual-add"><input id="logImageRefInput" type="text" maxlength="300" placeholder="手动填写文件名 / 页码 / 图片说明" /><button id="addLogImageRef" type="button" class="secondary-button">添加</button></div></div><div id="logImageEditorList" class="log-image-editor-list"></div><p class="field-note">不会复制或上传图片二进制文件；选择文件只记录文件名、类型和大小。</p></section>';
+  }
+
+  function refreshLogImageEditor() {
+    const list = $('logImageEditorList');
+    if (!list) return;
+    const images = Array.isArray(R.log.images) ? R.log.images : [];
+    list.innerHTML = images.length ? images.map((item, index) => '<div class="log-image-editor-item"><span class="log-image-icon" aria-hidden="true">▧</span><span class="log-image-editor-ref">' + esc(item) + '</span><button type="button" class="text-button danger-button" data-remove-log-image="' + index + '">删除</button></div>').join('') : '<div class="log-image-editor-empty">暂无图片。可选择文件或手动添加图片元数据。</div>';
+    list.querySelectorAll('[data-remove-log-image]').forEach(button => {
+      button.onclick = () => {
+        R.log.images.splice(Number(button.dataset.removeLogImage), 1);
+        refreshLogImageEditor();
+      };
+    });
+  }
+
   function renderLogEditorView() {
     if (!requireProject('logsProjectTitle', 'logsBody')) return;
     $('logsProjectTitle').textContent = R.active.name;
@@ -3302,7 +3319,23 @@
       logPanel.parentNode.insertBefore(logLayout, logPanel);
       logLayout.appendChild(logPanel);
       logLayout.insertAdjacentHTML('beforeend', `${logNotesSidebarMarkup(l.notes)}<div id="logNoteContextMenu" class="log-note-context-menu" hidden><button type="button" id="recordLogNoteContextButton">✎ 记录笔记</button></div>`);
+      logPanel.insertAdjacentHTML('beforeend', logImageEditorMarkup(l.images));
     }
+    refreshLogImageEditor();
+    $('logImageFiles')?.addEventListener('change', event => {
+      const entries = [...(event.target.files || [])].map(file => `${file.name} · ${file.type || 'image/*'} · ${file.size.toLocaleString()} 字节`);
+      R.log.images = [...new Set([...(R.log.images || []), ...entries])].slice(0, 100);
+      event.target.value = '';
+      refreshLogImageEditor();
+    });
+    $('addLogImageRef')?.addEventListener('click', () => {
+      const input = $('logImageRefInput');
+      const value = input?.value.trim();
+      if (!value) return;
+      R.log.images = [...new Set([...(R.log.images || []), value])].slice(0, 100);
+      input.value = '';
+      refreshLogImageEditor();
+    });
     $('logDate').onchange = e => loadLog(e.target.value);
     $('logPlan').onchange = e => {
       const next = { ...R.log, planId: e.target.value, subexperimentId: '' };
