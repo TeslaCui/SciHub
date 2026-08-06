@@ -20,6 +20,7 @@ from typing import Any, Mapping
 
 
 EVENTS_FILENAME = "memory-events.jsonl"
+AUDIT_FILENAME = "memory-audit.jsonl"
 CONVERSATION_STATE_FILENAME = "conversation-state.json"
 SYNC_MANIFEST_FILENAME = "sync-manifest.json"
 CONFIRMED_MEMORY_DIR = Path("memory") / "confirmed"
@@ -79,6 +80,62 @@ def _project_dir(projects_root: Path, slug: str) -> Path:
 
 def _event_path(project_root: Path) -> Path:
     return project_root / ".scihub" / EVENTS_FILENAME
+
+
+def _audit_path(project_root: Path) -> Path:
+    return project_root / ".scihub" / AUDIT_FILENAME
+
+
+class MemoryAuditStore:
+    """Small JSONL audit trail for project-memory reads and writes.
+
+    The audit trail is deliberately separate from the candidate event log: it
+    records *that* an operation happened without duplicating complete source
+    documents, AI prompts, or credentials.
+    """
+
+    def __init__(self, project_root: str | Path):
+        self.project_root = Path(project_root).expanduser().resolve()
+        if not self.project_root.is_dir() or self.project_root.is_symlink():
+            raise MemoryGatewayError("project directory does not exist")
+        self.path = _audit_path(self.project_root)
+
+    def record(self, action: str, *, channel: str = "server", details: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        entry = {
+            "eventId": f"a-{int(time.time() * 1000)}-{secrets.token_hex(4)}",
+            "createdAt": _now(),
+            "action": _line(action)[:80] or "unknown",
+            "channel": _line(channel)[:40] or "server",
+            "details": dict(details or {}),
+        }
+        encoded = (_safe_json(entry) + "\n").encode("utf-8")
+        if len(encoded) > MAX_EVENT_BYTES:
+            raise MemoryGatewayError("memory audit event is too large")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("ab") as handle:
+            handle.write(encoded)
+        return entry
+
+    def list(self, limit: int = 120) -> list[dict[str, Any]]:
+        if not self.path.is_file():
+            return []
+        try:
+            raw = self.path.read_bytes()
+        except OSError as exc:
+            raise MemoryGatewayError("unable to read memory audit events") from exc
+        if len(raw) > 128 * 1024 * 1024:
+            raise MemoryGatewayError("memory audit log is too large")
+        entries: list[dict[str, Any]] = []
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                entries.append(value)
+        return list(reversed(entries[-max(1, min(int(limit or 120), 500)):]))
 
 
 class MemoryEventStore:
@@ -199,6 +256,8 @@ class MemoryEventStore:
                     current[candidate_id] = self._normalise_candidate(patch, candidate_id) | {"status": "pending"}
                 else:
                     current[candidate_id]["status"] = "confirmed" if kind == "confirm" else "rejected"
+                    if kind == "confirm" and _line(event.get("path")):
+                        current[candidate_id]["path"] = _line(event.get("path"))
         return current
 
     def list_pending(self, include_resolved: bool = False) -> list[dict[str, Any]]:
@@ -220,9 +279,11 @@ class MemoryEventStore:
             updated = self._normalise_candidate({**candidate, **dict(patch or {})}, candidate["id"])
             self._append({"type": "edit", "candidateId": candidate["id"], "patch": updated})
             return {**updated, "status": "pending"}
-        self._append({"type": decision, "candidateId": candidate["id"]})
         if decision == "confirm":
-            return self._write_confirmed(candidate)
+            confirmed = self._write_confirmed(candidate)
+            self._append({"type": "confirm", "candidateId": candidate["id"], "path": confirmed["path"]})
+            return confirmed
+        self._append({"type": decision, "candidateId": candidate["id"]})
         return {**candidate, "status": "rejected"}
 
     def _write_confirmed(self, candidate: Mapping[str, Any]) -> dict[str, Any]:
@@ -259,6 +320,94 @@ class MemoryEventStore:
         lines.extend(["## 来源与证据", "", _safe_json(source_refs), ""])
         path.write_text("\n".join(lines), encoding="utf-8")
         return {**dict(candidate), "status": "confirmed", "path": path.relative_to(self.project_root).as_posix()}
+
+    @staticmethod
+    def _confirmed_metadata(text: str) -> tuple[dict[str, str], str]:
+        if not text.startswith("---"):
+            return {}, text
+        lines = text.splitlines()
+        metadata: dict[str, str] = {}
+        end = 0
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                end = index + 1
+                break
+            key, separator, value = line.partition(":")
+            if separator and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key.strip()):
+                metadata[key.strip()] = value.strip().strip('"').strip()
+        return metadata, "\n".join(lines[end:]) if end else text
+
+    @staticmethod
+    def _confirmed_title_and_content(body: str) -> tuple[str, str]:
+        title = ""
+        for line in body.splitlines():
+            if line.startswith("# "):
+                title = line[2:].strip()
+                break
+        content = re.sub(r"(?ms)^## (?:记忆内容|实验异常与踩坑点)\s*\n(.*?)(?=^## |\Z)", r"\1", body).strip()
+        if content == body.strip():
+            content = body.strip()
+        content = re.sub(r"(?ms)^## 来源与证据\s*\n.*\Z", "", content).strip()
+        return title, content
+
+    def list_confirmed(self) -> list[dict[str, Any]]:
+        directory = self.project_root / CONFIRMED_MEMORY_DIR
+        if not directory.is_dir():
+            return []
+        if directory.is_symlink():
+            raise MemoryGatewayError("confirmed memory directory must not be a symlink")
+        candidates = self._materialize()
+        entries: list[dict[str, Any]] = []
+        for path in sorted(directory.glob("*.md"), key=lambda item: item.name, reverse=True):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                metadata, body = self._confirmed_metadata(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError):
+                continue
+            memory_id = _line(metadata.get("memory_id"))
+            if not memory_id:
+                continue
+            title, content = self._confirmed_title_and_content(body)
+            candidate = candidates.get(memory_id, {})
+            entries.append({
+                "id": memory_id,
+                "title": title or _line(candidate.get("title")) or memory_id,
+                "type": _line(metadata.get("memory_type")) or _line(candidate.get("type")),
+                "proposedText": content or str(candidate.get("proposedText") or "").strip(),
+                "evidenceStatus": _line(metadata.get("evidence_status")) or _line(candidate.get("evidenceStatus")),
+                "conversationId": _line(metadata.get("conversation_id")) or _line(candidate.get("conversationId")),
+                "createdAt": _line(metadata.get("created_at")) or _line(candidate.get("createdAt")),
+                "path": path.relative_to(self.project_root).as_posix(),
+                "status": "confirmed",
+            })
+        return entries
+
+    def delete_confirmed(self, memory_id: str, *, reason: str, confirmation: str) -> dict[str, Any]:
+        identifier = _line(memory_id)
+        entries = self.list_confirmed()
+        entry = next((item for item in entries if item["id"] == identifier), None)
+        if not entry:
+            raise MemoryGatewayError("confirmed memory not found")
+        explanation = str(reason or "").strip()
+        if len(explanation) < 2:
+            raise MemoryGatewayError("a deletion reason is required")
+        if _line(confirmation) != f"DELETE {identifier}":
+            raise MemoryGatewayError("deletion confirmation does not match the selected memory")
+        target = _safe_project_path(self.project_root, entry["path"])
+        confirmed_root = (self.project_root / CONFIRMED_MEMORY_DIR).resolve()
+        if target.parent != confirmed_root or target.suffix.casefold() != ".md":
+            raise MemoryGatewayError("invalid confirmed memory target")
+        # This intentionally removes one already-listed, user-confirmed file;
+        # it never accepts a glob or an arbitrary path.
+        target.unlink()
+        self._append({
+            "type": "delete_confirmed",
+            "candidateId": identifier,
+            "path": entry["path"],
+            "reason": explanation[:1000],
+        })
+        return {"id": identifier, "path": entry["path"], "deleted": True, "reason": explanation[:1000]}
 
 
 class ConversationStateStore:
@@ -484,6 +633,7 @@ __all__ = [
     "CONFIRMED_MEMORY_DIR",
     "ConversationStateStore",
     "LocalMirrorSync",
+    "MemoryAuditStore",
     "MemoryEventStore",
     "MemoryGatewayError",
     "project_for_slug",

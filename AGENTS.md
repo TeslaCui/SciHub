@@ -27,7 +27,7 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - `scihub_server.py`：本地 HTTP 服务与项目、日志、对话、项目记忆、AI 转发 API；日志导出接口为 `/api/projects/<slug>/logs/<date>/export`，DOCX 导入接口为 `/api/projects/<slug>/logs/<date>/import`。
 - `agent_runtime.py`：确定性 Agent Router、专职 Agent/Skill 注册表、四类 Provider 适配器、受限记忆上下文与轻量执行追踪；Agent 不直接写项目文件。
 - `memory_index.py`：项目 Markdown 分块、SQLite FTS5/纯 Python 回退检索、增量哈希索引、来源追踪与 `PITFALLS_SUMMARY.md` 自动区域维护。
-- `memory_gateway.py`：待确认记忆事件、确认后 Markdown 记忆、对话摘要状态和 Google Drive 本地目录安全同步。
+- `memory_gateway.py`：待确认记忆事件、确认后 Markdown 记忆、读写审计、对话摘要状态和 Google Drive 本地目录安全同步。
 - `scihub_mcp_server.py`：本地 MCP stdio Memory Gateway；支持 `--project-dir` 项目绑定模式，只暴露当前项目范围内的受限搜索、读取、候选记忆、压缩和同步工具，不暴露原始 SQLite 或任意文件写入。
 - `plugins/scihub-memory/`：Codex 插件源；包含项目记忆 Skill、MCP 配置和个人 marketplace 清单。插件要求对话明确给出项目 slug，未选择项目时不调用记忆。
 - `index.html`：只包含实验日志、对话记录、项目记忆三个视图。
@@ -45,9 +45,9 @@ SciHub 是本地优先的科研记录工具，仅提供：
 - AI 自动整理与润色只允许修正错别字、语病、表达和结构；不得改变实验原意、事实、数据、条件、现象或不确定性。原始输入必须与自动生成板块一同保留在日志 Markdown 中。
 - DOCX 导入仅提取文本和内嵌图片元数据（文件名、类型、大小）；不得额外写入图片二进制文件，确保项目生成内容保持 Markdown 为主。
 - 项目 `.scihub/memory.sqlite3`、`memory-state.json` 与 `index-status.json` 是可重建的派生索引，不是科研事实源；不得用索引内容覆盖原始 Markdown。
-- `.scihub/memory-events.jsonl` 只保存记忆候选和确认/拒绝审计事件；确认后的正式记忆保存为 `memory/confirmed/*.md`。
+- `.scihub/memory-events.jsonl` 只保存记忆候选、确认/拒绝和逐项删除审计事件；`.scihub/memory-audit.jsonl` 保存有限的读写审计；确认后的正式记忆保存为 `memory/confirmed/*.md`。
 - `.scihub/conversation-state.json` 只保存对话摘要和消息指针；完整对话 Markdown 永远保留，后续 AI 请求可只发送摘要、近期消息和按需召回片段。
 - Google Drive 同步只针对用户选择的项目和本地同步目录；默认不复制 SQLite、缓存或临时文件，双边变更报告冲突且不同步删除。
 - `PITFALLS_SUMMARY.md` 仅允许更新自动区域；区域外的人工信息必须保留。只有原始记录明确包含的异常、原因或改进信息才能进入自动索引。
 - API Key 只保存在浏览器本地配置并按请求临时发送给本机服务，禁止写入项目文件、索引、追踪或服务日志。
-- Agent 扩展接口为 `POST /api/projects/<slug>/agents/run`；记忆接口还包括 `/memory/context`、`/memory/pending`、`/memory/proposals`、`/memory/curate`；项目专属外部 Agent 配置为 `GET /api/projects/<slug>/mcp/config`；对话压缩接口为 `POST .../conversations/<id>/compact`；同步接口为 `GET/PUT/POST .../sync`。原有 `/api/proxy` 和项目 CRUD 接口继续保留。
+- Agent 扩展接口为 `POST /api/projects/<slug>/agents/run`；记忆接口还包括 `/memory/context`、`/memory/pending`、`/memory/proposals`、`/memory/curate`、`/memory/database` 和逐项确认记忆删除；项目专属外部 Agent 配置为 `GET /api/projects/<slug>/mcp/config`；对话压缩接口为 `POST .../conversations/<id>/compact`；同步接口为 `GET/PUT/POST .../sync`。原有 `/api/proxy` 和项目 CRUD 接口继续保留。

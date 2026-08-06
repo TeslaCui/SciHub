@@ -9,7 +9,7 @@ import urllib.request
 import unittest
 from pathlib import Path
 
-from memory_gateway import ConversationStateStore, LocalMirrorSync, MemoryEventStore, MemoryGatewayError
+from memory_gateway import ConversationStateStore, LocalMirrorSync, MemoryAuditStore, MemoryEventStore, MemoryGatewayError
 from memory_index import MemoryIndex
 from scihub_mcp_server import Gateway, handle_message
 
@@ -52,6 +52,26 @@ class MemoryGatewayTests(unittest.TestCase):
         self.assertEqual(saved["status"], "confirmed")
         self.assertTrue((self.project / saved["path"]).is_file())
         self.assertEqual(store.list_pending(), [])
+
+    def test_confirmed_memory_deletion_requires_a_reason_and_exact_confirmation(self) -> None:
+        store = MemoryEventStore(self.project)
+        candidate = store.propose([{"type": "fact", "title": "obsolete", "proposedText": "old value"}])[0]
+        confirmed = store.decide(candidate["id"], "confirm")
+        self.assertEqual(store.list_confirmed()[0]["id"], candidate["id"])
+        with self.assertRaises(MemoryGatewayError):
+            store.delete_confirmed(candidate["id"], reason="", confirmation=f"DELETE {candidate['id']}")
+        with self.assertRaises(MemoryGatewayError):
+            store.delete_confirmed(candidate["id"], reason="duplicate", confirmation="DELETE another-id")
+        deleted = store.delete_confirmed(candidate["id"], reason="duplicate", confirmation=f"DELETE {candidate['id']}")
+        self.assertTrue(deleted["deleted"])
+        self.assertFalse((self.project / confirmed["path"]).exists())
+
+    def test_memory_audit_is_jsonl_and_bounded(self) -> None:
+        audit = MemoryAuditStore(self.project)
+        audit.record("memory_read", channel="mcp", details={"query": "contact", "hitCount": 1})
+        entries = audit.list()
+        self.assertEqual(entries[0]["action"], "memory_read")
+        self.assertEqual(entries[0]["channel"], "mcp")
 
     def test_model_suggestion_pitfall_is_not_auto_indexed(self) -> None:
         store = MemoryEventStore(self.project)
@@ -110,6 +130,8 @@ class MemoryGatewayTests(unittest.TestCase):
         tools = handle_message(gateway, {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         names = {item["name"] for item in tools["result"]["tools"]}
         self.assertIn("scihub_memory_context", names)
+        self.assertNotIn("scihub_memory_confirm", names)
+        self.assertNotIn("scihub_memory_reject", names)
         result = handle_message(gateway, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "scihub_memory_context", "arguments": {"projectSlug": "demo", "question": "接触"}}})
         self.assertIn("接触不良", result["result"]["structuredContent"]["context"])
 
@@ -154,6 +176,22 @@ class MemoryGatewayTests(unittest.TestCase):
             with urllib.request.urlopen(f"{base}/memory/status", timeout=5) as response:
                 status = json.loads(response.read().decode("utf-8"))
             self.assertTrue(status["available"])
+            with urllib.request.urlopen(f"{base}/memory/database", timeout=5) as response:
+                database = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(database["relationships"]["documentToChunks"], "one_to_many")
+            self.assertTrue(database["documents"])
+            candidate = MemoryEventStore(self.project).propose([{"type": "fact", "proposedText": "delete me"}])[0]
+            MemoryEventStore(self.project).decide(candidate["id"], "confirm")
+            delete_body = json.dumps({"reason": "duplicate", "confirmation": f"DELETE {candidate['id']}"}).encode("utf-8")
+            delete_request = urllib.request.Request(
+                f"{base}/memory/confirmed/{candidate['id']}",
+                data=delete_body,
+                headers={"Content-Type": "application/json"},
+                method="DELETE",
+            )
+            with urllib.request.urlopen(delete_request, timeout=5) as response:
+                deleted = json.loads(response.read().decode("utf-8"))
+            self.assertTrue(deleted["deleted"])
             body = json.dumps({"question": "接触", "agentId": "conversation-agent"}).encode("utf-8")
             request = urllib.request.Request(f"{base}/memory/context", data=body, headers={"Content-Type": "application/json"}, method="POST")
             with urllib.request.urlopen(request, timeout=5) as response:

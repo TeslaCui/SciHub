@@ -77,7 +77,9 @@ class MemoryIndexTests(unittest.TestCase):
     def test_incremental_index_and_provenance(self) -> None:
         with MemoryIndex(self.root) as index:
             first = index.index()
-            self.assertEqual(first.added, 1)
+            # The generated PITFALLS_SUMMARY.md is indexed in the same pass as
+            # its source log, so the dashboard is immediately consistent.
+            self.assertEqual(first.added, 2)
             self.assertTrue((self.root / ".scihub" / "memory.sqlite3").exists())
             self.assertTrue((self.root / ".scihub" / "memory-state.json").exists())
             self.assertTrue((self.root / ".scihub" / "index-status.json").exists())
@@ -88,9 +90,7 @@ class MemoryIndexTests(unittest.TestCase):
             self.assertEqual(hits[0].source_path, "2026-05-10.md")
             self.assertEqual(hits[0].metadata["sample_id"], "PtFe-03")
             second = index.index()
-            # The first pass creates the derived PITFALLS_SUMMARY.md after its
-            # scan, so the second pass also sees that newly-created Markdown.
-            self.assertGreaterEqual(second.unchanged, 1)
+            self.assertGreaterEqual(second.unchanged, 2)
             self.assertEqual(second.updated, 0)
 
     def test_update_changes_hash_and_replaces_chunks(self) -> None:

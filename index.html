@@ -41,6 +41,8 @@
           <button class="nav-item" data-view="plans"><span>◇</span>实验方案</button>
           <button class="nav-item active" data-view="logs"><span>◒</span>实验日志</button>
           <button class="nav-item" data-view="records"><span>◌</span>对话记录</button>
+          <button class="nav-item" data-view="characterizations"><span>◈</span>表征数据</button>
+          <button class="nav-item" data-view="trace"><span>•</span>追溯</button>
         </nav>
 
         <div id="planBookSwitcher" class="side-section plan-book-switcher" hidden>
@@ -72,7 +74,7 @@
         </section>
 
         <section id="logsView" class="view active-view">
-          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>日志保存为项目中的 Markdown，并实时更新项目 AGENTS.md。</p></div></div>
+          <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>查看项目内全部实验日志，可按实验方案版本和子实验筛选。</p></div><button class="primary-button" id="newLogButton"><span>+</span> 新增实验日志</button></div>
           <div id="logsBody"></div>
         </section>
 
@@ -88,6 +90,16 @@
         <section id="recordsView" class="view">
           <div class="page-heading compact"><div><p class="eyebrow">对话记录</p><h1 id="recordsProjectTitle">选择一个研究项目</h1><p>导入或继续 AI 对话；所有消息保存到项目的 <b>对话记录/</b> 文件夹。</p></div><div style="display:flex;gap:8px"><button class="secondary-button" id="recordImportButton">导入对话</button><button class="primary-button" id="newRecordButton"><span>+</span> 新建对话</button></div></div>
           <div id="recordsBody"></div>
+        </section>
+
+        <section id="characterizationsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">表征数据</p><h1 id="characterizationsProjectTitle">选择一个研究项目</h1><p>集中查看项目的 ICP、XRD、XPS、SEM 等表征结果，并在统一表格中比较不同样品。</p></div><button class="primary-button" id="importCharacterizationButton"><span>＋</span> 添加表征数据</button></div>
+          <div id="characterizationsBody"></div>
+        </section>
+
+        <section id="traceView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">追溯</p><h1 id="traceProjectTitle">选择一个研究项目</h1><p>按样品编号汇总实验日志、实验方案和表征结果，并保留每条记录的日期。</p></div></div>
+          <div id="traceBody"></div>
         </section>
 
       </main>

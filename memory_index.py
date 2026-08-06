@@ -658,6 +658,25 @@ class MemoryIndex:
         conn.execute("INSERT OR REPLACE INTO index_meta(key,value) VALUES (?,?)", ("last_indexed_at", indexed_at))
         conn.commit()
         summary_updated = self.update_pitfalls_summary() if update_summary else False
+        # The summary is generated after the main scan.  Index its new bytes in
+        # the same transaction cycle so a just-saved log and its pitfall summary
+        # are searchable together, rather than waiting for the next request.
+        if summary_updated:
+            summary_path = self.project_root / SUMMARY_FILENAME
+            if summary_path.is_file():
+                scanned += 1
+                content, raw = self._read_source(summary_path)
+                action, count, changed = self._upsert_document(summary_path, content, raw, force=False)
+                chunks += count
+                if action == "added":
+                    added += 1
+                elif action == "updated":
+                    updated += 1
+                else:
+                    unchanged += 1
+                if changed and self.fts5_available:
+                    conn.execute("DELETE FROM chunks_fts WHERE rowid NOT IN (SELECT id FROM chunks)")
+                conn.commit()
         report = IndexReport(scanned, added, updated, unchanged, removed, chunks, self.fts5_available, summary_updated, indexed_at)
         self._write_state_files(report.to_dict())
         return report
@@ -834,6 +853,68 @@ class MemoryIndex:
             "documents": documents,
             "chunks": chunks,
             "last_indexed_at": str(last[0]) if last else "",
+        }
+
+    def catalog(self, *, document_limit: int = 300, heading_limit: int = 4) -> dict[str, Any]:
+        """Return a bounded, JSON-friendly map of the derived database.
+
+        This is intentionally metadata-only: callers can see the source files,
+        headings and document-to-chunk relationship without opening raw SQL or
+        eagerly copying a project's scientific text into a dashboard response.
+        """
+
+        conn = self.connection
+        limit = max(1, min(int(document_limit or 300), 1000))
+        per_document_headings = max(1, min(int(heading_limit or 4), 12))
+        rows = conn.execute(
+            """SELECT d.id, d.path, d.file_type, d.size, d.indexed_at,
+                      COUNT(c.id) AS chunk_count,
+                      COALESCE(SUM(c.is_pitfall), 0) AS pitfall_count
+               FROM documents d
+               LEFT JOIN chunks c ON c.document_id = d.id
+               GROUP BY d.id
+               ORDER BY d.path COLLATE NOCASE
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        documents: list[dict[str, Any]] = []
+        for row in rows:
+            headings = [
+                str(item[0]) for item in conn.execute(
+                    "SELECT title FROM chunks WHERE document_id = ? ORDER BY ordinal LIMIT ?",
+                    (int(row["id"]), per_document_headings),
+                ).fetchall() if str(item[0]).strip()
+            ]
+            documents.append({
+                "documentId": int(row["id"]),
+                "path": str(row["path"]),
+                "fileType": str(row["file_type"]),
+                "size": int(row["size"]),
+                "indexedAt": str(row["indexed_at"]),
+                "chunkCount": int(row["chunk_count"]),
+                "pitfallCount": int(row["pitfall_count"]),
+                "headings": headings,
+            })
+        table_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+        tables: list[dict[str, Any]] = []
+        for row in table_rows:
+            table = str(row[0])
+            if table not in {"documents", "chunks", "index_meta", "chunks_fts"}:
+                continue
+            count = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            tables.append({"name": table, "rows": count})
+        return {
+            "status": self.status(),
+            "tables": tables,
+            "documents": documents,
+            "truncated": len(rows) >= limit,
+            "relationships": {
+                "projectToDatabase": "one_to_one",
+                "documentToChunks": "one_to_many",
+                "confirmedMemoryToDocument": "one_to_one",
+            },
         }
 
     def _pitfall_entries(self) -> list[str]:
