@@ -2969,6 +2969,16 @@
       const index = visibleIndexes[position];
       const actions = card.querySelector('.log-entry-head-actions');
       if (!actions || index === undefined) return;
+      card.querySelectorAll('.log-entry-sections > .log-entry-section p, .log-entry-source p, .log-entry-sample-meta').forEach(node => {
+        node.dataset.logNoteIndex = String(index);
+      });
+      const notes = Array.isArray(filtered[position]?.notes) ? filtered[position].notes : [];
+      if (notes.length) {
+        const notesSection = document.createElement('section');
+        notesSection.className = 'log-inline-notes';
+        notesSection.innerHTML = '<div class="log-inline-notes-head"><b>日志笔记</b><span>' + notes.length + ' 条</span></div>' + notes.map(note => '<div class="log-inline-note"><span>“' + esc(note.quote) + '”</span><p>' + esc(note.text) + '</p></div>').join('');
+        card.appendChild(notesSection);
+      }
       const label = document.createElement('label');
       label.className = 'log-select-checkbox';
       label.innerHTML = '<input type="checkbox" data-log-select-index="' + index + '" /><span>选择</span>';
@@ -3027,6 +3037,9 @@
         return `<article class="log-entry-card"><div class="log-entry-head"><div><p class="eyebrow">${esc(dateLabel)}</p><h2>${esc(logListAssociationLabel(log))}</h2></div><div class="log-entry-head-actions"><small>${esc(log.updatedAt ? new Date(log.updatedAt).toLocaleString('zh-CN') : '')}</small>${log.sampleId ? `<button class="text-button" data-trace-log-sample="${esc(log.sampleId)}">查看追溯</button>` : ''}<button class="secondary-button" data-edit-log-index="${R.logs.indexOf(log)}">编辑日志</button><button class="text-button danger-button" data-delete-log-index="${R.logs.indexOf(log)}">删除</button></div></div>${sampleMeta ? `<div class="log-entry-sample-meta">${highlightLogText(sampleMeta, highlights)}</div>` : ''}<div class="log-entry-sections">${logListSection('实验现象', log.phenomena, highlights)}${logListSection('实验记录', log.record, highlights)}${logListSection('实验异常与踩坑点', log.pitfalls, highlights)}${logImagesMarkup(log)}${source ? `<details class="log-entry-source"><summary>查看原始输入</summary><p>${highlightLogText(source, highlights)}</p></details>` : ''}</div></article>`;
       }).join('')}</div>`;
       setupLogSelectionControls(body, filtered);
+      body.insertAdjacentHTML('beforeend', '<div id="logNoteContextMenu" class="log-note-context-menu" hidden><button type="button" id="recordLogNoteContextButton">✎ 记录笔记</button></div>');
+      body.oncontextmenu = showLogNoteContextMenu;
+      $('recordLogNoteContextButton')?.addEventListener('click', () => openLogNoteDialog());
       body.querySelectorAll('[data-edit-log-index]').forEach(button => {
         button.onclick = () => openLogEditor(R.logs[Number(button.dataset.editLogIndex)]);
       });
@@ -3168,13 +3181,19 @@
 
   function showLogNoteContextMenu(event) {
     const textarea = $('logSource');
-    if (!textarea) return;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    if (start === end) return;
-    event.preventDefault();
-    R.logNoteSelection = { start, end, quote: textarea.value.slice(start, end).trim() };
+    if (textarea && event.target === textarea) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      if (start === end) return;
+      R.logNoteSelection = { start, end, quote: textarea.value.slice(start, end).trim(), logIndex: null };
+    } else {
+      const target = event.target.closest?.('[data-log-note-index]');
+      const selection = window.getSelection?.();
+      if (!target || !selection || selection.isCollapsed) return;
+      R.logNoteSelection = { quote: selection.toString().trim(), logIndex: Number(target.dataset.logNoteIndex) };
+    }
     if (!R.logNoteSelection.quote) return;
+    event.preventDefault();
     const menu = $('logNoteContextMenu');
     if (!menu) return;
     menu.hidden = false;
@@ -3182,15 +3201,46 @@
     menu.style.top = `${Math.min(event.clientY, window.innerHeight - 55)}px`;
   }
 
+  async function saveListLogNote(log, note) {
+    const payload = {
+      ...log,
+      notes: [...(log.notes || []), note],
+      sample_id: log.sampleId || '',
+      temp_celsius: log.tempCelsius || ''
+    };
+    await api(`${slugPath(R.active.slug)}/logs/${encodeURIComponent(log.date)}`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    R.logs = (await api(`${slugPath(R.active.slug)}/logs`)).logs || R.logs;
+  }
   function openLogNoteDialog(selection = R.logNoteSelection) {
     hideLogNoteContextMenu();
     if (!selection?.quote) { toast('请先选中要添加笔记的文字'); return; }
     openModal(`<div class="modal-header"><div><p class="eyebrow">日志注释</p><h2>记录笔记</h2><p>笔记会锚定到这段原文，并在日志右侧注释栏持续显示。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body"><div class="log-note-selection-preview">${esc(selection.quote)}</div><label class="form-field full"><span>笔记内容</span><textarea id="logNoteText" maxlength="2000" placeholder="记录解释、疑问、后续动作或需要复核的地方"></textarea></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="saveLogNoteButton" type="button" class="primary-button">保存笔记</button></div>`, () => {
-      $('saveLogNoteButton').onclick = () => {
+      $('saveLogNoteButton').onclick = async () => {
         const text = $('logNoteText').value.trim();
         if (!text) { toast('请填写笔记内容'); $('logNoteText').focus(); return; }
         const now = iso();
         const note = { id: `note-${Date.now()}`, quote: selection.quote, text, createdAt: now, updatedAt: now };
+        const listLog = Number.isInteger(selection.logIndex) ? R.logs[selection.logIndex] : null;
+        if (listLog) {
+          const button = $('saveLogNoteButton');
+          const previousNotes = [...(listLog.notes || [])];
+          listLog.notes = [...previousNotes, note];
+          button.disabled = true;
+          try {
+            await saveListLogNote(listLog, note);
+            closeModal();
+            renderLogsView();
+            toast('笔记已保存到该实验日志，并纳入项目记忆');
+          } catch (error) {
+            listLog.notes = previousNotes;
+            button.disabled = false;
+            toast('保存笔记失败：' + (error.message || error));
+          }
+          return;
+        }
         R.log.notes = [...(R.log.notes || []), note];
         closeModal();
         renderLogEditorView();
