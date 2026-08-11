@@ -10,6 +10,7 @@
   const API_SETTINGS_KEY = 'scihub-api-settings-v1';
   const AGENT_SETTINGS_KEY = 'scihub-agent-settings-v1';
   const SYNC_SETTINGS_KEY = 'scihub-sync-settings-v1';
+  const TODO_STORAGE_KEY = 'scihub-todos-v1';
   const AGENT_CONFIG_IDS = [
     ['default', '默认配置'],
     ['log-organizer', '日志整理 Agent'],
@@ -71,6 +72,7 @@
     logSelection: new Set(),
     logFilters: { planId: '', subexperimentId: '' },
     plans: [],
+    todos: [],
     planBook: null,
     planEditor: null,
     planGeneration: null,
@@ -206,6 +208,43 @@
       try { new window.Notification(`${task.title}失败`, { body: task.error }); } catch { /* ignore notification failures */ }
     }
     return task;
+  }
+
+  function todoStorageKey(slug) { return `${TODO_STORAGE_KEY}:${slug}`; }
+  function readTodos(slug) {
+    try { const value = JSON.parse(localStorage.getItem(todoStorageKey(slug)) || '[]'); return Array.isArray(value) ? value : []; }
+    catch { return []; }
+  }
+  function saveTodos() {
+    if (!R.active) return;
+    try { localStorage.setItem(todoStorageKey(R.active.slug), JSON.stringify(R.todos)); }
+    catch { toast('待办保存失败：浏览器本地存储空间不足'); }
+  }
+  function todoStatusLabel(status) { return ({todo: '待开始', doing: '进行中', done: '已完成'})[status] || '待开始'; }
+  function todoPriorityLabel(priority) { return ({high: '高优先级', medium: '中优先级', low: '低优先级'})[priority] || '普通'; }
+  function renderTodoView() {
+    const title = $('todoProjectTitle'), body = $('todoBody');
+    if (!title || !body) return;
+    if (!R.active) { title.textContent = '选择一个研究项目'; body.innerHTML = '<div class="empty-state"><strong>请先选择研究项目</strong><p>待办与计划会按项目分别保存在浏览器本地。</p></div>'; return; }
+    title.textContent = R.active.name;
+    const counts = { todo: 0, doing: 0, done: 0 };
+    R.todos.forEach(item => { counts[item.status] = (counts[item.status] || 0) + 1; });
+    const filter = $('todoFilter')?.value || 'all';
+    const columns = ['todo', 'doing', 'done'].map(status => {
+      const items = R.todos.filter(item => item.status === status && (filter === 'all' || item.priority === filter));
+      return `<section class="todo-column"><div class="todo-column-head"><b>${todoStatusLabel(status)}</b><span>${items.length}</span></div>${items.length ? items.map(item => `<article class="todo-card"><h3>${esc(item.title)}</h3>${item.notes ? `<p>${esc(item.notes)}</p>` : ''}<div class="todo-card-meta"><span class="todo-priority ${item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : ''}">${todoPriorityLabel(item.priority)}</span>${item.dueDate ? `<time>截止 ${esc(item.dueDate)}</time>` : ''}</div><div class="todo-card-actions"><button class="text-button" data-todo-move="${esc(item.id)}">${status === 'todo' ? '开始处理' : status === 'doing' ? '标记完成' : '重新打开'}</button><button class="text-button" data-todo-edit="${esc(item.id)}">编辑</button><button class="text-button danger-button" data-todo-delete="${esc(item.id)}">删除</button></div></article>`).join('') : '<div class="todo-empty">暂无事项</div>'}</section>`;
+    }).join('');
+    body.innerHTML = `<div class="todo-toolbar"><select id="todoFilter" class="todo-filter"><option value="all">全部优先级</option><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">低优先级</option></select><span class="field-note">共 ${R.todos.length} 项 · 已完成 ${counts.done} 项</span></div><div class="todo-summary"><span>待开始 ${counts.todo}</span><span>进行中 ${counts.doing}</span><span>已完成 ${counts.done}</span></div><div class="todo-board">${columns}</div><div class="todo-plans-note"><b>计划提示：</b>实验方案页适合维护可打印的实验方案正文；这里适合拆解近期行动、分析任务和复盘事项。两者可以并行使用。</div>`;
+    $('todoFilter').value = filter;
+    $('todoFilter').addEventListener('change', renderTodoView);
+    body.querySelectorAll('[data-todo-move]').forEach(button => button.addEventListener('click', () => { const item = R.todos.find(x => x.id === button.dataset.todoMove); if (!item) return; item.status = item.status === 'todo' ? 'doing' : item.status === 'doing' ? 'done' : 'todo'; item.updatedAt = iso(); saveTodos(); renderTodoView(); }));
+    body.querySelectorAll('[data-todo-edit]').forEach(button => button.addEventListener('click', () => openTodoDialog(button.dataset.todoEdit)));
+    body.querySelectorAll('[data-todo-delete]').forEach(button => button.addEventListener('click', () => { if (!confirm('确定删除这条待办吗？')) return; R.todos = R.todos.filter(x => x.id !== button.dataset.todoDelete); saveTodos(); renderTodoView(); }));
+  }
+  function openTodoDialog(id = '') {
+    if (!R.active) { toast('请先选择或新建一个项目'); return; }
+    const item = R.todos.find(x => x.id === id) || { title: '', notes: '', status: 'todo', priority: 'medium', dueDate: '' };
+    openModal(`<div class="modal-header"><div><h2>${id ? '编辑待办' : '新增待办'}</h2><p>待办只保存在当前项目的浏览器本地存储中。</p></div><button class="close-button" data-close-modal>×</button></div><form id="todoForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>事项</span><input id="todoTitleInput" required maxlength="160" value="${esc(item.title)}" placeholder="例如：整理 XRD 数据并比较 V1/V2" /></label><label class="form-field full"><span>备注</span><textarea id="todoNotesInput" maxlength="2000" placeholder="补充验收标准、关联样品或下一步说明">${esc(item.notes || '')}</textarea></label><label class="form-field"><span>状态</span><select id="todoStatusInput"><option value="todo">待开始</option><option value="doing">进行中</option><option value="done">已完成</option></select></label><label class="form-field"><span>优先级</span><select id="todoPriorityInput"><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">普通</option></select></label><label class="form-field"><span>截止日期</span><input id="todoDueInput" type="date" value="${esc(item.dueDate || '')}" /></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存待办</button></div></form>`, () => { $('todoStatusInput').value = item.status; $('todoPriorityInput').value = item.priority; $('todoTitleInput').focus(); $('todoForm').addEventListener('submit', event => { event.preventDefault(); const payload = { ...item, id: item.id || `todo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title: $('todoTitleInput').value.trim(), notes: $('todoNotesInput').value.trim(), status: $('todoStatusInput').value, priority: $('todoPriorityInput').value, dueDate: $('todoDueInput').value, updatedAt: iso() }; if (id) R.todos = R.todos.map(x => x.id === id ? payload : x); else R.todos.unshift(payload); saveTodos(); closeModal(); renderTodoView(); toast('待办已保存'); }); });
   }
 
   // ------------------------------------------------------------------ API --
@@ -536,6 +575,7 @@
     R.characterizationQuery = '';
     R.trace = null;
     R.traceSampleId = '';
+    R.todos = [];
     R.conversation = null;
     if (!R.active) return;
     try {
@@ -548,6 +588,7 @@
       R.logs = logs.logs || [];
       R.conversations = conversations.conversations || [];
       R.plans = plans.plans || [];
+      R.todos = readTodos(slug);
       R.characterizations = characterizations || { datasets: [], records: [], types: [] };
       await loadAgents();
       await loadPendingMemory();
@@ -566,7 +607,7 @@
     loadProject(slug).then(() => {
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
-      const v = ['plans', 'logs', 'records', 'characterizations', 'trace', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'plans';
+      const v = ['plans', 'todo', 'logs', 'records', 'characterizations', 'trace', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'plans';
       if (typeof window.switchView === 'function') window.switchView(v);
       else {
         const target = document.getElementById(`${v}View`);
@@ -4672,6 +4713,7 @@
     const v = currentView();
     if (v === 'home') renderHomeView();
     else if (v === 'plans') renderPlansView();
+    else if (v === 'todo') renderTodoView();
     else if (v === 'planBook') renderPlanBookView();
     else if (v === 'logs') renderLogsView();
     else if (v === 'records') renderRecordsView();
@@ -4686,6 +4728,7 @@
     renderPlanTaskBanner();
     if (view === 'home') renderHomeView();
     else if (view === 'plans') renderPlansView();
+    else if (view === 'todo') renderTodoView();
     else if (view === 'planBook') renderPlanBookView();
     else if (view === 'logs') { R.logEditorOpen = false; renderLogsView(); }
     else if (view === 'records') renderRecordsView();
@@ -4707,6 +4750,7 @@
       if (R.active) openProjectEditDialog(R.active.slug);
     });
     $('newPlanButton')?.addEventListener('click', openPlanDialog);
+    $('newTodoButton')?.addEventListener('click', () => openTodoDialog());
     $('homeNewProjectButton')?.addEventListener('click', openProjectDialog);
     $('newRecordButton')?.addEventListener('click', openRecordDialog);
     window.addEventListener('beforeunload', event => {

@@ -39,6 +39,7 @@
 
         <nav class="nav-list">
           <button class="nav-item" data-view="plans"><span>◇</span>实验方案</button>
+          <button class="nav-item" data-view="todo"><span>✓</span>待办与计划</button>
           <button class="nav-item active" data-view="logs"><span>◒</span>实验日志</button>
           <button class="nav-item" data-view="records"><span>◌</span>对话记录</button>
           <button class="nav-item" data-view="characterizations"><span>◈</span>表征数据</button>
@@ -81,6 +82,11 @@
         <section id="plansView" class="view">
           <div class="page-heading compact"><div><p class="eyebrow">实验方案</p><h1 id="plansProjectTitle">选择一个研究项目</h1><p>导入 Word、PDF、Markdown 或文本后会先转为 <b>项目/V1/导入资料/*.md</b>，再由 AI 生成可审核的标准实验方案。</p></div><button class="primary-button" id="newPlanButton"><span>+</span> 新建实验方案</button></div>
           <div id="plansBody"></div>
+        </section>
+
+        <section id="todoView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">工作安排</p><h1 id="todoProjectTitle">选择一个研究项目</h1><p>把实验执行、数据分析和下一步想法集中成可追踪的待办与计划。</p></div><button class="primary-button" id="newTodoButton"><span>+</span> 新增待办</button></div>
+          <div id="todoBody"></div>
         </section>
 
         <section id="planBookView" class="view">
