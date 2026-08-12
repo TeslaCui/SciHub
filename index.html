@@ -44,6 +44,7 @@
           <button class="nav-item" data-view="records"><span>◌</span>对话记录</button>
           <button class="nav-item" data-view="characterizations"><span>◈</span>表征数据</button>
           <button class="nav-item" data-view="trace"><span>•</span>追溯</button>
+          <button class="nav-item" data-view="memory"><span>✣</span>项目记忆</button>
         </nav>
 
         <div id="planBookSwitcher" class="side-section plan-book-switcher" hidden>
@@ -99,13 +100,18 @@
         </section>
 
         <section id="characterizationsView" class="view">
-          <div class="page-heading compact"><div><p class="eyebrow">表征数据</p><h1 id="characterizationsProjectTitle">选择一个研究项目</h1><p>集中查看项目的 ICP、XRD、XPS、SEM 等表征结果，并在统一表格中比较不同样品。</p></div><button class="primary-button" id="importCharacterizationButton"><span>＋</span> 添加表征数据</button></div>
+          <div class="page-heading compact"><div><p class="eyebrow">表征数据</p><h1 id="characterizationsProjectTitle">选择一个研究项目</h1><p>集中查看项目的 ICP、XRD、XPS、SEM 与电化学结果；电化学按日期文件夹导入并保留原始 TXT。</p></div><div class="page-heading-actions"><button class="secondary-button" id="importElectrochemistryButton">导入电化学文件夹</button><button class="primary-button" id="importCharacterizationButton"><span>＋</span> 添加表征数据</button></div></div>
           <div id="characterizationsBody"></div>
         </section>
 
         <section id="traceView" class="view">
           <div class="page-heading compact"><div><p class="eyebrow">追溯</p><h1 id="traceProjectTitle">选择一个研究项目</h1><p>按样品编号汇总实验日志、实验方案和表征结果，并保留每条记录的日期。</p></div></div>
           <div id="traceBody"></div>
+        </section>
+
+        <section id="memoryView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">项目记忆 · 可视化监视</p><h1 id="memoryProjectTitle">选择一个研究项目</h1><p>用网络结构查看项目资料、索引片段和已确认记忆的关联，并审计 AI/MCP 实际读取了什么。</p></div></div>
+          <div id="memoryBody"></div>
         </section>
 
       </main>

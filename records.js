@@ -70,6 +70,8 @@
     logEditorOpen: false,
     logNoteSelection: null,
     logSelection: new Set(),
+    logImagePreviewUrls: new Map(),
+    logImagePreviewWrites: new Map(),
     logFilters: { planId: '', subexperimentId: '' },
     plans: [],
     todos: [],
@@ -80,6 +82,9 @@
     conversations: [],
     conversation: null,
     characterizations: { datasets: [], records: [], types: [] },
+    electrochemistry: { datasets: [] },
+    electrochemistryDataset: null,
+    electrochemistrySelectedSamples: new Set(),
     trace: null,
     traceSampleId: '',
     agents: '',
@@ -88,6 +93,8 @@
     lastAgentTrace: null,
     memoryPending: [],
     memoryDatabase: null,
+    memoryMonitorTimer: null,
+    memoryMonitorBusy: false,
     syncStatus: null,
     sessionKeys: {},
     sessionKey: '',       // 未持久化时本会话内的 API Key
@@ -208,43 +215,6 @@
       try { new window.Notification(`${task.title}失败`, { body: task.error }); } catch { /* ignore notification failures */ }
     }
     return task;
-  }
-
-  function todoStorageKey(slug) { return `${TODO_STORAGE_KEY}:${slug}`; }
-  function readTodos(slug) {
-    try { const value = JSON.parse(localStorage.getItem(todoStorageKey(slug)) || '[]'); return Array.isArray(value) ? value : []; }
-    catch { return []; }
-  }
-  function saveTodos() {
-    if (!R.active) return;
-    try { localStorage.setItem(todoStorageKey(R.active.slug), JSON.stringify(R.todos)); }
-    catch { toast('待办保存失败：浏览器本地存储空间不足'); }
-  }
-  function todoStatusLabel(status) { return ({todo: '待开始', doing: '进行中', done: '已完成'})[status] || '待开始'; }
-  function todoPriorityLabel(priority) { return ({high: '高优先级', medium: '中优先级', low: '低优先级'})[priority] || '普通'; }
-  function renderTodoView() {
-    const title = $('todoProjectTitle'), body = $('todoBody');
-    if (!title || !body) return;
-    if (!R.active) { title.textContent = '选择一个研究项目'; body.innerHTML = '<div class="empty-state"><strong>请先选择研究项目</strong><p>待办与计划会按项目分别保存在浏览器本地。</p></div>'; return; }
-    title.textContent = R.active.name;
-    const counts = { todo: 0, doing: 0, done: 0 };
-    R.todos.forEach(item => { counts[item.status] = (counts[item.status] || 0) + 1; });
-    const filter = $('todoFilter')?.value || 'all';
-    const columns = ['todo', 'doing', 'done'].map(status => {
-      const items = R.todos.filter(item => item.status === status && (filter === 'all' || item.priority === filter));
-      return `<section class="todo-column"><div class="todo-column-head"><b>${todoStatusLabel(status)}</b><span>${items.length}</span></div>${items.length ? items.map(item => `<article class="todo-card"><h3>${esc(item.title)}</h3>${item.notes ? `<p>${esc(item.notes)}</p>` : ''}<div class="todo-card-meta"><span class="todo-priority ${item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : ''}">${todoPriorityLabel(item.priority)}</span>${item.dueDate ? `<time>截止 ${esc(item.dueDate)}</time>` : ''}</div><div class="todo-card-actions"><button class="text-button" data-todo-move="${esc(item.id)}">${status === 'todo' ? '开始处理' : status === 'doing' ? '标记完成' : '重新打开'}</button><button class="text-button" data-todo-edit="${esc(item.id)}">编辑</button><button class="text-button danger-button" data-todo-delete="${esc(item.id)}">删除</button></div></article>`).join('') : '<div class="todo-empty">暂无事项</div>'}</section>`;
-    }).join('');
-    body.innerHTML = `<div class="todo-toolbar"><select id="todoFilter" class="todo-filter"><option value="all">全部优先级</option><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">低优先级</option></select><span class="field-note">共 ${R.todos.length} 项 · 已完成 ${counts.done} 项</span></div><div class="todo-summary"><span>待开始 ${counts.todo}</span><span>进行中 ${counts.doing}</span><span>已完成 ${counts.done}</span></div><div class="todo-board">${columns}</div><div class="todo-plans-note"><b>计划提示：</b>实验方案页适合维护可打印的实验方案正文；这里适合拆解近期行动、分析任务和复盘事项。两者可以并行使用。</div>`;
-    $('todoFilter').value = filter;
-    $('todoFilter').addEventListener('change', renderTodoView);
-    body.querySelectorAll('[data-todo-move]').forEach(button => button.addEventListener('click', () => { const item = R.todos.find(x => x.id === button.dataset.todoMove); if (!item) return; item.status = item.status === 'todo' ? 'doing' : item.status === 'doing' ? 'done' : 'todo'; item.updatedAt = iso(); saveTodos(); renderTodoView(); }));
-    body.querySelectorAll('[data-todo-edit]').forEach(button => button.addEventListener('click', () => openTodoDialog(button.dataset.todoEdit)));
-    body.querySelectorAll('[data-todo-delete]').forEach(button => button.addEventListener('click', () => { if (!confirm('确定删除这条待办吗？')) return; R.todos = R.todos.filter(x => x.id !== button.dataset.todoDelete); saveTodos(); renderTodoView(); }));
-  }
-  function openTodoDialog(id = '') {
-    if (!R.active) { toast('请先选择或新建一个项目'); return; }
-    const item = R.todos.find(x => x.id === id) || { title: '', notes: '', status: 'todo', priority: 'medium', dueDate: '' };
-    openModal(`<div class="modal-header"><div><h2>${id ? '编辑待办' : '新增待办'}</h2><p>待办只保存在当前项目的浏览器本地存储中。</p></div><button class="close-button" data-close-modal>×</button></div><form id="todoForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>事项</span><input id="todoTitleInput" required maxlength="160" value="${esc(item.title)}" placeholder="例如：整理 XRD 数据并比较 V1/V2" /></label><label class="form-field full"><span>备注</span><textarea id="todoNotesInput" maxlength="2000" placeholder="补充验收标准、关联样品或下一步说明">${esc(item.notes || '')}</textarea></label><label class="form-field"><span>状态</span><select id="todoStatusInput"><option value="todo">待开始</option><option value="doing">进行中</option><option value="done">已完成</option></select></label><label class="form-field"><span>优先级</span><select id="todoPriorityInput"><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">普通</option></select></label><label class="form-field"><span>截止日期</span><input id="todoDueInput" type="date" value="${esc(item.dueDate || '')}" /></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存待办</button></div></form>`, () => { $('todoStatusInput').value = item.status; $('todoPriorityInput').value = item.priority; $('todoTitleInput').focus(); $('todoForm').addEventListener('submit', event => { event.preventDefault(); const payload = { ...item, id: item.id || `todo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title: $('todoTitleInput').value.trim(), notes: $('todoNotesInput').value.trim(), status: $('todoStatusInput').value, priority: $('todoPriorityInput').value, dueDate: $('todoDueInput').value, updatedAt: iso() }; if (id) R.todos = R.todos.map(x => x.id === id ? payload : x); else R.todos.unshift(payload); saveTodos(); closeModal(); renderTodoView(); toast('待办已保存'); }); });
   }
 
   // ------------------------------------------------------------------ API --
@@ -563,6 +533,7 @@
   }
 
   async function loadProject(slug) {
+    clearLogImagePreviews();
     R.active = R.projects.find(p => p.slug === slug) || null;
     R.date = TODAY;
     R.log = { source: '', phenomena: '', record: '', pitfalls: '', images: [], notes: [], highlights: [], sampleId: '', process: '', status: '', tags: '', tempCelsius: '', formattedSource: '', planId: '', subexperimentId: '' };
@@ -579,17 +550,22 @@
     R.conversation = null;
     if (!R.active) return;
     try {
-      const [logs, conversations, plans, characterizations] = await Promise.all([
+      const [logs, conversations, plans, characterizations, electrochemistry] = await Promise.all([
         api(`${slugPath(slug)}/logs`),
         api(`${slugPath(slug)}/conversations`),
         api(`${slugPath(slug)}/plans`),
-        api(`${slugPath(slug)}/characterizations`)
+        api(`${slugPath(slug)}/characterizations`),
+        api(`${slugPath(slug)}/characterizations/electrochemistry`)
       ]);
       R.logs = logs.logs || [];
+      restoreLogImagePreviews(R.logs);
       R.conversations = conversations.conversations || [];
       R.plans = plans.plans || [];
       R.todos = readTodos(slug);
       R.characterizations = characterizations || { datasets: [], records: [], types: [] };
+      R.electrochemistry = electrochemistry || { datasets: [] };
+      R.electrochemistryDataset = null;
+      R.electrochemistrySelectedSamples = new Set();
       await loadAgents();
       await loadPendingMemory();
       await loadMemoryDatabase();
@@ -621,6 +597,44 @@
   function currentView() {
     const active = document.querySelector('.view.active-view');
     return active ? active.id.replace('View', '') : 'dashboard';
+  }
+
+  // 待办与计划使用项目隔离的本地存储，不写入 API Key 或派生索引。
+  function todoStorageKey(slug) { return `${TODO_STORAGE_KEY}:${slug}`; }
+  function readTodos(slug) {
+    try { const value = JSON.parse(localStorage.getItem(todoStorageKey(slug)) || '[]'); return Array.isArray(value) ? value : []; }
+    catch { return []; }
+  }
+  function saveTodos() {
+    if (!R.active) return;
+    try { localStorage.setItem(todoStorageKey(R.active.slug), JSON.stringify(R.todos)); }
+    catch { toast('待办保存失败：浏览器本地存储空间不足'); }
+  }
+  function todoStatusLabel(status) { return ({todo: '待开始', doing: '进行中', done: '已完成'})[status] || '待开始'; }
+  function todoPriorityLabel(priority) { return ({high: '高优先级', medium: '中优先级', low: '低优先级'})[priority] || '普通'; }
+  function renderTodoView() {
+    const title = $('todoProjectTitle'), body = $('todoBody');
+    if (!title || !body) return;
+    if (!R.active) { title.textContent = '选择一个研究项目'; body.innerHTML = '<div class="empty-state"><strong>请先选择研究项目</strong><p>待办与计划会按项目分别保存在浏览器本地。</p></div>'; return; }
+    title.textContent = R.active.name;
+    const counts = { todo: 0, doing: 0, done: 0 };
+    R.todos.forEach(item => { counts[item.status] = (counts[item.status] || 0) + 1; });
+    const filter = $('todoFilter')?.value || 'all';
+    const columns = ['todo', 'doing', 'done'].map(status => {
+      const items = R.todos.filter(item => item.status === status && (filter === 'all' || item.priority === filter));
+      return `<section class="todo-column"><div class="todo-column-head"><b>${todoStatusLabel(status)}</b><span>${items.length}</span></div>${items.length ? items.map(item => `<article class="todo-card"><h3>${esc(item.title)}</h3>${item.notes ? `<p>${esc(item.notes)}</p>` : ''}<div class="todo-card-meta"><span class="todo-priority ${item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : ''}">${todoPriorityLabel(item.priority)}</span>${item.dueDate ? `<time>截止 ${esc(item.dueDate)}</time>` : ''}</div><div class="todo-card-actions"><button class="text-button" data-todo-move="${esc(item.id)}">${status === 'todo' ? '开始处理' : status === 'doing' ? '标记完成' : '重新打开'}</button><button class="text-button" data-todo-edit="${esc(item.id)}">编辑</button><button class="text-button danger-button" data-todo-delete="${esc(item.id)}">删除</button></div></article>`).join('') : '<div class="todo-empty">暂无事项</div>'}</section>`;
+    }).join('');
+    body.innerHTML = `<div class="todo-toolbar"><select id="todoFilter" class="todo-filter"><option value="all">全部优先级</option><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">低优先级</option></select><span class="field-note">共 ${R.todos.length} 项 · 已完成 ${counts.done} 项</span></div><div class="todo-summary"><span>待开始 ${counts.todo}</span><span>进行中 ${counts.doing}</span><span>已完成 ${counts.done}</span></div><div class="todo-board">${columns}</div><div class="todo-plans-note"><b>计划提示：</b>实验方案页适合维护可打印的实验方案正文；这里适合拆解近期行动、分析任务和复盘事项。两者可以并行使用。</div>`;
+    $('todoFilter').value = filter;
+    $('todoFilter').addEventListener('change', renderTodoView);
+    body.querySelectorAll('[data-todo-move]').forEach(button => button.addEventListener('click', () => { const item = R.todos.find(x => x.id === button.dataset.todoMove); if (!item) return; item.status = item.status === 'todo' ? 'doing' : item.status === 'doing' ? 'done' : 'todo'; item.updatedAt = iso(); saveTodos(); renderTodoView(); }));
+    body.querySelectorAll('[data-todo-edit]').forEach(button => button.addEventListener('click', () => openTodoDialog(button.dataset.todoEdit)));
+    body.querySelectorAll('[data-todo-delete]').forEach(button => button.addEventListener('click', () => { if (!confirm('确定删除这条待办吗？')) return; R.todos = R.todos.filter(x => x.id !== button.dataset.todoDelete); saveTodos(); renderTodoView(); }));
+  }
+  function openTodoDialog(id = '') {
+    if (!R.active) { toast('请先选择或新建一个项目'); return; }
+    const item = R.todos.find(x => x.id === id) || { title: '', notes: '', status: 'todo', priority: 'medium', dueDate: '' };
+    openModal(`<div class="modal-header"><div><h2>${id ? '编辑待办' : '新增待办'}</h2><p>待办只保存在当前项目的浏览器本地存储中。</p></div><button class="close-button" data-close-modal>×</button></div><form id="todoForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>事项</span><input id="todoTitleInput" required maxlength="160" value="${esc(item.title)}" placeholder="例如：整理 XRD 数据并比较 V1/V2" /></label><label class="form-field full"><span>备注</span><textarea id="todoNotesInput" maxlength="2000" placeholder="补充验收标准、关联样品或下一步说明">${esc(item.notes || '')}</textarea></label><label class="form-field"><span>状态</span><select id="todoStatusInput"><option value="todo">待开始</option><option value="doing">进行中</option><option value="done">已完成</option></select></label><label class="form-field"><span>优先级</span><select id="todoPriorityInput"><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">普通</option></select></label><label class="form-field"><span>截止日期</span><input id="todoDueInput" type="date" value="${esc(item.dueDate || '')}" /></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存待办</button></div></form>`, () => { $('todoStatusInput').value = item.status; $('todoPriorityInput').value = item.priority; $('todoTitleInput').focus(); $('todoForm').addEventListener('submit', event => { event.preventDefault(); const payload = { ...item, id: item.id || `todo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title: $('todoTitleInput').value.trim(), notes: $('todoNotesInput').value.trim(), status: $('todoStatusInput').value, priority: $('todoPriorityInput').value, dueDate: $('todoDueInput').value, updatedAt: iso() }; if (id) R.todos = R.todos.map(x => x.id === id ? payload : x); else R.todos.unshift(payload); saveTodos(); closeModal(); renderTodoView(); toast('待办已保存'); }); });
   }
 
   // ------------------------------------------------------------- 侧栏渲染 --
@@ -859,7 +873,9 @@
           const subLogCount = relatedLogs.filter(log => log.subexperimentId === item.id).length;
           const subexperimentPath = projectPath(plan.folder || '实验方案', item.folder || '', '实验方案.md');
           const inheritanceButton = planInheritanceButtonMarkup(plan, item);
-          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button>${inheritanceButton}${planPreviewButtonMarkup(plan.id, item.id, Boolean(item.needsPlanUpdate))}<button class="text-button" data-edit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">编辑方案书</button></div></li>`;
+          const templateSource = item.templateSource || null;
+          const templateOrigin = templateSource?.version ? `<small class="plan-template-source">模板来源：${esc(templateSource.version)}${templateSource.subexperimentName ? ` · ${esc(templateSource.subexperimentName)}` : ''}</small>` : '';
+          return `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}${templateOrigin}<small class="plan-associated-path">关联文件夹：${esc(subexperimentPath)}</small>${planEntriesHtml(item.entries)}</div><div class="plan-sub-actions"><span>${subLogCount} 条日志</span><button class="text-button" data-start-log="${esc(plan.id)}" data-start-subexperiment="${esc(item.id)}">记录日志</button>${inheritanceButton}${planPreviewButtonMarkup(plan.id, item.id, Boolean(item.needsPlanUpdate))}<button class="text-button" data-edit-plan-book="${esc(plan.id)}" data-subexperiment-id="${esc(item.id)}">编辑方案书</button></div></li>`;
         }).join('')
         : '<li class="plan-subexperiment-empty"><span>尚未设置子实验；可先将日志关联到整个方案。</span></li>';
       const editable = plan.storage !== 'legacy';
@@ -914,18 +930,15 @@
       if (!subexperiment) { toast('未找到子实验'); return; }
       const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
       openModal(`<div class="modal-header"><div><h2>删除子实验</h2><p>将删除该子实验目录及其中的方案、日志和附加资料；不会影响同一方案下的其他子实验。</p></div><button class="close-button" data-close-modal>×</button></div>
-        <form id="deleteSubexperimentForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：移除不再需要的子实验。</b><br>待删除目录：项目/${esc(preview.folder)}/<br>以下 ${items.length} 项会被逐项删除。请核对清单后输入子实验名称确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入 <b>${esc(subexperiment.name)}</b> 以确认删除</span><input id="deleteSubexperimentConfirmation" required autocomplete="off" placeholder="${esc(subexperiment.name)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除子实验</button></div></form>`, () => {
-        $('deleteSubexperimentConfirmation').focus();
+        <form id="deleteSubexperimentForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：移除不再需要的子实验。</b><br>待删除目录：项目/${esc(preview.folder)}/<br>以下 ${items.length} 项会被逐项删除。点击确认即表示已核对清单。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除子实验</button></div></form>`, () => {
         $('deleteSubexperimentForm').addEventListener('submit', async event => {
           event.preventDefault();
-          const confirmation = $('deleteSubexperimentConfirmation').value.trim();
-          if (confirmation !== subexperiment.name) { toast('请输入完整且正确的子实验名称'); return; }
           const button = $('deleteSubexperimentForm').querySelector('[type=submit]');
           button.disabled = true;
           button.textContent = '删除中…';
           try {
             await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}/subexperiments/${encodeURIComponent(subexperimentId)}`, {
-              method: 'DELETE', body: JSON.stringify({ confirmation })
+              method: 'DELETE', body: JSON.stringify({})
             });
             closeModal();
             await refreshProjects(true);
@@ -1004,19 +1017,16 @@
       const items = preview.items || [];
       const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
       openModal(`<div class="modal-header"><div><h2>删除实验方案</h2><p>该操作会删除整个方案版本目录及其中的子实验、关联日志和附加文件，无法撤销。</p></div><button class="close-button" data-close-modal>×</button></div>
-        <form id="deletePlanForm"><div class="modal-body"><div class="delete-warning"><b>待删除目录：项目/${esc(preview.folder)}/</b><br>以下 ${items.length} 项会被逐项删除。请核对清单后，输入版本目录名以确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入 <b>${esc(preview.folder)}</b> 以确认删除</span><input id="deletePlanConfirmation" required autocomplete="off" placeholder="${esc(preview.folder)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除方案</button></div></form>`, () => {
-        $('deletePlanConfirmation').focus();
+        <form id="deletePlanForm"><div class="modal-body"><div class="delete-warning"><b>待删除目录：项目/${esc(preview.folder)}/</b><br>以下 ${items.length} 项会被逐项删除。点击确认即表示已核对清单。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除方案</button></div></form>`, () => {
         $('deletePlanForm').addEventListener('submit', async event => {
           event.preventDefault();
-          const confirmation = $('deletePlanConfirmation').value.trim();
-          if (confirmation !== preview.folder) { toast('请输入完整且正确的版本目录名'); return; }
           const button = $('deletePlanForm').querySelector('[type=submit]');
           button.disabled = true;
           button.textContent = '删除中…';
           try {
             await api(`${slugPath(R.active.slug)}/plans/${encodeURIComponent(planId)}`, {
               method: 'DELETE',
-              body: JSON.stringify({ confirmation })
+              body: JSON.stringify({})
             });
             closeModal();
             await refreshProjects(true);
@@ -1489,6 +1499,69 @@
     } catch (error) {
       toast(`读取方案正文失败：${error.message}`);
     }
+  }
+
+  function planVersionUpdatePrompt(currentMarkdown, changeRequest) {
+    return [
+      { role: 'system', content: '你是科研实验方案的版本编辑。你会收到一份当前版本模板和研究者明确写出的“本次版本改动”。必须以模板为完整基础，只修改改动要求直接涉及的段落；在这些段落内可做必要的中文润色与结构微调。除非改动要求明确授权，绝对不得新增、删除、替换或推断任何试剂、材料、仪器、参数、剂量、单位、时间、温度、条件、步骤、顺序、样品编号、观察、结果、风险、限制或不确定性。要求不明确时保留原文，不能猜测或写入“待补充”。保留原有 Markdown 标题、列表和未涉及内容；不要输出 front matter、HTML 注释、代码块、解释、摘要或变更说明。只返回更新后的完整 Markdown 方案正文，供研究者审核后手动保存。' },
+      { role: 'user', content: `# 当前版本模板\n\n${currentMarkdown}\n\n# 本次版本改动（仅这些内容允许变化）\n\n${changeRequest}` }
+    ];
+  }
+
+  function parseVersionUpdatedPlan(raw) {
+    const markdown = String(raw || '').trim().replace(/^```(?:markdown|md)?\s*/i, '').replace(/\s*```$/, '').trim();
+    if (!markdown) throw new Error('AI 未返回可审核的方案正文。');
+    if (markdown.length > 120000) throw new Error('AI 返回的方案正文过长，已拒绝载入。');
+    if (/^---\s*\r?\n/.test(markdown) || /<!--\s*(?:PLAN-CONTENT|AUTO-UPDATE):/i.test(markdown)) {
+      throw new Error('AI 返回了不应写入方案正文的元数据或注释。');
+    }
+    return markdown;
+  }
+
+  function openPlanVersionUpdateDialog(book, currentContent, rawContent = '') {
+    if (!R.active || !book || !String(currentContent || '').trim()) { toast('请先创建实验方案书'); return; }
+    const plan = R.plans.find(item => item.id === book.planId);
+    if (!plan) { toast('未找到实验方案'); return; }
+    const scope = planScopeDetails(plan, book.subexperimentId);
+    const projectSlug = R.active.slug;
+    openModal(`<div class="modal-header"><div><p class="eyebrow">版本模板更新</p><h2>AI 按本次改动更新方案</h2><p>当前方案书会作为模板。AI 只修改下方明确说明的内容，并先进入编辑页供你核对；确认后再手动保存。</p></div><button class="close-button" data-close-modal>×</button></div>
+      <form id="planVersionUpdateForm"><div class="modal-body"><label class="form-field full"><span>本次版本改动</span><textarea id="planVersionChangeRequest" required maxlength="4000" placeholder="例如：将烧结温度从 700 ℃ 改为 750 ℃，保温时间仍为 2 h；其余内容保持不变。"></textarea><small class="field-note">请写清需要改变的参数、步骤或表述。未提及的内容会按模板保留。</small></label><div class="plan-source-panel"><b>更新对象：</b>${esc(plan.version || '当前版本')} · ${esc(scope.title)}<br>不会自动保存，也不会修改上一版本、日志或其他资料。</div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="runPlanVersionUpdateButton" class="primary-button" type="submit">生成待审核版本</button></div></form>`, () => {
+      $('planVersionUpdateForm').addEventListener('submit', async event => {
+        event.preventDefault();
+        const request = $('planVersionChangeRequest').value.trim();
+        if (!request) { toast('请填写本次版本改动'); return; }
+        const button = $('runPlanVersionUpdateButton');
+        button.disabled = true;
+        button.textContent = 'AI 更新中…';
+        try {
+          const updated = parseVersionUpdatedPlan(await askAgent('text-rewriter', planVersionUpdatePrompt(currentContent, request), null, {
+            operation: 'plan.version-update',
+            taskTitle: `方案版本 AI 更新：${scope.title}`,
+            phase: '基于当前模板更新指定改动'
+          }));
+          if (!R.active || R.active.slug !== projectSlug || R.planBook?.planId !== book.planId || R.planBook?.subexperimentId !== book.subexperimentId) {
+            throw new Error('当前项目或方案已切换，未载入本次生成结果。');
+          }
+          R.planEditor?.dispose?.();
+          R.planEditor = {
+            planId: book.planId,
+            subexperimentId: book.subexperimentId,
+            content: updated,
+            presentation: planPresentationStyle(rawContent || currentContent),
+            dispose: null
+          };
+          book.comparison = null;
+          closeModal();
+          await renderPlanBookView();
+          toast('AI 已生成待审核版本；请核对正文后点击“保存方案书”。');
+        } catch (error) {
+          toast(`AI 更新方案失败：${error.message}`);
+        } finally {
+          const current = $('runPlanVersionUpdateButton');
+          if (current) { current.disabled = false; current.textContent = '生成待审核版本'; }
+        }
+      });
+    });
   }
 
   function bindPlanContentEditor({ plan, scope, book, editorState, refreshPreview }) {
@@ -2374,7 +2447,7 @@
         : '<div class="plan-book-empty"><h2>尚未创建实验方案书</h2><p>可导入已有实验书，或直接手动编写。两种方式的内容都会保存为 Markdown。</p><div class="plan-book-actions"><button id="importEmptyPlanBookButton" type="button" class="primary-button">⇧ 导入实验书</button><button id="createPlanBookButton" type="button" class="secondary-button">✎ 手动编辑方案书</button></div></div>';
     const currentContentReady = Boolean(content && !imported && !task && !comparison);
     const canEditPlanBook = Boolean(!imported && !task);
-    host.innerHTML = `<div class="plan-book-shell"><button id="backToPlansButton" class="secondary-button plan-book-back" type="button">← 返回实验方案</button><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isAnalysingComparison ? '正在使用 AI 分析两个版本中实际会影响实验执行的参数。' : comparison ? '正在阅览当前方案与上一版本的正文改动。' : isEditing ? '正在直接编辑下方 A4 方案书；上方工具栏会作用于纸张内的正文。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions">${comparison ? (isAnalysingComparison ? '<span class="plan-analysis-status" role="status">AI 参数分析中…</span>' : '<button id="closePlanDiffButton" class="secondary-button" type="button">← 返回方案正文</button>') : `${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${canEditPlanBook && !isEditing ? '<button id="editPlanBookButton" class="secondary-button" type="button">✎ 编辑方案书</button>' : ''}${currentContentReady ? '<button id="showPlanDiffButton" class="secondary-button" type="button">查看版本改动</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}`}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
+    host.innerHTML = `<div class="plan-book-shell"><button id="backToPlansButton" class="secondary-button plan-book-back" type="button">← 返回实验方案</button><div class="plan-book-top"><div><p class="eyebrow">实验方案书 · A4 预览</p><h1>${esc(scope.title)}</h1><p>${isAnalysingComparison ? '正在使用 AI 分析两个版本中实际会影响实验执行的参数。' : comparison ? '正在阅览当前方案与上一版本的正文改动。' : isEditing ? '正在直接编辑下方 A4 方案书；上方工具栏会作用于纸张内的正文。' : '此页面展示排版后的方案书，不直接展示 Markdown 源文件。'}</p></div><div class="plan-book-actions">${comparison ? (isAnalysingComparison ? '<span class="plan-analysis-status" role="status">AI 参数分析中…</span>' : '<button id="closePlanDiffButton" class="secondary-button" type="button">← 返回方案正文</button>') : `${task ? '' : '<button id="importPlanBookButton" class="secondary-button" type="button">⇧ 导入方案资料</button>'}${canEditPlanBook && !isEditing ? '<button id="editPlanBookButton" class="secondary-button" type="button">✎ 编辑方案书</button>' : ''}${currentContentReady ? '<button id="updatePlanFromTemplateButton" class="secondary-button" type="button">✦ AI 按改动更新</button><button id="showPlanDiffButton" class="secondary-button" type="button">查看版本改动</button><button id="exportPlanBookButton" class="primary-button" type="button">导出实验方案</button>' : ''}`}</div></div><div class="plan-book-stage">${sourceAction}</div></div>`;
     $('backToPlansButton').onclick = () => {
       editorState?.dispose?.();
       if (R.planEditor === editorState) R.planEditor = null;
@@ -2382,6 +2455,7 @@
     };
     $('importPlanBookButton')?.addEventListener('click', () => openPlanSourceImportDialog(book.planId, book.subexperimentId));
     $('editPlanBookButton')?.addEventListener('click', () => openPlanContentEditor(book.planId, book.subexperimentId));
+    $('updatePlanFromTemplateButton')?.addEventListener('click', () => openPlanVersionUpdateDialog(book, content, rawContent));
     $('showPlanDiffButton')?.addEventListener('click', () => showPlanVersionComparison(book));
     $('closePlanDiffButton')?.addEventListener('click', async () => {
       book.comparison = null;
@@ -2683,24 +2757,32 @@
     const numericVersions = R.plans.map(plan => String(plan.version || '').trim().match(/^v?(\d+)(?:\.\d+)?$/i)).filter(Boolean).map(match => Number(match[1])).filter(Number.isFinite);
     const suggestedVersion = `${(numericVersions.length ? Math.max(...numericVersions) : 0) + 1}.0`;
     const inheritedCount = previous?.subexperiments?.length || 0;
+    const templateInheritedCount = previous?.storage === 'folder' ? inheritedCount : 0;
     const inheritSubexperimentsPanel = previous
-      ? `<label class="form-field full inherit-subexperiments-option"><span class="checkbox-card"><input id="inheritPreviousSubexperiments" type="checkbox" ${inheritedCount ? '' : 'disabled'} /><span><b>沿用上版本子实验</b><small>${inheritedCount ? '一键沿用上版本的子实验，但不会沿用实验方案。' : '上一版本暂无子实验。'}</small></span></span></label>`
+      ? `<label class="form-field full inherit-subexperiments-option"><span class="checkbox-card"><input id="inheritPreviousSubexperiments" type="checkbox" ${inheritedCount ? '' : 'disabled'} /><span><b>沿用上版本子实验</b><small>${inheritedCount ? '创建同名子实验；可同时复制其方案书作为新版本模板。' : '上一版本暂无子实验。'}</small></span></span></label>`
       : `<div class="form-field full inherit-subexperiments-option"><div class="checkbox-card is-disabled"><span><b>沿用上版本子实验</b><small>暂无上一版本可沿用。</small></span></div></div>`;
+    const inheritPlanTemplatesPanel = templateInheritedCount
+      ? `<label class="form-field full inherit-subexperiments-option"><span class="checkbox-card"><input id="inheritPreviousPlanTemplates" type="checkbox" checked disabled /><span><b>复制方案书作为版本模板</b><small>复制同名子实验的方案正文、排版和可用 AI 辅助分析；不会复制实验日志、导入资料或其他文件。</small></span></span></label>`
+      : '';
     const inheritedSubexperimentsPreview = inheritedCount
       ? `<section id="newPlanInheritedSubexperiments" class="form-field full subexperiment-management" hidden><span>管理子实验</span><p>将沿用上一版本的以下子实验。</p><ul class="subexperiment-management-list">${previous.subexperiments.map(item => `<li><div><b>${esc(item.name)}</b>${item.description ? `<small>${esc(item.description)}</small>` : ''}</div></li>`).join('')}</ul></section>`
       : '';
-    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。新建后可在方案内导入资料并生成独立的实验方案书。</p></div><button class="close-button" data-close-modal>×</button></div>
+    openModal(`<div class="modal-header"><div><h2>新建实验方案</h2><p>版本会创建为项目根目录下的文件夹，子实验会创建为其中的子文件夹。可将上版同名子实验的方案书直接作为新版本模板，再由 AI 仅更新本次改动。</p></div><button class="close-button" data-close-modal>×</button></div>
       <form id="planForm"><div class="modal-body"><div class="form-grid">
         <label class="form-field"><span>方案名称</span><input id="planName" required placeholder="例如：蛋白纯化条件筛选" /></label>
         <label class="form-field"><span>方案版本</span><input id="planVersion" required value="${esc(suggestedVersion)}" placeholder="例如：3.0" /><small class="field-note">已按现有版本自动建议，可直接修改。</small></label>
         <label class="form-field full"><span>方案说明（可选）</span><textarea id="planDescription" placeholder="记录方案目的、变量范围、判定标准等。"></textarea></label>
         ${inheritSubexperimentsPanel}
+        ${inheritPlanTemplatesPanel}
         ${inheritedSubexperimentsPreview}
       </div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">创建方案</button></div></form>`, () => {
       const inheritCheckbox = $('inheritPreviousSubexperiments');
+      const templateCheckbox = $('inheritPreviousPlanTemplates');
       const inheritedPreview = $('newPlanInheritedSubexperiments');
       const updateInheritedPreview = () => {
-        if (inheritedPreview && inheritCheckbox) inheritedPreview.hidden = !inheritCheckbox.checked;
+        const enabled = Boolean(inheritCheckbox?.checked);
+        if (inheritedPreview) inheritedPreview.hidden = !enabled;
+        if (templateCheckbox) templateCheckbox.disabled = !enabled;
       };
       inheritCheckbox?.addEventListener('change', updateInheritedPreview);
       updateInheritedPreview();
@@ -2710,19 +2792,21 @@
         button.disabled = true;
         button.textContent = '创建中…';
         try {
+          const inheritTemplates = Boolean($('inheritPreviousSubexperiments')?.checked && $('inheritPreviousPlanTemplates')?.checked);
           const response = await api(`${slugPath(R.active.slug)}/plans`, {
             method: 'POST',
             body: JSON.stringify({
               name: $('planName').value.trim(),
               version: $('planVersion').value.trim(),
               description: $('planDescription').value.trim(),
-              inheritSubexperimentsFromPlanId: $('inheritPreviousSubexperiments')?.checked ? previous?.id : ''
+              inheritSubexperimentsFromPlanId: $('inheritPreviousSubexperiments')?.checked ? previous?.id : '',
+              inheritPlanTemplatesFromPlanId: inheritTemplates ? previous?.id : ''
             })
           });
           R.plans = [response.plan, ...R.plans];
           closeModal();
           renderPlansView();
-          toast('实验方案已创建；现在可以在日志中关联它或其子实验');
+          toast(inheritTemplates ? '已创建基于上一版本的方案模板；可输入本次改动后让 AI 更新并审核。' : '实验方案已创建；现在可以在日志中关联它或其子实验');
         } catch (error) {
           toast(`创建实验方案失败：${error.message}`);
         } finally {
@@ -2990,10 +3074,91 @@
     return `<section class="log-entry-section"><h3>${esc(label)}</h3><p>${highlightLogText(text, highlights)}</p></section>`;
   }
 
+  function clearLogImagePreviews() {
+    for (const url of R.logImagePreviewUrls.values()) {
+      try { window.URL?.revokeObjectURL(url); } catch { /* ignore cleanup failures */ }
+    }
+    R.logImagePreviewUrls.clear();
+    R.logImagePreviewWrites.clear();
+  }
+
+  function logImagePreviewKey(log, item) {
+    const date = typeof log === 'string' ? log : (log?.date || R.date || '');
+    return `${date}|${item}`;
+  }
+
+  function logImageStorageKey(log, item) {
+    const date = typeof log === 'string' ? log : (log?.date || R.date || '');
+    return `scihub-log-image:${R.active?.slug || ''}:${date}:${item}`;
+  }
+
+  function readStoredLogImagePreview(log, item) {
+    try {
+      const value = window.localStorage?.getItem(logImageStorageKey(log, item));
+      return value && value.startsWith('data:image/') ? value : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function persistLogImagePreview(log, item, file) {
+    const fileType = String(file?.type || '').trim().toLowerCase();
+    const isImage = fileType.startsWith('image/') || /\.(avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i.test(file?.name || '');
+    if (!file || !isImage) return Promise.resolve();
+    const key = logImagePreviewKey(log, item);
+    const storageKey = logImageStorageKey(log, item);
+    const projectSlug = R.active?.slug || '';
+    const date = typeof log === 'string' ? log : (log?.date || R.date || '');
+    const write = new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        let dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (dataUrl && !dataUrl.startsWith('data:image/')) {
+          const encoded = dataUrl.includes(',') ? dataUrl.slice(dataUrl.indexOf(',') + 1) : '';
+          const extension = String(file.name || '').split('.').pop().toLowerCase();
+          const fallbackType = fileType.startsWith('image/') ? fileType : ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', svg: 'image/svg+xml' }[extension] || `image/${extension || 'png'}`);
+          if (encoded) dataUrl = `data:${fallbackType};base64,${encoded}`;
+        }
+        if (dataUrl.startsWith('data:image/')) {
+          try { window.localStorage?.setItem(storageKey, dataUrl); } catch { /* storage quota or privacy mode */ }
+          if (R.active?.slug === projectSlug && R.date === date) {
+            R.logImagePreviewUrls.set(key, dataUrl);
+            refreshLogImageEditor();
+          }
+        }
+        resolve();
+      };
+      reader.onerror = () => resolve();
+      reader.readAsDataURL(file);
+    });
+    R.logImagePreviewWrites.set(key, write);
+    write.then(() => {
+      if (R.logImagePreviewWrites.get(key) === write) R.logImagePreviewWrites.delete(key);
+    });
+    return write;
+  }
+
+  function restoreLogImagePreviews(logs = []) {
+    (Array.isArray(logs) ? logs : []).forEach(log => {
+      (Array.isArray(log?.images) ? log.images : []).forEach(item => {
+        const key = logImagePreviewKey(log, item);
+        if (!R.logImagePreviewUrls.has(key)) {
+          const stored = readStoredLogImagePreview(log, item);
+          if (stored) R.logImagePreviewUrls.set(key, stored);
+        }
+      });
+    });
+  }
+
+  function logImageVisualMarkup(log, item) {
+    const preview = R.logImagePreviewUrls.get(logImagePreviewKey(log, item));
+    return preview ? `<img class="log-image-preview" src="${esc(preview)}" alt="${esc(item)}" />` : '<span class="log-image-icon" aria-hidden="true">▧</span>';
+  }
+
   function logImagesMarkup(log, compact = false) {
     const images = Array.isArray(log?.images) ? log.images.map(item => String(item || '').trim()).filter(Boolean) : [];
     if (!images.length) return '';
-    const cards = images.map((item, index) => `<div class="log-image-card"><span class="log-image-icon" aria-hidden="true">▧</span><div><b>${esc(item.split(' · ')[0] || `图片 ${index + 1}`)}</b><small>${esc(item)}</small></div></div>`).join('');
+    const cards = images.map((item, index) => `<div class="log-image-card">${logImageVisualMarkup(log, item)}<div><b>${esc(item.split(' · ')[0] || `图片 ${index + 1}`)}</b><small>${esc(item)}</small></div></div>`).join('');
     return `<section class="log-entry-section log-images-section"><div class="log-images-head"><h3>导入图片</h3><span>${images.length} 项</span></div><div class="log-images-grid ${compact ? 'is-compact' : ''}">${cards}</div></section>`;
   }
 
@@ -3070,7 +3235,7 @@
       body.innerHTML = `${toolbar}<div class="empty-state logs-empty"><span>⌕</span><strong>没有符合筛选条件的日志</strong><p>请调整实验方案版本或子实验筛选。</p><button id="logsClearFilters" class="secondary-button">清除筛选</button></div>`;
       $('logsClearFilters').onclick = () => { R.logFilters = { planId: '', subexperimentId: '' }; renderLogsView(); };
     } else {
-      body.innerHTML = `${toolbar}<p class="result-summary logs-summary">按更新时间倒序展示项目内所有日志；点击日志卡片可继续编辑。</p><div class="logs-list">${filtered.map(log => {
+      body.innerHTML = `${toolbar}<p class="result-summary logs-summary">按实验日期倒序展示项目内所有日志；点击日志卡片可继续编辑。</p><div class="logs-list">${filtered.map(log => {
         const source = String(log.source || '').trim();
         const dateLabel = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${log.date}T12:00:00`));
         const highlights = Array.isArray(log.highlights) && log.highlights.length ? log.highlights : deriveLogHighlights(log);
@@ -3301,31 +3466,49 @@
   }
 
   function logImageEditorMarkup(images = []) {
-    return '<section class="log-image-editor"><div class="record-field-head"><span>日志图片</span><small>可添加或删除图片元数据；保存日志后写入 Markdown</small></div><div class="log-image-editor-actions"><label class="secondary-button image-file-picker"><input id="logImageFiles" type="file" accept="image/*" multiple />选择图片文件</label><div class="log-image-manual-add"><input id="logImageRefInput" type="text" maxlength="300" placeholder="手动填写文件名 / 页码 / 图片说明" /><button id="addLogImageRef" type="button" class="secondary-button">添加</button></div></div><div id="logImageEditorList" class="log-image-editor-list"></div><p class="field-note">不会复制或上传图片二进制文件；选择文件只记录文件名、类型和大小。</p></section>';
+    return '<section class="log-image-editor"><div class="record-field-head"><span>日志图片</span><small>可添加或删除图片元数据；保存日志后写入 Markdown</small></div><div class="log-image-editor-actions"><label class="secondary-button image-file-picker"><input id="logImageFiles" type="file" accept="image/*" multiple />选择图片文件</label><div class="log-image-manual-add"><input id="logImageRefInput" type="text" maxlength="300" placeholder="手动填写文件名 / 页码 / 图片说明" /><button id="addLogImageRef" type="button" class="secondary-button">添加</button></div></div><div id="logImageEditorList" class="log-image-editor-list"></div><p class="field-note">图片原文件不写入项目 Markdown；预览保存在本机浏览器缓存，用于日志展示。</p></section>';
   }
 
   function refreshLogImageEditor() {
     const list = $('logImageEditorList');
     if (!list) return;
     const images = Array.isArray(R.log.images) ? R.log.images : [];
-    list.innerHTML = images.length ? images.map((item, index) => '<div class="log-image-editor-item"><span class="log-image-icon" aria-hidden="true">▧</span><span class="log-image-editor-ref">' + esc(item) + '</span><button type="button" class="text-button danger-button" data-remove-log-image="' + index + '">删除</button></div>').join('') : '<div class="log-image-editor-empty">暂无图片。可选择文件或手动添加图片元数据。</div>';
+    const exportButton = $('exportLogBtn');
+    if (exportButton) exportButton.disabled = !(visibleLogSource(R.log).trim() || images.length);
+    list.innerHTML = images.length ? images.map((item, index) => '<div class="log-image-editor-item">' + logImageVisualMarkup(R.log, item) + '<span class="log-image-editor-ref">' + esc(item) + '</span><button type="button" class="text-button danger-button" data-remove-log-image="' + index + '">删除</button></div>').join('') : '<div class="log-image-editor-empty">暂无图片。可选择文件或手动添加图片元数据。</div>';
     list.querySelectorAll('[data-remove-log-image]').forEach(button => {
       button.onclick = () => {
-        R.log.images.splice(Number(button.dataset.removeLogImage), 1);
+        const index = Number(button.dataset.removeLogImage);
+        const reference = R.log.images[index];
+        const key = logImagePreviewKey(R.log, reference);
+        const preview = R.logImagePreviewUrls.get(key);
+        if (preview) {
+          try { window.URL?.revokeObjectURL(preview); } catch { /* ignore cleanup failures */ }
+          R.logImagePreviewUrls.delete(key);
+        }
+        try { window.localStorage?.removeItem(logImageStorageKey(R.log, reference)); } catch { /* ignore storage cleanup failures */ }
+        R.log.images.splice(index, 1);
         refreshLogImageEditor();
       };
     });
   }
 
   function appendLogImageFiles(files, source = '选择') {
-    const entries = [...(files || [])].filter(file => file && (String(file.type || '').startsWith('image/') || /\.(avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i.test(file.name || ''))).map((file, index) => {
+    const prepared = [...(files || [])].filter(file => file && (String(file.type || '').startsWith('image/') || /\.(avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i.test(file.name || ''))).map((file, index) => {
       const type = file.type || 'image/*';
       const extension = type.split('/')[1] || 'png';
       const name = file.name || `${source === '粘贴' ? 'pasted-image' : 'image'}-${Date.now()}-${index + 1}.${extension}`;
-      return `${name} · ${type} · ${Number(file.size || 0).toLocaleString()} 字节`;
+      return { file, entry: `${name} · ${type} · ${Number(file.size || 0).toLocaleString()} 字节` };
     });
-    if (!entries.length) { toast('未检测到可导入的图片'); return; }
-    R.log.images = [...new Set([...(R.log.images || []), ...entries])].slice(0, 100);
+    if (!prepared.length) { toast('未检测到可导入的图片'); return; }
+    prepared.forEach(({ file, entry }) => {
+      const key = logImagePreviewKey(R.log, entry);
+      if (!R.logImagePreviewUrls.has(key)) {
+        try { R.logImagePreviewUrls.set(key, window.URL.createObjectURL(file)); } catch { /* preview unavailable */ }
+      }
+      persistLogImagePreview(R.log, entry, file);
+    });
+    R.log.images = [...new Set([...(R.log.images || []), ...prepared.map(item => item.entry)])].slice(0, 100);
     refreshLogImageEditor();
   }
 
@@ -3341,6 +3524,7 @@
     if (!section) return;
     if (!section.querySelector('#logImageDropZone')) section.querySelector('.record-field-head')?.insertAdjacentHTML('afterend', '<div id="logImageDropZone" class="log-image-drop-zone">将图片拖到这里，或点击输入框后粘贴截图</div>');
     const dropZone = section.querySelector('#logImageDropZone');
+    if (!dropZone) return;
     ['dragenter', 'dragover'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.add('is-dragging'); }));
     ['dragleave', 'drop'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove('is-dragging'); }));
     dropZone.addEventListener('drop', event => appendLogImageFiles(event.dataTransfer?.files, '拖入'));
@@ -3358,7 +3542,7 @@
     const l = R.log;
     const textDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${R.date}T12:00:00`));
     const source = visibleLogSource(l);
-    const hasContent = Boolean(source.trim());
+    const hasContent = Boolean(source.trim()) || l.images.length > 0;
     const selectedPlan = planForLog(l);
     const storagePath = logStoragePath(l, R.date);
     const planOptions = ['<option value="">请选择实验方案版本</option>'].concat(
@@ -3456,9 +3640,10 @@
 
   async function saveLog(announce) {
     const source = visibleLogSource(R.log).trim();
+    const hasImages = Array.isArray(R.log.images) && R.log.images.length > 0;
     R.log.source = source;
-    if (!R.active || !source) {
-      if (announce) toast('请先输入或导入实验日志内容');
+    if (!R.active || (!source && !hasImages)) {
+      if (announce) toast('请先输入日志内容或添加图片');
       return false;
     }
     if (!R.log.planId) {
@@ -3468,7 +3653,7 @@
     const autoPolish = $('autoPolish') ? $('autoPolish').checked : R.autoPolish;
     R.autoPolish = autoPolish;
     const saveButton = $('saveLogBtn');
-    const shouldAiPolish = autoPolish && R.log.formattedSource !== source;
+    const shouldAiPolish = Boolean(source) && autoPolish && R.log.formattedSource !== source;
     const aiTask = shouldAiPolish ? createAiTask({
       type: 'log-organizer',
       title: '实验日志 AI 整理与保存',
@@ -3477,6 +3662,7 @@
       open: () => window.switchView('logs')
     }) : null;
     try {
+      if (R.logImagePreviewWrites.size) await Promise.all([...R.logImagePreviewWrites.values()]);
       if (shouldAiPolish) {
         if (saveButton) { saveButton.disabled = true; saveButton.textContent = 'AI 整理中…'; }
         updateAiTask(aiTask, { phase: '读取关联方案与项目记忆', current: 1 });
@@ -3497,9 +3683,10 @@
       const data = await api(`${slugPath(R.active.slug)}/logs/${R.date}`, { method: 'POST', body: JSON.stringify(payload) });
       R.log = normalizeLog(data.log);
       R.logs = (await api(`${slugPath(R.active.slug)}/logs`)).logs || [];
+      restoreLogImagePreviews(R.logs);
       await refreshProjects(true);
       if (aiTask) finishAiTask(aiTask, data.log, '实验日志 AI 整理并保存完成');
-      if (announce) toast(autoPolish ? 'AI 已整理并保存实验日志与 AGENTS.md' : '实验日志与 AGENTS.md 已保存');
+      if (announce) toast(aiTask ? 'AI 已整理并保存实验日志与 AGENTS.md' : '实验日志（含图片）与 AGENTS.md 已保存');
       return true;
     } catch (e) { if (aiTask) failAiTask(aiTask, e); else toast(`保存失败：${e.message}`); }
     finally { const button = $('saveLogBtn'); if (button) { button.disabled = false; button.textContent = '保存实验日志'; } }
@@ -3796,7 +3983,7 @@
   }
 
   async function exportLog() {
-    if (!R.log.source.trim()) { toast('请先输入或导入实验日志内容'); return; }
+    if (!R.log.source.trim() && !(Array.isArray(R.log.images) && R.log.images.length)) { toast('请先输入日志内容或添加图片'); return; }
     if (!await saveLog(false)) return;
     const link = document.createElement('a');
     link.href = `${slugPath(R.active.slug)}/logs/${R.date}/export${logQuery(R.log)}`;
@@ -4161,6 +4348,153 @@
     } catch (error) { toast(`读取样品追溯失败：${error.message}`); }
   }
 
+  const electroNumber = value => Number.isFinite(Number(value)) ? Number(value) : null;
+  function electroSeries(dataset, selectedSamples, kind = 'ORR') {
+    const lines = [];
+    (dataset?.samples || []).forEach(sample => {
+      if (!selectedSamples.has(sample.id)) return;
+      Object.entries(sample.runs || {}).forEach(([run, measures]) => {
+        if (kind === 'N2CV') {
+          const cv = measures.N2CV;
+          if (cv?.rows?.length) lines.push({ label: `${sample.id} · ${run}`, sample: sample.id, xLabel: 'E / V vs reference', yLabel: 'I / mA', points: cv.rows.map(row => ({ x: row[0], y: row[1] * 1000 })) });
+          return;
+        }
+        if (kind === 'N2LSV' || kind === 'O2LSV') {
+          const lsv = measures[kind];
+          if (lsv?.rows?.length) lines.push({ label: `${sample.id} · ${run}`, sample: sample.id, xLabel: 'E / V vs reference', yLabel: 'I / mA', points: lsv.rows.map(row => ({ x: row[0], y: row[1] * 1000 })) });
+          return;
+        }
+        if (kind === 'N2EIS') {
+          const eis = measures.N2EIS || measures.EIS;
+          if (eis?.rows?.length) lines.push({ label: `${sample.id} · ${run}`, sample: sample.id, xLabel: "Z′ / Ω", yLabel: '−Z″ / Ω', points: eis.rows.map(row => ({ x: row[1], y: -row[2] })) });
+          return;
+        }
+        const o2 = measures.O2LSV;
+        const n2 = measures.N2LSV;
+        if (!o2?.rows?.length || !n2?.rows?.length) return;
+        const count = Math.min(o2.rows.length, n2.rows.length);
+        const points = [];
+        for (let index = 0; index < count; index += 1) {
+          const potential = electroNumber(o2.rows[index][0]);
+          const current = electroNumber(o2.rows[index][1]);
+          const background = electroNumber(n2.rows[index][1]);
+          if (potential !== null && current !== null && background !== null) points.push({ x: potential, y: (current - background) * 1000 });
+        }
+        if (points.length) lines.push({ label: `${sample.id} · ${run}`, sample: sample.id, xLabel: 'E / V vs reference', yLabel: 'I(O₂) − I(N₂) / mA', points });
+      });
+    });
+    return lines;
+  }
+
+  function electroExcelSettings(dataset) {
+    const source = (dataset?.excelSources || []).find(book => book.globalParameters?.cRhe && book.globalParameters?.area);
+    const values = source?.globalParameters || {};
+    const cRhe = Number(values.cRhe), area = Number(values.area), irFraction = Number(values.irFraction);
+    return Number.isFinite(cRhe) && Number.isFinite(area) && Number.isFinite(irFraction)
+      ? { cRhe, area, irFraction, tafelMin: .85, tafelMax: .95, source: source.filename, maTargetMv: Number(values.maTargetMv) || null } : null;
+  }
+
+  function electroProcessedOrr(dataset, selectedSamples) {
+    const settings = electroExcelSettings(dataset);
+    if (!settings) return [];
+    const lines = [];
+    (dataset?.samples || []).forEach(sample => {
+      if (!selectedSamples.has(sample.id)) return;
+      Object.entries(sample.runs || {}).forEach(([run, measures]) => {
+        const o2 = measures.O2LSV, n2 = measures.N2LSV, eis = measures.N2EIS || measures.EIS;
+        if (!o2?.rows?.length || !n2?.rows?.length || !eis?.rows?.length) return;
+        const rs = Number(eis.rows[0]?.[1]);
+        if (!Number.isFinite(rs)) return;
+        const size = Math.min(o2.rows.length, n2.rows.length);
+        const points = [];
+        for (let i = 0; i < size; i += 1) {
+          const potential = Number(o2.rows[i][0]), o2Current = Number(o2.rows[i][1]), n2Current = Number(n2.rows[i][1]);
+          if (![potential, o2Current, n2Current].every(Number.isFinite)) continue;
+          const netA = o2Current - n2Current;
+          const eRhe = potential + settings.cRhe - netA * rs * settings.irFraction;
+          const j = netA * 1000 / settings.area;
+          points.push({ x: eRhe, y: j });
+        }
+        const plateau = points.filter(point => point.x >= .20 && point.x <= .40).map(point => point.y);
+        const jL = plateau.length ? plateau.reduce((sum, value) => sum + value, 0) / plateau.length : null;
+        const kinetic = Number.isFinite(jL) ? points.map(point => ({ ...point, jk: point.y * jL / (jL - point.y) })).filter(point => Number.isFinite(point.jk) && Math.abs(point.jk) > 1e-12) : [];
+        lines.push({ label: `${sample.id} · ${run}`, sample: sample.id, points, kinetic, jL, rs });
+      });
+    });
+    return lines;
+  }
+
+  function electroFit(processedLine, settings) {
+    const fitPoints = (processedLine?.kinetic || []).filter(point => point.x >= settings.tafelMin && point.x <= settings.tafelMax).map(point => ({ x: Math.log10(Math.abs(point.jk)), y: point.x }));
+    if (fitPoints.length < 3) return null;
+    const meanX = fitPoints.reduce((sum, point) => sum + point.x, 0) / fitPoints.length;
+    const meanY = fitPoints.reduce((sum, point) => sum + point.y, 0) / fitPoints.length;
+    const denominator = fitPoints.reduce((sum, point) => sum + (point.x - meanX) ** 2, 0);
+    if (!denominator) return null;
+    const slope = fitPoints.reduce((sum, point) => sum + (point.x - meanX) * (point.y - meanY), 0) / denominator;
+    return { points: fitPoints, slope, intercept: meanY - slope * meanX };
+  }
+
+  function electroSvg(lines, mode = 'raw', settings = null) {
+    const all = lines.flatMap(line => mode === 'tafel' ? (electroFit(line, settings)?.points || []) : line.points);
+    if (!all.length) return '<div class="electro-empty-chart">选择含完整 N2LSV 与 O2LSV 的样品后显示曲线。</div>';
+    const width = 1120, height = 700, pad = { l: 112, r: 32, t: 34, b: 90 };
+    // CHI CV exports can contain tens of thousands of points; avoid spreading that array into Math.min/Math.max.
+    const bounds = axis => {
+      let min = Infinity, max = -Infinity;
+      all.forEach(point => { const value = Number(point[axis]); if (Number.isFinite(value)) { min = Math.min(min, value); max = Math.max(max, value); } });
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return [0, 1];
+      const d = (max - min) || 1;
+      return [min - d * .06, max + d * .06];
+    };
+    const [x0, x1] = bounds('x'), [y0, y1] = bounds('y');
+    const sx = value => pad.l + (value - x0) / (x1 - x0) * (width - pad.l - pad.r);
+    const sy = value => height - pad.b - (value - y0) / (y1 - y0) * (height - pad.t - pad.b);
+    const colors = ['#1d6f5c', '#bd5a45', '#496c9d', '#8c6b2f', '#785b8d', '#3e8786'];
+    const grid = Array.from({ length: 6 }, (_, index) => { const value = y0 + (y1 - y0) * index / 5; const x = x0 + (x1 - x0) * index / 5; return `<line x1="${pad.l}" x2="${width-pad.r}" y1="${sy(value)}" y2="${sy(value)}" class="electro-grid"/><line x1="${sx(x)}" x2="${sx(x)}" y1="${pad.t}" y2="${height-pad.b}" class="electro-grid"/><text x="${pad.l-13}" y="${sy(value)+5}" text-anchor="end">${value.toFixed(2)}</text><text x="${sx(x)}" y="${height-pad.b+28}" text-anchor="middle">${x.toFixed(2)}</text>`; }).join('');
+    const curve = lines.map((line, index) => {
+      const points = mode === 'tafel' ? (electroFit(line, settings)?.points || []) : line.points;
+      if (!points.length) return '';
+      const d = points.map((point, pointIndex) => `${pointIndex ? 'L' : 'M'}${sx(point.x).toFixed(1)},${sy(point.y).toFixed(1)}`).join(' ');
+      const fit = mode === 'tafel' ? electroFit(line, settings) : null;
+      const fitLine = fit ? `<path d="M${sx(Math.min(...fit.points.map(point => point.x)))},${sy(fit.intercept + fit.slope * Math.min(...fit.points.map(point => point.x)))} L${sx(Math.max(...fit.points.map(point => point.x)))},${sy(fit.intercept + fit.slope * Math.max(...fit.points.map(point => point.x)))}" class="electro-fit" stroke="${colors[index % colors.length]}"/>` : '';
+      return `<path d="${d}" class="electro-line" stroke="${colors[index % colors.length]}"/>${fitLine}`;
+    }).join('');
+    const legend = lines.map((line, index) => `<g transform="translate(${pad.l + 12} ${pad.t + 20 + index * 22})"><line x1="0" x2="27" y1="0" y2="0" stroke="${colors[index % colors.length]}" stroke-width="3"/><text x="34" y="5">${esc(line.label)}</text></g>`).join('');
+    const xLabel = mode === 'tafel' ? 'log10 |jₖ| / (mA cm⁻²)' : (lines[0]?.xLabel || 'E / V');
+    const yLabel = mode === 'tafel' ? 'E / V vs RHE' : (lines[0]?.yLabel || 'I / mA');
+    return `<svg class="electro-plot" viewBox="0 0 ${width} ${height}" role="img"><g class="electro-axis">${grid}<line x1="${pad.l}" x2="${width-pad.r}" y1="${height-pad.b}" y2="${height-pad.b}"/><line x1="${pad.l}" x2="${pad.l}" y1="${pad.t}" y2="${height-pad.b}"/></g>${curve}<g class="electro-legend">${legend}</g><text class="electro-axis-label" x="${width/2}" y="${height-20}" text-anchor="middle">${xLabel}</text><text class="electro-axis-label" transform="translate(28 ${height/2}) rotate(-90)" text-anchor="middle">${yLabel}</text></svg>`;
+  }
+
+  function electrochemistryMarkup() {
+    const datasets = R.electrochemistry?.datasets || [];
+    const dataset = R.electrochemistryDataset;
+    if (!datasets.length) return `<section class="electro-panel electro-empty"><div><p class="eyebrow">电化学</p><h2>导入一个日期文件夹开始</h2><p>读取 CHI660E 的 N2LSV、O2LSV、EIS、CV TXT；原始 TXT 会复制进当前项目，外部原文件不会被改动。</p><button type="button" class="primary-button" id="emptyElectroImport">导入日期文件夹</button></div></section>`;
+    const picker = `<select id="electroDatasetSelect"><option value="">选择一次导入</option>${datasets.map(item => `<option value="${esc(item.id)}" ${dataset?.id === item.id ? 'selected' : ''}>${esc(item.dateFolder)} · ${esc(item.importedAt?.slice(0, 10) || '')}</option>`).join('')}</select>`;
+    if (!dataset) return `<section class="electro-panel"><div class="electro-panel-head"><div><p class="eyebrow">电化学</p><h2>CHI 数据集</h2></div>${picker}</div><p class="record-hint">选择一个已导入的日期文件夹以查看原始曲线、参数表和 Tafel 拟合。</p></section>`;
+    const sampleNames = [...new Set((dataset.samples || []).map(sample => sample.id))];
+    if (!R.electrochemistrySelectedSamples.size) sampleNames.forEach(name => R.electrochemistrySelectedSamples.add(name));
+    const settings = electroExcelSettings(dataset);
+    const processed = electroProcessedOrr(dataset, R.electrochemistrySelectedSamples);
+    const summaries = processed.map(line => { const fit = electroFit(line, settings); const excelResult = (dataset.excelSources || []).flatMap(book => book.parameters || []).find(item => item.sampleId === line.sample && item.run === line.label.split(' · ')[1])?.values || {}; const eHalf = excelResult['E1/2 / V vs RHE']; const ma = excelResult['MA / A*gPt-1']; const excelJl = excelResult['J_L / mA*cm-2']; return `<tr><td>${esc(line.label)}</td><td>${Number.isFinite(line.rs) ? `${line.rs.toFixed(3)} Ω` : '-'}</td><td>${excelJl || (Number.isFinite(line.jL) ? line.jL.toFixed(3) : '-')}</td><td>${eHalf || '-'}</td><td>${ma || '-'}</td><td>${fit ? `${(fit.slope * 1000).toFixed(1)} mV/dec` : '拟合区数据不足'}</td></tr>`; }).join('');
+    const excel = (dataset.excelSources || []).map(book => `<details><summary>${esc(book.filename)}</summary><div class="electro-excel-preview">${(book.sheets || []).map(sheet => `<section><b>${esc(sheet.name)}</b><pre>${esc(Object.entries(sheet.cells || {}).slice(0, 80).map(([cell, value]) => `${cell}: ${value}`).join('\n') || '未提取到显示值')}</pre></section>`).join('') || '未读取到可预览的工作表。'}</div></details>`).join('') || '<p class="record-hint">本次文件夹未找到 Excel 参数表。</p>';
+    const rawPanels = [['N₂-CV', 'N2CV'], ['N₂-LSV', 'N2LSV'], ['N₂-EIS（Nyquist）', 'N2EIS'], ['O₂-LSV', 'O2LSV']].map(([title, kind]) => `<section><h3>${title}</h3>${electroSvg(electroSeries(dataset, R.electrochemistrySelectedSamples, kind))}</section>`).join('');
+    const settingsNote = settings ? `与 ${settings.source} 一致：C_RHE=${settings.cRhe} V，A_geo=${settings.area} cm²，iR=${settings.irFraction}，Tafel ${settings.tafelMin}–${settings.tafelMax} V vs RHE。` : '未识别到 Excel 全局参数；无法按工作簿定义进行 RHE/iR/JK/Tafel 处理。';
+    return `<section class="electro-panel"><div class="electro-panel-head"><div><p class="eyebrow">电化学 · ${esc(dataset.dateFolder)}</p><h2>论文式曲线对比与参数</h2><small>${esc(settingsNote)}</small></div><div class="electro-actions">${picker}<button type="button" class="secondary-button" id="deleteElectroDataset">删除本次导入</button></div></div><div class="electro-sample-selector">${sampleNames.map(name => `<label><input type="checkbox" data-electro-sample="${esc(name)}" ${R.electrochemistrySelectedSamples.has(name) ? 'checked' : ''}/><span>${esc(name)}</span></label>`).join('')}</div><div class="electro-chart-grid electro-chart-grid-four">${rawPanels}</div><div class="electro-chart-grid"><section><h3>ORR 极化曲线（iR 校正 / RHE）</h3>${settings ? electroSvg(processed) : '<div class="electro-empty-chart">需要导入包含 Excel 全局参数的 ORR 工作簿。</div>'}</section><section><h3>Tafel 拟合（与 Excel 一致）</h3>${settings ? electroSvg(processed, 'tafel', settings) : '<div class="electro-empty-chart">需要导入包含 Excel 全局参数的 ORR 工作簿。</div>'}</section></div><section class="electro-table"><h3>主要电化学参数对比</h3><table><thead><tr><th>样品 / 重复</th><th>Rs / Ω</th><th>jL / mA cm⁻²</th><th>E1/2 / V vs RHE</th><th>MA / A gPt⁻¹</th><th>Tafel / mV dec⁻¹</th></tr></thead><tbody>${summaries || '<tr><td colspan="6">没有可用于比较的完整 LSV/EIS 组。</td></tr>'}</tbody></table></section><section class="electro-table"><h3>导入的 Excel 参数表预览</h3>${excel}</section></section>`;
+  }
+
+  async function chooseAndImportElectrochemistry() {
+    if (!R.active) return;
+    try {
+      const choice = await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry/choose-folder`, { method: 'POST', body: JSON.stringify({}) });
+      if (!choice.path) return;
+      const result = await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry/import-folder`, { method: 'POST', body: JSON.stringify({ sourcePath: choice.path }) });
+      R.electrochemistry = await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry`);
+      R.electrochemistryDataset = await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry/${encodeURIComponent(result.dataset.id)}`).then(data => data.dataset);
+      R.electrochemistrySelectedSamples = new Set(); renderCharacterizationsView(); toast('电化学日期文件夹已导入，原始 TXT 已保存在项目内');
+    } catch (error) { toast(`电化学导入失败：${error.message}`); }
+  }
+
   function renderTraceText(value, highlights = []) {
     const text = String(value || '').trim();
     return text ? `<pre class="trace-pre">${highlightLogText(text, highlights)}</pre>` : '<span class="trace-muted">未填写</span>';
@@ -4216,7 +4550,23 @@
     const showType = !selectedType;
     const comparisonHtml = comparisonRows.length ? `<section class="characterization-comparison"><div class="characterization-table-wrap"><table><thead><tr>${showType ? '<th>表征类型</th>' : ''}${comparisonColumns.map(column => `<th>${esc(column)}</th>`).join('')}<th>操作</th></tr></thead><tbody>${comparisonRows.map(row => `<tr>${showType ? `<td><span class="characterization-badge">${esc(row.__type)}</span></td>` : ''}${comparisonColumns.map(column => { const sampleId = characterizationRowSampleId(row); const isSample = column === characterizationSampleKey(row); return `<td${isSample && sampleId ? ` class="trace-sample-cell" data-trace-sample="${esc(sampleId)}" title="右键查看样品追溯"` : ''}>${esc(row[column] || '-')}</td>`; }).join('')}<td><button type="button" class="text-button characterization-edit-button" data-edit-characterization="${esc(row.__datasetId)}" data-edit-row="${row.__rowIndex}">编辑</button></td></tr>`).join('')}</tbody></table></div></section>` : `<div class="empty-state characterization-empty"><span>◈</span><strong>${datasets.length ? '没有符合筛选条件的记录' : '还没有表征数据'}</strong><p>${datasets.length ? '请调整表征类型或搜索关键词。' : '先添加 ICP 表格；后续 XRD、XPS、SEM 可以使用同一入口。'}</p><button class="primary-button" id="emptyCharacterizationImport">添加第一份数据</button></div>`;
     const filtersHtml = `<div class="characterization-toolbar characterization-filter-bar"><div class="characterization-filters"><select id="characterizationFilter"><option value="">全部类型</option>${types.map(type => `<option value="${esc(type.id)}" ${selectedType === type.id ? 'selected' : ''}>${esc(type.label)}</option>`).join('')}</select><input id="characterizationQuery" value="${esc(R.characterizationQuery || '')}" placeholder="搜索样品编号、元素或备注" /></div></div>`;
-    body.innerHTML = `${filtersHtml}${comparisonHtml}`;
+    body.innerHTML = `${electrochemistryMarkup()}${filtersHtml}${comparisonHtml}`;
+    $('emptyElectroImport')?.addEventListener('click', chooseAndImportElectrochemistry);
+    $('electroDatasetSelect')?.addEventListener('change', async event => {
+      const id = event.target.value;
+      R.electrochemistryDataset = id ? (await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry/${encodeURIComponent(id)}`)).dataset : null;
+      R.electrochemistrySelectedSamples = new Set(); renderCharacterizationsView();
+    });
+    body.querySelectorAll('[data-electro-sample]').forEach(input => input.onchange = () => {
+      if (input.checked) R.electrochemistrySelectedSamples.add(input.dataset.electroSample);
+      else R.electrochemistrySelectedSamples.delete(input.dataset.electroSample);
+      renderCharacterizationsView();
+    });
+    $('deleteElectroDataset')?.addEventListener('click', () => {
+      const dataset = R.electrochemistryDataset;
+      if (!dataset) return;
+      openModal(`<div class="modal-header"><div><h2>删除电化学导入数据</h2><p>仅删除当前项目中的这一份导入副本，不会改动外部日期文件夹。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body"><div class="delete-warning">将删除：<b>${esc(dataset.dateFolder)}</b><br/>项目路径：<code>表征数据/电化学/${esc(dataset.id)}</code><br/>包含该次导入的原始 TXT 副本、解析数据和 Excel 预览。点击确认即表示已核对上述内容。</div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="confirmDeleteElectro" type="button" class="primary-button">确认删除</button></div>`, () => { $('confirmDeleteElectro').onclick = async () => { try { await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry/${encodeURIComponent(dataset.id)}`, { method: 'DELETE', body: JSON.stringify({}) }); R.electrochemistry = await api(`${slugPath(R.active.slug)}/characterizations/electrochemistry`); R.electrochemistryDataset = null; R.electrochemistrySelectedSamples = new Set(); closeModal(); renderCharacterizationsView(); toast('已删除项目中的电化学导入副本'); } catch (error) { toast(`删除未完成：${error.message}`); } }; });
+    });
     $('characterizationFilter').onchange = event => { R.characterizationFilter = event.target.value; renderCharacterizationsView(); };
     $('characterizationQuery').oninput = event => {
       const input = event.target;
@@ -4242,6 +4592,189 @@
     });
   }
 
+  function memoryAuditDetail(entry) {
+    const details = entry?.details && typeof entry.details === 'object' ? entry.details : {};
+    const refs = Array.isArray(details.sources) ? details.sources : Array.isArray(details.sourceRefs) ? details.sourceRefs : [];
+    const refText = refs.slice(0, 8).map(item => {
+      if (typeof item === 'string') return item;
+      return [item.path || item.sourcePath || '', item.heading || item.title || ''].filter(Boolean).join('#');
+    }).filter(Boolean).join('、');
+    const parts = Object.entries(details)
+      .filter(([key]) => !['sources', 'sourceRefs'].includes(key))
+      .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`);
+    if (refText) parts.push(`来源=${refText}`);
+    return parts.join(' · ');
+  }
+
+  function memoryActivitySnapshot() {
+    const audit = Array.isArray(R.memoryDatabase?.audit) ? R.memoryDatabase.audit : [];
+    const latestMcp = audit.find(item => item.channel === 'mcp');
+    const latest = audit[0];
+    const now = Date.now();
+    const age = item => {
+      const value = Date.parse(item?.createdAt || '');
+      return Number.isFinite(value) ? Math.max(0, now - value) : Number.POSITIVE_INFINITY;
+    };
+    const running = [...R.aiTasks.values()].filter(task => task.status === 'running' && task.projectSlug === R.active?.slug);
+    const mcpFresh = Boolean(latestMcp && age(latestMcp) <= 120000);
+    return {
+      latest,
+      latestMcp,
+      mcpFresh,
+      running,
+      age: latest ? age(latest) : Number.POSITIVE_INFINITY,
+      mcpAge: latestMcp ? age(latestMcp) : Number.POSITIVE_INFINITY,
+    };
+  }
+
+  function memoryGraphModel() {
+    const nodes = [];
+    const links = [];
+    const seen = new Set();
+    const addNode = (id, label, kind, detail = '') => {
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      nodes.push({ id, label: String(label || id).slice(0, 34), kind, detail: String(detail || '').slice(0, 280) });
+    };
+    const addLink = (source, target, label = '') => {
+      if (source && target && source !== target) links.push({ source, target, label });
+    };
+    const project = R.active;
+    if (!project) return { nodes, links };
+    addNode('project', project.name || project.slug, 'project', `项目 slug：${project.slug}`);
+    addNode('database', 'memory.sqlite3', 'database', '可重建的本地索引，不是科研事实源');
+    addLink('project', 'database', '索引');
+    const planIds = new Set();
+    (R.plans || []).forEach(plan => {
+      const planId = `plan:${plan.id}`;
+      planIds.add(plan.id);
+      addNode(planId, `${plan.name || '实验方案'} · ${plan.version || ''}`.trim(), 'plan', `${plan.relativePath || plan.folder || ''}`);
+      addLink('project', planId, '包含方案');
+      (plan.subexperiments || []).forEach(sub => {
+        const subId = `sub:${sub.id}`;
+        addNode(subId, sub.name || '未命名子实验', 'subexperiment', `${plan.name || ''} · ${plan.version || ''}`);
+        addLink(planId, subId, '包含子实验');
+      });
+    });
+    const planForLog = log => log?.planId ? `plan:${log.planId}` : 'project';
+    (R.logs || []).slice(0, 28).forEach(log => {
+      const logId = `log:${log.id || log.date}`;
+      addNode(logId, `日志 ${log.date || log.id || ''}`, 'log', [log.planName, log.planVersion, log.subexperimentName].filter(Boolean).join(' · '));
+      const parent = log.subexperimentId ? `sub:${log.subexperimentId}` : planForLog(log);
+      addLink(seen.has(parent) ? parent : 'project', logId, '记录');
+    });
+    (R.conversations || []).slice(0, 12).forEach(conversation => {
+      const id = `conversation:${conversation.id}`;
+      addNode(id, conversation.title || 'AI 对话', 'conversation', `${conversation.model || ''} · ${conversation.updatedAt || ''}`);
+      addLink('project', id, '讨论');
+    });
+    const confirmed = Array.isArray(R.memoryDatabase?.confirmed) ? R.memoryDatabase.confirmed : [];
+    confirmed.slice(0, 16).forEach(item => {
+      const id = `confirmed:${item.id}`;
+      addNode(id, item.title || item.id, 'confirmed', `${item.type || 'fact'} · ${item.evidenceStatus || 'reference'} · ${item.path || ''}`);
+      addLink('project', id, '已确认');
+    });
+    const pendingCount = Number(R.memoryDatabase?.pendingCount || R.memoryPending.length || 0);
+    if (pendingCount) {
+      addNode('pending', `待确认记忆 · ${pendingCount}`, 'pending', 'AI 或 Codex 只能写入候选区，需用户确认后才成为正式记忆');
+      addLink('project', 'pending', '待审核');
+    }
+    const documents = Array.isArray(R.memoryDatabase?.documents) ? R.memoryDatabase.documents : [];
+    if (documents.length) {
+      addNode('documents', `Markdown 文档 · ${documents.length}`, 'documents', '索引中的源文件与章节');
+      addLink('database', 'documents', '索引文档');
+      documents.slice(0, 26).forEach(doc => {
+        const id = `doc:${doc.documentId || doc.path}`;
+        const path = doc.path || '';
+        addNode(id, path.split('/').pop() || path, 'document', `${path} · ${doc.chunkCount || 0} 个片段`);
+        addLink('documents', id, '包含片段');
+        const version = path.match(/(v\d+(?:\.\d+)?)/i)?.[1];
+        const relatedPlan = (R.plans || []).find(plan => version && String(plan.version || '').toLowerCase() === version.toLowerCase());
+        if (relatedPlan) addLink(`plan:${relatedPlan.id}`, id, '来源');
+      });
+      if (documents.length > 26) {
+        addNode('documents-more', `其余 ${documents.length - 26} 个文档`, 'more', '图上限 26 个文件；数据库仍完整保留');
+        addLink('documents', 'documents-more', '其余');
+      }
+    }
+    return { nodes, links };
+  }
+
+  function memoryGraphMarkup() {
+    const graph = memoryGraphModel();
+    const width = 1120;
+    const height = 560;
+    const center = { x: width / 2, y: height / 2 };
+    const others = graph.nodes.filter(node => node.id !== 'project');
+    const positions = new Map([['project', center]]);
+    others.forEach((node, index) => {
+      const angle = (index / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2;
+      const radius = node.kind === 'document' ? 238 : node.kind === 'log' ? 202 : 170;
+      positions.set(node.id, { x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
+    });
+    const colors = { project: '#2d6b4b', database: '#527f9f', plan: '#6c8d55', subexperiment: '#819d67', log: '#b47d49', conversation: '#8069a8', confirmed: '#3c8f72', pending: '#b65e54', documents: '#668b8f', document: '#91a8a5', more: '#9c9c8c' };
+    const linkMarkup = graph.links.map(link => {
+      const source = positions.get(link.source); const target = positions.get(link.target);
+      if (!source || !target) return '';
+      return `<line x1="${source.x.toFixed(1)}" y1="${source.y.toFixed(1)}" x2="${target.x.toFixed(1)}" y2="${target.y.toFixed(1)}" class="memory-graph-link"><title>${esc(link.label || '关联')}</title></line>`;
+    }).join('');
+    const nodeMarkup = graph.nodes.map(node => {
+      const point = positions.get(node.id) || center;
+      const color = colors[node.kind] || '#819d67';
+      const radius = node.kind === 'project' ? 34 : node.kind === 'document' ? 18 : 26;
+      return `<g class="memory-graph-node" data-memory-graph-node="${esc(node.id)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})" tabindex="0" role="button" aria-label="${esc(node.label)}"><circle r="${radius}" fill="${color}"/><text y="${radius + 16}" text-anchor="middle">${esc(node.label)}</text><title>${esc(node.label)}\n${esc(node.detail)}</title></g>`;
+    }).join('');
+    const legend = [['plan', '方案'], ['subexperiment', '子实验'], ['log', '实验日志'], ['document', '源文档'], ['conversation', '对话'], ['confirmed', '正式记忆'], ['pending', '待确认']]
+      .map(([kind, label]) => `<span><i style="background:${colors[kind]}"></i>${label}</span>`).join('');
+    return `<section class="memory-graph-panel"><div class="memory-graph-head"><div><p class="eyebrow">项目记忆网络</p><h2>资料、版本、日志与 AI 记忆关联</h2><p>连线来自项目路径、方案关联、日志关联和记忆来源。点击节点查看详情。</p></div><span class="memory-graph-count">${graph.nodes.length} 节点 · ${graph.links.length} 条关联</span></div><div class="memory-graph-legend">${legend}</div><div class="memory-graph-canvas"><svg viewBox="0 0 ${width} ${height}" role="img" aria-label="项目记忆网络结构图">${linkMarkup}${nodeMarkup}</svg></div><div id="memoryGraphDetail" class="memory-graph-detail">选择一个节点查看来源和证据说明。</div></section>`;
+  }
+
+  function memoryMonitorMarkup() {
+    const snapshot = memoryActivitySnapshot();
+    const status = R.memoryDatabase?.status || {};
+    const indexReady = status.available !== false && Boolean(status.indexMode || status.index_mode || status.mode);
+    const mcpLabel = snapshot.mcpFresh ? '最近 2 分钟有 MCP 活动' : '等待 MCP 活动';
+    const latestLabel = snapshot.latest ? `${snapshot.latest.action || '操作'} · ${snapshot.latest.channel || 'unknown'}` : '暂无审计事件';
+    const taskLabel = snapshot.running.length ? snapshot.running.map(task => `${task.title}：${task.phase || '运行中'}`).join('；') : '当前没有浏览器内 AI 任务';
+    return `<section class="memory-monitor-panel"><div class="memory-monitor-head"><div><p class="eyebrow">实时监视</p><h2>AI / MCP 操作可审计视图</h2><p>这里显示工具调用、查询、来源文件、索引更新和待确认记忆。隐藏思维链不直接展示，但不会隐藏实际操作。</p></div><span class="memory-monitor-pulse ${snapshot.mcpFresh ? 'is-active' : ''}"><i></i>${esc(mcpLabel)}</span></div><div class="memory-monitor-grid"><div><b>本地索引</b><span class="${indexReady ? 'ok' : 'warn'}">${indexReady ? '可用' : '不可用'}</span><small>${esc(status.indexMode || status.mode || '尚未建立')}</small></div><div><b>MCP / Codex</b><span class="${snapshot.mcpFresh ? 'ok' : 'muted'}">${snapshot.mcpFresh ? '已收到操作' : '未检测到近期操作'}</span><small>${esc(snapshot.latestMcp ? memoryAuditDetail(snapshot.latestMcp) : 'Codex 尚未调用 SciHub Memory')}</small></div><div><b>当前任务</b><span class="${snapshot.running.length ? 'ok' : 'muted'}">${snapshot.running.length ? '运行中' : '空闲'}</span><small>${esc(taskLabel)}</small></div><div><b>最近事件</b><span>${esc(latestLabel)}</span><small>${snapshot.latest?.createdAt ? esc(snapshot.latest.createdAt) : '尚无记录'}</small></div></div></section>`;
+  }
+
+  function bindMemoryGraph() {
+    const model = memoryGraphModel();
+    const detail = $('memoryGraphDetail');
+    const nodes = new Map(model.nodes.map(node => [node.id, node]));
+    document.querySelectorAll('[data-memory-graph-node]').forEach(node => {
+      const show = () => {
+        const item = nodes.get(node.dataset.memoryGraphNode);
+        if (detail && item) detail.innerHTML = `<b>${esc(item.label)}</b><small>${esc(item.kind)} · ${esc(item.detail || '无额外来源说明')}</small>`;
+      };
+      node.addEventListener('click', show);
+      node.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); show(); } });
+    });
+  }
+
+  function stopMemoryMonitor() {
+    if (R.memoryMonitorTimer) {
+      window.clearInterval(R.memoryMonitorTimer);
+      R.memoryMonitorTimer = null;
+    }
+  }
+
+  function startMemoryMonitor() {
+    stopMemoryMonitor();
+    if (!R.active) return;
+    R.memoryMonitorTimer = window.setInterval(async () => {
+      if (currentView() !== 'memory' || R.memoryMonitorBusy) return;
+      R.memoryMonitorBusy = true;
+      try {
+        await Promise.all([loadMemoryDatabase(), loadPendingMemory()]);
+        renderMemoryView();
+      } finally {
+        R.memoryMonitorBusy = false;
+      }
+    }, 3000);
+  }
+
   function renderMemoryView() {
     if (!requireProject('memoryProjectTitle', 'memoryBody')) return;
     $('memoryProjectTitle').textContent = R.active.name;
@@ -4263,9 +4796,9 @@
         ? confirmed.map(item => `<div class="memory-confirmed-item" data-confirmed-memory-id="${esc(item.id)}"><div><b>${esc(item.title || item.id)}</b><small>${esc(item.type || 'fact')} · ${esc(item.evidenceStatus || 'reference')} · ${esc(item.path || '')}</small><p>${esc(item.proposedText || '')}</p></div><div><button type="button" class="secondary-button" data-confirmed-action="review">检阅</button><button type="button" class="secondary-button memory-delete-button" data-confirmed-action="delete">删除</button></div></div>`).join('')
         : '<div class="record-hint">暂无已确认的正式记忆；Codex 和对话 Agent 写入的内容会先进入待确认区。</div>';
       const auditRows = audit.length
-        ? audit.map(item => `<li><time>${esc(item.createdAt || '')}</time><b>${esc(item.action || '')}</b><span>${esc(item.channel || '')}</span><small>${esc(Object.entries(item.details || {}).map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`).join(' · '))}</small></li>`).join('')
+        ? audit.map(item => `<li><time>${esc(item.createdAt || '')}</time><b>${esc(item.action || '')}</b><span>${esc(item.channel || '')}</span><small>${esc(memoryAuditDetail(item) || '无附加详情')}</small></li>`).join('')
         : '<li class="record-hint">尚无记忆读写记录。</li>';
-      return `<section class="memory-database-panel" aria-label="项目记忆数据库">
+      return `${memoryMonitorMarkup()}${memoryGraphMarkup()}<section class="memory-database-panel" aria-label="项目记忆数据库">
         <div class="record-field-head"><span>项目记忆数据库（独立项目索引）</span><button id="refreshMemoryDatabase" type="button" class="secondary-button">刷新状态</button></div>
         <div class="memory-database-map" aria-label="项目记忆数据库结构"><div><b>当前项目</b><small>${esc(p.slug)}</small></div><i>→</i><div><b>memory.sqlite3</b><small>${esc(status.indexMode || status.index_mode || 'python')} · ${Number(status.documents || 0)} 文档</small></div><i>→</i><div><b>内容片段</b><small>${Number(status.chunks || 0)} chunks</small></div><i>→</i><div><b>检索 / MCP</b><small>带来源与证据状态</small></div></div>
         <div class="memory-db-metrics"><span>最近索引：${esc(status.lastIndexedAt || status.last_indexed_at || '尚未建立')}</span><span>待确认：${Number(db.pendingCount || 0)}</span><span>正式记忆：${confirmed.length}</span><span>表：${tables.map(item => `${item.name} (${item.rows})`).join(' · ') || '无'}</span></div>
@@ -4273,7 +4806,7 @@
         <details class="memory-db-confirmed" open><summary>已确认记忆（${confirmed.length}）</summary>${confirmedRows}</details>
         <details class="memory-db-audit"><summary>读写审计记录（最近 ${audit.length} 条）</summary><ol>${auditRows}</ol></details>
       </section>`;
-    })() : '<section class="memory-database-panel"><div class="record-field-head"><span>项目记忆数据库</span></div><div class="record-hint">正在读取项目索引状态；刷新页面或重新选择项目后会重试。</div></section>';
+    })() : `${memoryMonitorMarkup()}${memoryGraphMarkup()}<section class="memory-database-panel"><div class="record-field-head"><span>项目记忆数据库</span></div><div class="record-hint">正在读取项目索引状态；刷新页面或重新选择项目后会重试。</div></section>`;
     const syncRoot = syncRootFor(p.slug);
     const syncLabel = R.syncStatus?.configured ? `本地文件：${R.syncStatus.localFiles || 0} · 云端文件：${R.syncStatus.remoteFiles || 0} · 冲突：${R.syncStatus.conflicts?.length || 0}` : '尚未配置同步目录';
     $('memoryBody').innerHTML = `
@@ -4287,6 +4820,7 @@
         ${databaseHtml}
         <div class="memory-sync-panel"><div class="record-field-head"><span>Google Drive 本地同步</span></div><div class="form-field full"><label>同步目录</label><div style="display:flex;gap:8px"><input id="syncRootInput" value="${esc(syncRoot)}" placeholder="选择 Google Drive for desktop 的本地目录" style="flex:1" /><button id="chooseSyncRoot" class="secondary-button" type="button">选择目录</button></div><small class="field-note">只同步当前项目；SQLite 索引在另一台设备自动重建，不会自动删除文件。</small></div><div class="record-foot"><span id="syncStatusText" class="record-hint">${esc(syncLabel)}</span><div style="display:flex;gap:8px"><button id="mcpConfigButton" class="secondary-button" type="button">连接 Codex/Claude</button><button id="saveSyncButton" class="secondary-button" type="button">保存配置</button><button id="runSyncButton" class="primary-button" type="button">立即同步</button></div></div></div>
       </div>`;
+    bindMemoryGraph();
     $('saveMemBtn').onclick = saveProjectInfo;
     $('chooseSyncRoot').onclick = chooseSyncRoot;
     $('mcpConfigButton').onclick = showMcpConnectionConfig;
@@ -4341,16 +4875,14 @@
   function requestConfirmedMemoryDeletion(memoryId) {
     const memory = confirmedMemoryById(memoryId);
     if (!memory) { toast('找不到已确认记忆，请刷新数据库状态'); return; }
-    openModal(`<div class="modal-header"><div><h2>删除正式记忆</h2><p>将只删除下列一个已确认 Markdown 文件，并同步刷新索引；对话原文和审计记录会保留。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body"><div class="memory-delete-target"><b>${esc(memory.title || memory.id)}</b><code>${esc(memory.path || '')}</code></div><div class="form-field full"><label>删除原因</label><textarea id="deleteMemoryReason" maxlength="1000" placeholder="例如：内容已过期、重复或确认有误" required></textarea></div><div class="form-field full"><label>确认删除</label><input id="deleteMemoryConfirmation" autocomplete="off" placeholder="输入 DELETE ${esc(memory.id)}" /><small class="field-note">请核对上方文件路径后，准确输入该确认短语。</small></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="confirmDeleteMemory" type="button" class="primary-button">确认删除此文件</button></div>`, () => {
+    openModal(`<div class="modal-header"><div><h2>删除正式记忆</h2><p>将只删除下列一个已确认 Markdown 文件，并同步刷新索引；对话原文和审计记录会保留。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body"><div class="memory-delete-target"><b>${esc(memory.title || memory.id)}</b><code>${esc(memory.path || '')}</code></div><div class="form-field full"><label>删除原因</label><textarea id="deleteMemoryReason" maxlength="1000" placeholder="例如：内容已过期、重复或确认有误" required></textarea></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button id="confirmDeleteMemory" type="button" class="primary-button">确认删除此文件</button></div>`, () => {
       $('confirmDeleteMemory').onclick = async () => {
         const reason = $('deleteMemoryReason')?.value.trim() || '';
-        const confirmation = $('deleteMemoryConfirmation')?.value.trim() || '';
         if (reason.length < 2) { toast('请说明删除原因'); return; }
-        if (confirmation !== `DELETE ${memory.id}`) { toast('确认短语不匹配，未执行删除'); return; }
         const button = $('confirmDeleteMemory');
         button.disabled = true;
         try {
-          await api(`${slugPath(R.active.slug)}/memory/confirmed/${encodeURIComponent(memory.id)}`, { method: 'DELETE', body: JSON.stringify({ reason, confirmation }) });
+          await api(`${slugPath(R.active.slug)}/memory/confirmed/${encodeURIComponent(memory.id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
           await Promise.all([loadMemoryDatabase(), loadPendingMemory(), loadAgents()]);
           closeModal();
           renderMemoryView();
@@ -4440,6 +4972,8 @@
     } catch (e) { toast(`保存失败：${e.message}`); }
   }
 
+
+
   // -------------------------------------------------------------- 各类弹窗 --
   function openModal(content, init) {
     $('modalRoot').innerHTML = `<div class="modal-backdrop" role="dialog" aria-modal="true"><div class="modal">${content}</div></div>`;
@@ -4499,17 +5033,14 @@
       const items = preview.items || [];
       const fileList = items.map(item => `<li><i>${item.kind === 'folder' ? '▣' : '▤'}</i>${esc(item.path)}</li>`).join('');
       openModal(`<div class="modal-header"><div><h2>删除研究项目</h2><p>该操作会删除整个项目文件夹中的方案、日志、对话、项目记忆及其他文件，无法撤销。</p></div><button class="close-button" data-close-modal>×</button></div>
-        <form id="deleteProjectForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：删除研究项目「${esc(project.name)}」</b><br>待删除目录：科研项目/${esc(preview.folder)}/。以下 ${items.length} 项会被逐项删除，请完整核对后确认。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul><label class="form-field full" style="margin-top:16px"><span>输入项目文件夹名 <b>${esc(preview.folder)}</b> 以确认删除</span><input id="deleteProjectConfirmation" required autocomplete="off" placeholder="${esc(preview.folder)}" /></label></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除项目</button></div></form>`, () => {
-        $('deleteProjectConfirmation').focus();
+        <form id="deleteProjectForm"><div class="modal-body"><div class="delete-warning"><b>删除原因：删除研究项目「${esc(project.name)}」</b><br>待删除目录：科研项目/${esc(preview.folder)}/。以下 ${items.length} 项会被逐项删除，点击确认即表示已完整核对。</div><ul class="delete-target-list">${fileList || '<li>目录为空</li>'}</ul></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit" style="background:#a85349">删除项目</button></div></form>`, () => {
         $('deleteProjectForm').addEventListener('submit', async event => {
           event.preventDefault();
-          const confirmation = $('deleteProjectConfirmation').value.trim();
-          if (confirmation !== preview.folder) { toast('请输入完整且正确的项目文件夹名'); return; }
           const button = $('deleteProjectForm').querySelector('[type=submit]');
           button.disabled = true;
           button.textContent = '删除中…';
           try {
-            await api(slugPath(slug), { method: 'DELETE', body: JSON.stringify({ confirmation }) });
+            await api(slugPath(slug), { method: 'DELETE', body: JSON.stringify({}) });
             const deletedActive = R.active?.slug === slug;
             if (deletedActive) {
               R.active = null;
@@ -4723,6 +5254,8 @@
   }
 
   function onViewActivated(view) {
+    if (view === 'memory') startMemoryMonitor();
+    else stopMemoryMonitor();
     updateTopbarActions(view);
     renderProjectSidebar();
     renderPlanTaskBanner();
@@ -4763,6 +5296,7 @@
     });
     $('recordImportButton')?.addEventListener('click', openRecordImport);
     $('importCharacterizationButton')?.addEventListener('click', openCharacterizationImport);
+    $('importElectrochemistryButton')?.addEventListener('click', chooseAndImportElectrochemistry);
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && ['logs'].includes(currentView())) { e.preventDefault(); saveLog(true); }
     });

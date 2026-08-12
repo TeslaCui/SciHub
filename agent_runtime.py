@@ -44,7 +44,7 @@ AGENT_CATALOG: dict[str, dict[str, Any]] = {
         "context": "none",
     },
     "text-rewriter": {
-        "operations": {"text.rewrite", "plan.text-rewrite"},
+        "operations": {"text.rewrite", "plan.text-rewrite", "plan.version-update"},
         "skills": ["selection-limit", "fact-preservation", "plain-text"],
         "context": "none",
     },

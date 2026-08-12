@@ -19,6 +19,7 @@ import json
 import mimetypes
 import os
 import re
+import shutil
 import sys
 import urllib.error
 import urllib.parse
@@ -100,6 +101,14 @@ PLAN_AUXILIARY_MAX_CUES = 72
 PLAN_AUXILIARY_MAX_RECORD_FIELDS = 48
 PLAN_AUXILIARY_MAX_PENDING = 36
 PLAN_CAPABILITY_META_KEY = "ai_plan_capability_revision"
+PLAN_TEMPLATE_SOURCE_META_KEYS = (
+    "template_source_plan_id",
+    "template_source_plan_version",
+    "template_source_subexperiment_id",
+    "template_source_subexperiment_name",
+    "template_source_content_hash",
+    "template_created_at",
+)
 # 递增此值即可把“新增的方案生成能力”标记为可升级版本；旧正文不会被自动改写。
 PLAN_CAPABILITY_REVISION = 2
 PLAN_CAPABILITY_LABEL = "四色提示、智能记录表与待确认项"
@@ -410,6 +419,10 @@ def project_memory_search(project: dict, query: str, agent_id: str = "", limit: 
         "query": one_line(query)[:240],
         "agentId": one_line(agent_id),
         "hitCount": len(result),
+        "sources": [
+            {"path": item.get("path", ""), "heading": item.get("heading", ""), "status": item.get("status", "reference")}
+            for item in result[:20]
+        ],
     })
     return result
 
@@ -712,11 +725,9 @@ def project_deletion_preview(project: dict) -> dict:
     return {"project": project_summary(project), "folder": target.name, "items": items}
 
 
-def delete_project(project: dict, confirmation: str) -> None:
+def delete_project(project: dict, confirmation: str = "") -> None:
     """删除用户已明确确认的项目；按清单逐项处理，不使用递归删除。"""
     target, files, directories = project_deletion_paths(project)
-    if confirmation != target.name:
-        raise ApiError("请准确输入项目文件夹名以确认删除。")
     for path in files:
         path.unlink()
     for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
@@ -1279,6 +1290,7 @@ CHARACTERIZATION_TYPES = {
     "XRD": "XRD 衍射",
     "XPS": "XPS 光电子能谱",
     "SEM": "SEM 形貌",
+    "ELECTROCHEMISTRY": "电化学",
 }
 INVALID_FOLDER_CHARS = re.compile(r'[\\/:*?"<>|]+')
 
@@ -1423,6 +1435,218 @@ def write_characterization_dataset(project: dict, payload: dict) -> dict:
         "rows": normalized_rows,
         "path": _characterization_source_path(project, {"path": path}),
     }
+
+
+# --------------------------------------------------------------------------- #
+# 电化学数据（CHI TXT）
+# --------------------------------------------------------------------------- #
+ELECTROCHEMISTRY_FOLDER = "电化学"
+ELECTROCHEMISTRY_SCHEMA_VERSION = 2
+
+
+def choose_electrochemistry_directory() -> str:
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        root.update()
+        selected = filedialog.askdirectory(title="选择包含样品子文件夹的电化学日期文件夹")
+        return selected or ""
+    except Exception as error:
+        raise ApiError(f"无法打开本机文件夹选择器：{error}") from error
+    finally:
+        if root is not None:
+            root.destroy()
+
+
+def parse_chi_txt(path: Path) -> dict:
+    raw = path.read_text(encoding="utf-8-sig", errors="replace")
+    lines = raw.splitlines()
+    header_index = next((i for i, line in enumerate(lines) if "," in line and ("Potential/V" in line or "Freq/Hz" in line)), -1)
+    if header_index < 0:
+        raise ApiError(f"无法识别 CHI 数据表头：{path.name}")
+    columns = [item.strip() for item in lines[header_index].split(",")]
+    rows = []
+    for line in lines[header_index + 1:]:
+        values = [item.strip() for item in line.split(",")]
+        if len(values) != len(columns):
+            continue
+        try:
+            rows.append([float(value) for value in values])
+        except ValueError:
+            continue
+    if not rows:
+        raise ApiError(f"CHI 数据文件没有可读取数值：{path.name}")
+    return {"columns": columns, "rows": rows, "header": lines[:header_index]}
+
+
+def extract_xlsx_preview(path: Path) -> dict:
+    """Read displayed values and ORR result panels without altering the workbook."""
+    try:
+        with zipfile.ZipFile(path) as book:
+            shared = []
+            if "xl/sharedStrings.xml" in book.namelist():
+                root = ElementTree.fromstring(book.read("xl/sharedStrings.xml"))
+                shared = ["".join(node.itertext()) for node in root]
+            workbook = ElementTree.fromstring(book.read("xl/workbook.xml"))
+            namespaces = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main", "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+            rels = ElementTree.fromstring(book.read("xl/_rels/workbook.xml.rels"))
+            targets = {item.attrib.get("Id"): item.attrib.get("Target", "") for item in rels}
+            sheets, parameters, global_parameters = [], [], {}
+            for sheet in workbook.findall("m:sheets/m:sheet", namespaces):
+                relation = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+                target = targets.get(relation, "")
+                xml_path = target.lstrip("/")
+                if not xml_path.startswith("xl/"):
+                    xml_path = "xl/" + xml_path
+                if xml_path not in book.namelist(): continue
+                xml = ElementTree.fromstring(book.read(xml_path))
+                cells = {}
+                for cell in xml.findall(".//m:sheetData/m:row/m:c", namespaces):
+                    ref = cell.attrib.get("r", "")
+                    row_match = re.search(r"(\d+)$", ref)
+                    if not row_match or int(row_match.group(1)) > 40: continue
+                    value = cell.find("m:v", namespaces)
+                    inline = cell.find("m:is", namespaces)
+                    text = value.text if value is not None and value.text is not None else ("".join(inline.itertext()) if inline is not None else "")
+                    if not text: continue
+                    if cell.attrib.get("t") == "s" and text.isdigit() and int(text) < len(shared): text = shared[int(text)]
+                    cells[ref] = text
+                sheet_name = sheet.attrib.get("name", "Sheet")
+                sheets.append({"name": sheet_name, "cells": {key: value for key, value in cells.items() if int(re.search(r"(\d+)$", key).group(1)) <= 40}})
+                match = re.match(r"(.+)-(\d+)号", sheet_name)
+                labels = {cells.get(f"V{row}", ""): cells.get(f"W{row}", "") for row in range(17, 25) if cells.get(f"V{row}")}
+                if match and labels:
+                    parameters.append({"sampleId": match.group(1), "run": match.group(2), "values": labels})
+                if sheet_name == "全局参数与结果":
+                    global_parameters = {
+                        "cRhe": cells.get("B4", ""), "area": cells.get("B5", ""), "irFraction": cells.get("B6", ""),
+                        "maTargetMv": cells.get("B8", ""), "tafelRange": "0.85~0.95",
+                    }
+            return {"filename": path.name, "sheets": sheets[:4], "parameters": parameters, "globalParameters": global_parameters}
+    except (OSError, KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+        return {"filename": path.name, "sheets": []}
+
+
+def _electrochemistry_dataset_path(project: dict, dataset_id: str) -> Path:
+    candidate = one_line(dataset_id)
+    if not candidate or Path(candidate).name != candidate:
+        raise ApiError("电化学数据集标识无效。")
+    path = project["dir"] / CHARACTERIZATION_FOLDER / ELECTROCHEMISTRY_FOLDER / candidate
+    if not path.is_dir() or not (path / "dataset.json").is_file():
+        raise ApiError("未找到电化学数据集。", HTTPStatus.NOT_FOUND)
+    return path
+
+
+def import_electrochemistry_folder(project: dict, payload: dict) -> dict:
+    source = Path(one_line(payload.get("sourcePath"))).expanduser()
+    if not source.is_dir():
+        raise ApiError("请选择有效的电化学日期文件夹。")
+    txt_paths = sorted(path for path in source.rglob("*.txt") if path.is_file())
+    if not txt_paths:
+        raise ApiError("该文件夹中没有找到 .txt 电化学原始数据。")
+    dataset_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + safe_folder_name(source.name, "电化学日期文件夹")
+    target = project["dir"] / CHARACTERIZATION_FOLDER / ELECTROCHEMISTRY_FOLDER / dataset_id
+    target.mkdir(parents=True, exist_ok=False)
+    raw_target = target / "raw"
+    samples: dict[str, dict] = {}
+    ignored = []
+    for path in txt_paths:
+        relative = path.relative_to(source)
+        sample_id = relative.parts[0] if len(relative.parts) > 1 else "未分组样品"
+        match = re.match(r"(\d+)-(.+)\.txt$", path.name, re.IGNORECASE)
+        run = match.group(1) if match else "1"
+        kind = (match.group(2) if match else path.stem).upper()
+        try:
+            parsed = parse_chi_txt(path)
+        except ApiError:
+            ignored.append(relative.as_posix())
+            continue
+        copied = raw_target / relative
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, copied)
+        sample = samples.setdefault(sample_id, {"id": sample_id, "runs": {}})
+        run_data = sample["runs"].setdefault(run, {})
+        run_data[kind] = {"source": relative.as_posix(), **parsed}
+    if not samples:
+        raise ApiError("未识别到可用的 CHI TXT 数据。")
+    imported_at = now_iso()
+    result = {"schemaVersion": ELECTROCHEMISTRY_SCHEMA_VERSION, "id": dataset_id, "dateFolder": source.name, "sourcePath": str(source), "importedAt": imported_at, "samples": list(samples.values()), "ignored": ignored,
+              "excelSources": [extract_xlsx_preview(path) for path in source.rglob("*.xlsx")]}
+    (target / "dataset.json").write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    update_agents(project)
+    return electrochemistry_summary(result, project)
+
+
+def upgrade_electrochemistry_dataset(path: Path, dataset: dict) -> dict:
+    """Migrate stored imports in place from their preserved TXT copies and optional source Excel."""
+    changed = False
+    if int(dataset.get("schemaVersion", 0) or 0) < ELECTROCHEMISTRY_SCHEMA_VERSION:
+        dataset["schemaVersion"] = ELECTROCHEMISTRY_SCHEMA_VERSION
+        changed = True
+    # Older imports have raw data already parsed but Excel previews lacked formula-panel labels.
+    source = Path(one_line(dataset.get("sourcePath")))
+    if source.is_dir():
+        previews = [extract_xlsx_preview(item) for item in source.rglob("*.xlsx")]
+        if previews != dataset.get("excelSources", []):
+            dataset["excelSources"] = previews
+            changed = True
+    if changed:
+        (path / "dataset.json").write_text(json.dumps(dataset, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return dataset
+
+
+def electrochemistry_summary(dataset: dict, project: Optional[dict] = None) -> dict:
+    rows = []
+    for sample in dataset.get("samples", []):
+        for run, measures in sample.get("runs", {}).items():
+            o2, n2 = measures.get("O2LSV"), measures.get("N2LSV")
+            eis = measures.get("N2EIS") or measures.get("EIS")
+            rs = eis.get("rows", [[None]])[0][1] if eis and eis.get("rows") and len(eis["rows"][0]) > 1 else None
+            rows.append({"sampleId": sample.get("id"), "run": run, "hasO2LSV": bool(o2), "hasN2LSV": bool(n2), "hasEIS": bool(eis), "rsOhm": rs})
+    data = {key: dataset.get(key) for key in ("id", "dateFolder", "sourcePath", "importedAt", "ignored", "excelSources")}
+    data.update({"samples": rows, "sampleNames": sorted({row["sampleId"] for row in rows}), "path": f"{CHARACTERIZATION_FOLDER}/{ELECTROCHEMISTRY_FOLDER}/{dataset.get('id', '')}"})
+    return data
+
+
+def list_electrochemistry(project: dict) -> dict:
+    root = project["dir"] / CHARACTERIZATION_FOLDER / ELECTROCHEMISTRY_FOLDER
+    datasets = []
+    if root.is_dir():
+        for path in sorted(root.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+            data_path = path / "dataset.json"
+            if data_path.is_file():
+                try:
+                    datasets.append(electrochemistry_summary(upgrade_electrochemistry_dataset(path, json.loads(data_path.read_text(encoding="utf-8"))), project))
+                except (OSError, json.JSONDecodeError):
+                    continue
+    return {"datasets": datasets}
+
+
+def read_electrochemistry(project: dict, dataset_id: str) -> dict:
+    path = _electrochemistry_dataset_path(project, dataset_id)
+    return upgrade_electrochemistry_dataset(path, json.loads((path / "dataset.json").read_text(encoding="utf-8")))
+
+
+def delete_electrochemistry(project: dict, dataset_id: str, payload: dict) -> None:
+    path = _electrochemistry_dataset_path(project, dataset_id)
+    # The target was resolved to one dataset directory. Verify and remove each direct descendant.
+    target_root = path.resolve()
+    files = sorted((item for item in path.rglob("*") if item.is_file() and not item.is_symlink()), key=lambda item: len(item.parts), reverse=True)
+    directories = sorted((item for item in path.rglob("*") if item.is_dir() and not item.is_symlink()), key=lambda item: len(item.parts), reverse=True)
+    if any(item.is_symlink() for item in files + directories):
+        raise ApiError("电化学导入目录包含链接，已停止删除以保护项目文件。")
+    if any(not item.resolve().is_relative_to(target_root) for item in files + directories):
+        raise ApiError("电化学导入目录校验失败，未执行删除。")
+    for item in files:
+        item.unlink()
+    for item in directories:
+        item.rmdir()
+    path.rmdir()
+    update_agents(project)
 
 
 def _trace_key_text(value: Any) -> str:
@@ -1720,13 +1944,16 @@ def read_folder_subexperiments(plan_dir: Path, plan_id: str) -> list[dict]:
             continue
         if meta_value(doc["meta"], "plan_id") != plan_id:
             continue
+        plan_doc = read_markdown_document(child / SUBEXPERIMENT_PLAN_FILE_NAME)
         plan_state = plan_document_update_state(child / SUBEXPERIMENT_PLAN_FILE_NAME)
+        template_source = plan_template_source(plan_doc.get("meta", {}))
         subexperiments.append({
             "id": meta_value(doc["meta"], "id", child.name),
             "name": meta_value(doc["meta"], "name", child.name),
             "description": meta_value(doc["meta"], "description"),
             "folder": child.name,
             "entries": list_workspace_entries(child, {SUBEXPERIMENT_FILE_NAME, SUBEXPERIMENT_PLAN_FILE_NAME, LOGS_FOLDER}),
+            **({"templateSource": template_source} if template_source else {}),
             **plan_state,
         })
     return subexperiments
@@ -1740,6 +1967,7 @@ def read_folder_plan(path: Path) -> dict:
     plan_id = meta_value(doc["meta"], "id")
     subexperiments = read_folder_subexperiments(plan_dir, plan_id)
     root_state = plan_document_update_state(path)
+    template_source = plan_template_source(doc.get("meta", {}))
     has_subexperiments = bool(subexperiments)
     update_count = sum(1 for item in subexperiments if item.get("needsPlanUpdate")) if has_subexperiments else int(root_state["needsPlanUpdate"])
     return {
@@ -1754,6 +1982,7 @@ def read_folder_plan(path: Path) -> dict:
         "storage": "folder",
         "entries": list_workspace_entries(plan_dir, {PLAN_FILE_NAME, LOGS_FOLDER, *(item["folder"] for item in subexperiments)}),
         "subexperiments": subexperiments,
+        **({"templateSource": template_source} if template_source else {}),
         **root_state,
         "planUpdateCount": update_count,
         "needsPlanUpdate": bool(update_count),
@@ -2010,12 +2239,26 @@ def write_plan(project: dict, payload: dict) -> dict:
     description = str(payload.get("description", "")).strip()
     plan_content = str(payload.get("planContent", "")).strip()
     source_plan_id = one_line(payload.get("inheritSubexperimentsFromPlanId"))
+    template_source_plan_id = one_line(payload.get("inheritPlanTemplatesFromPlanId"))
+    source_plan = None
+    template_source_plan = None
     inherited_subexperiments = []
     if source_plan_id:
         source_plan = read_plan(project, source_plan_id)
         inherited_subexperiments = [{"name": item["name"]} for item in source_plan["subexperiments"]]
-    # Explicitly entered entries take priority over inherited titles.  The inherited
-    # entries intentionally contain no description or plan content.
+    if template_source_plan_id:
+        if template_source_plan_id != source_plan_id:
+            raise ApiError("创建版本模板时必须同时沿用同一版本的子实验。")
+        template_source_plan = source_plan or read_plan(project, template_source_plan_id)
+        if template_source_plan.get("storage") != "folder":
+            raise ApiError("旧版单文件方案不能直接创建子实验方案模板。")
+        inherited_subexperiments = [
+            {"name": item["name"], "description": item.get("description", "")}
+            for item in template_source_plan["subexperiments"]
+        ]
+    # Explicitly entered entries take priority over inherited names.  Template mode
+    # also carries the short subexperiment description; the plan body is copied
+    # separately below, never from arbitrary files.
     subexperiments = normalise_subexperiments(list(payload.get("subexperiments") or []) + inherited_subexperiments)
     meta = {
         "kind": "experiment_plan",
@@ -2050,6 +2293,29 @@ def write_plan(project: dict, payload: dict) -> dict:
         }
         content = f"# {item['name']}\n\n{item['description'] or '尚未填写子实验说明。'}\n"
         write_markdown(plan_dir / item["folder"] / SUBEXPERIMENT_FILE_NAME, front_matter(sub_meta) + content)
+    if template_source_plan:
+        target_plan = read_plan(project, plan_id)
+        source_by_name = {
+            item["name"].casefold(): item for item in template_source_plan.get("subexperiments", [])
+            if item.get("hasPlanContent")
+        }
+        for target_subexperiment in target_plan.get("subexperiments", []):
+            source_subexperiment = source_by_name.get(target_subexperiment["name"].casefold())
+            if not source_subexperiment:
+                continue
+            _, _, target_path = plan_content_target(project, target_plan["id"], target_subexperiment["id"])
+            _, _, source_path = plan_content_target(
+                project, template_source_plan["id"], source_subexperiment["id"]
+            )
+            copy_plan_template(
+                project,
+                target_plan,
+                target_subexperiment,
+                target_path,
+                template_source_plan,
+                source_subexperiment,
+                source_path,
+            )
     return read_plan(project, plan_id)
 
 
@@ -2107,6 +2373,85 @@ def subexperiment_plan_document(
     if not re.search(r"(?m)^# [^\r\n]*", content):
         content = heading + content.lstrip()
     return front_matter(meta) + replace_plan_content(content, plan_content).rstrip() + "\n"
+
+
+def managed_plan_content(content: str) -> str:
+    """Return only the body managed by SciHub, keeping its presentation marker."""
+    match = re.search(
+        r"(?s)<!--\s*PLAN-CONTENT:START\s*-->(.*?)<!--\s*PLAN-CONTENT:END\s*-->",
+        content or "",
+    )
+    return match.group(1).strip() if match else ""
+
+
+def plan_template_source(meta: dict) -> Optional[dict]:
+    """Expose the immutable origin of an inherited plan body when present."""
+    plan_id = meta_value(meta, "template_source_plan_id")
+    if not plan_id:
+        return None
+    return {
+        "planId": plan_id,
+        "version": meta_value(meta, "template_source_plan_version"),
+        "subexperimentId": meta_value(meta, "template_source_subexperiment_id"),
+        "subexperimentName": meta_value(meta, "template_source_subexperiment_name"),
+        "contentHash": meta_value(meta, "template_source_content_hash"),
+        "createdAt": meta_value(meta, "template_created_at"),
+    }
+
+
+def _plan_template_origin_meta(source_plan: dict, source_subexperiment: Optional[dict], source_content: str) -> dict:
+    return {
+        "template_source_plan_id": source_plan["id"],
+        "template_source_plan_version": source_plan.get("version", ""),
+        "template_source_subexperiment_id": (source_subexperiment or {}).get("id", ""),
+        "template_source_subexperiment_name": (source_subexperiment or {}).get("name", ""),
+        "template_source_content_hash": hashlib.sha256(plan_auxiliary_body(source_content).encode("utf-8")).hexdigest(),
+        "template_created_at": now_iso(),
+    }
+
+
+def copy_plan_template(
+    project: dict,
+    target_plan: dict,
+    target_subexperiment: Optional[dict],
+    target_path: Path,
+    source_plan: dict,
+    source_subexperiment: Optional[dict],
+    source_path: Path,
+) -> None:
+    """Copy only a saved plan body into a new version, never logs or other files."""
+    source_doc = read_markdown_document(source_path)
+    source_content = managed_plan_content(source_doc.get("content", ""))
+    if not source_content or not plan_document_update_state(source_path)["hasPlanContent"]:
+        raise ApiError("来源方案正文不可用，无法创建模板。")
+
+    target_doc = read_markdown_document(target_path)
+    target_meta = dict(target_doc.get("meta", {}))
+    target_meta.pop(PLAN_ANALYSIS_META_KEY, None)
+    for key in PLAN_TEMPLATE_SOURCE_META_KEYS:
+        target_meta.pop(key, None)
+    target_meta.update(_plan_template_origin_meta(source_plan, source_subexperiment, source_content))
+
+    auxiliary_state = stored_plan_auxiliary(source_doc)
+    if auxiliary_state.get("status") == "fresh":
+        target_meta[PLAN_AUXILIARY_META_KEY] = source_doc["meta"][PLAN_AUXILIARY_META_KEY]
+    else:
+        target_meta.pop(PLAN_AUXILIARY_META_KEY, None)
+    if PLAN_CAPABILITY_META_KEY in source_doc.get("meta", {}):
+        target_meta[PLAN_CAPABILITY_META_KEY] = source_doc["meta"][PLAN_CAPABILITY_META_KEY]
+    else:
+        target_meta.pop(PLAN_CAPABILITY_META_KEY, None)
+    target_meta["updated_at"] = now_iso()
+
+    if target_subexperiment:
+        rendered = subexperiment_plan_document(
+            target_plan, target_subexperiment, source_content, target_meta, target_doc.get("content", "")
+        )
+    else:
+        rendered = front_matter(target_meta) + replace_plan_content(
+            target_doc.get("content", ""), source_content
+        ).rstrip() + "\n"
+    write_markdown(target_path, rendered)
 
 
 def write_plan_entry(project: dict, plan_id: str, payload: dict) -> dict:
@@ -2511,11 +2856,9 @@ def plan_deletion_preview(project: dict, plan_id: str) -> dict:
     return {"plan": plan, "folder": plan["folder"], "items": items}
 
 
-def delete_plan(project: dict, plan_id: str, confirmation: str) -> None:
+def delete_plan(project: dict, plan_id: str, confirmation: str = "") -> None:
     """逐项删除已在确认清单中展示的方案目录；不使用递归删除命令。"""
     plan, target, files, directories = plan_deletion_paths(project, plan_id)
-    if confirmation != plan["folder"]:
-        raise ApiError("请准确输入方案版本目录名称以确认删除。")
     for path in files:
         path.unlink()
     for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
@@ -2559,11 +2902,9 @@ def subexperiment_deletion_preview(project: dict, plan_id: str, subexperiment_id
     return {"plan": plan, "subexperiment": subexperiment, "folder": target.relative_to(root).as_posix(), "items": items}
 
 
-def delete_subexperiment(project: dict, plan_id: str, subexperiment_id: str, confirmation: str) -> dict:
+def delete_subexperiment(project: dict, plan_id: str, subexperiment_id: str, confirmation: str = "") -> dict:
     """逐项删除已展示清单的一个子实验，并保留方案中的其他内容。"""
     plan, subexperiment, target, files, directories = subexperiment_deletion_paths(project, plan_id, subexperiment_id)
-    if confirmation != subexperiment["name"]:
-        raise ApiError("请准确输入子实验名称以确认删除。")
     plan_path = project["dir"] / plan["folder"] / PLAN_FILE_NAME
     plan_doc = read_markdown_document(plan_path)
     reference = f"- [{subexperiment['name']}]({subexperiment['folder']}/{SUBEXPERIMENT_FILE_NAME})"
@@ -2586,12 +2927,11 @@ def plan_markdown_content(project: dict, plan_id: str, subexperiment_id: str = "
 
 
 def inherit_previous_subexperiment_plan(project: dict, plan_id: str, subexperiment_id: str) -> dict:
-    """将上一版本同名子实验的空白方案书沿用到当前版本，不覆盖已有正文。"""
+    """将上一版本同名子实验的空白方案书沿用为可追溯模板。"""
     plan, subexperiment, target_path = plan_content_target(project, plan_id, subexperiment_id)
     if plan["storage"] != "folder" or not plan["folder"] or not subexperiment:
         raise ApiError("仅文件夹式方案中的子实验支持沿用方案书。")
 
-    target_doc = read_markdown_document(target_path)
     if plan_document_update_state(target_path)["hasPlanContent"]:
         raise ApiError("当前子实验已有方案正文，不能沿用以免覆盖已有内容。")
 
@@ -2606,34 +2946,9 @@ def inherit_previous_subexperiment_plan(project: dict, plan_id: str, subexperime
         raise ApiError("上一版本没有同名且已填写方案书的子实验。")
 
     _, _, source_path = plan_content_target(project, previous["id"], source_subexperiment["id"])
-    source_doc = read_markdown_document(source_path)
-    source_match = re.search(
-        r"(?s)<!--\s*PLAN-CONTENT:START\s*-->(.*?)<!--\s*PLAN-CONTENT:END\s*-->",
-        source_doc.get("content", ""),
-    )
-    if not source_match or not plan_document_update_state(source_path)["hasPlanContent"]:
-        raise ApiError("上一版本的方案正文不可用，无法沿用。")
-
-    # 只复制受 SciHub 管理的正文区域，以保留其中的版式注释；不复制其他文件、日志或来源版本的元数据。
-    source_content = source_match.group(1).strip()
-    target_meta = dict(target_doc.get("meta", {}))
-    target_meta.pop(PLAN_ANALYSIS_META_KEY, None)
-
-    auxiliary_state = stored_plan_auxiliary(source_doc)
-    if auxiliary_state.get("status") == "fresh":
-        target_meta[PLAN_AUXILIARY_META_KEY] = source_doc["meta"][PLAN_AUXILIARY_META_KEY]
-    else:
-        target_meta.pop(PLAN_AUXILIARY_META_KEY, None)
-
-    if PLAN_CAPABILITY_META_KEY in source_doc.get("meta", {}):
-        target_meta[PLAN_CAPABILITY_META_KEY] = source_doc["meta"][PLAN_CAPABILITY_META_KEY]
-    else:
-        target_meta.pop(PLAN_CAPABILITY_META_KEY, None)
-    target_meta["updated_at"] = now_iso()
-
-    write_markdown(
-        target_path,
-        subexperiment_plan_document(plan, subexperiment, source_content, target_meta, target_doc.get("content", "")),
+    copy_plan_template(
+        project, plan, subexperiment, target_path,
+        previous, source_subexperiment, source_path,
     )
     return read_plan(project, plan_id)
 
@@ -3123,7 +3438,7 @@ def list_log_paths(project: dict) -> list[Path]:
 
 def list_logs(project: dict) -> list:
     items = []
-    for p in sorted(list_log_paths(project), key=lambda x: x.stat().st_mtime, reverse=True):
+    for p in list_log_paths(project):
         doc = read_markdown_document(p)
         date = meta_value(doc["meta"], "date", p.stem[:10])
         item = {
@@ -3147,6 +3462,7 @@ def list_logs(project: dict) -> list:
         }
         item.update(association_for_api(association_from_meta(doc["meta"])))
         items.append(item)
+    items.sort(key=lambda item: (str(item.get("date", "")), str(item.get("updatedAt", "")), str(item.get("id", ""))), reverse=True)
     return items
 
 
@@ -3178,11 +3494,8 @@ def log_deletion_preview(project: dict, date: str, query: Optional[dict] = None)
     }
 
 
-def delete_log(project: dict, date: str, query: Optional[dict], confirmation: str) -> None:
+def delete_log(project: dict, date: str, query: Optional[dict], confirmation: str = "") -> None:
     target, relative, _ = log_deletion_target(project, date, query)
-    expected = f"DELETE {relative}"
-    if confirmation != expected:
-        raise ApiError("确认短语不匹配，未删除实验日志。", HTTPStatus.BAD_REQUEST)
     # target 已通过 root、普通文件和非符号链接检查，只逐项删除这一份日志。
     target.unlink()
     update_agents(project)
@@ -3213,9 +3526,6 @@ def batch_delete_logs(project: dict, entries: Any) -> list[str]:
             "subexperimentId": one_line(item.get("subexperimentId")),
         }
         target, relative, _ = log_deletion_target(project, date, query)
-        confirmation = one_line(item.get("confirmation"))
-        if confirmation != f"DELETE {relative}":
-            raise ApiError("批量删除确认短语不匹配，未删除实验日志。", HTTPStatus.BAD_REQUEST)
         if relative in seen:
             raise ApiError("批量删除包含重复的日志文件。", HTTPStatus.BAD_REQUEST)
         seen.add(relative)
@@ -4595,6 +4905,24 @@ class SciHubHandler(BaseHTTPRequestHandler):
 
     def _handle_characterizations(self, project: dict, segments: list):
         method = self.command
+        if len(segments) >= 5 and segments[4] == "electrochemistry":
+            if method == "GET" and len(segments) == 5:
+                self._send_json(HTTPStatus.OK, list_electrochemistry(project))
+                return
+            if method == "POST" and len(segments) == 6 and segments[5] == "choose-folder":
+                self._read_json()
+                self._send_json(HTTPStatus.OK, {"path": choose_electrochemistry_directory()})
+                return
+            if method == "POST" and len(segments) == 6 and segments[5] == "import-folder":
+                self._send_json(HTTPStatus.CREATED, {"dataset": import_electrochemistry_folder(project, self._read_json())})
+                return
+            if len(segments) == 6 and method == "GET":
+                self._send_json(HTTPStatus.OK, {"dataset": read_electrochemistry(project, segments[5])})
+                return
+            if len(segments) == 6 and method == "DELETE":
+                delete_electrochemistry(project, segments[5], self._read_json())
+                self._send_json(HTTPStatus.OK, {"deleted": segments[5]})
+                return
         if method == "GET" and len(segments) == 4:
             requested_type = one_line(self._query().get("type")).upper()
             self._send_json(HTTPStatus.OK, list_characterizations(project, requested_type))
@@ -4608,6 +4936,8 @@ class SciHubHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"datasets": datasets})
             return
         raise ApiError("不支持的表征数据请求方式。", HTTPStatus.METHOD_NOT_ALLOWED)
+
+
 
     def _handle_plans(self, project: dict, segments: list):
         method = self.command

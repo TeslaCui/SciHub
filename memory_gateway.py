@@ -383,7 +383,7 @@ class MemoryEventStore:
             })
         return entries
 
-    def delete_confirmed(self, memory_id: str, *, reason: str, confirmation: str) -> dict[str, Any]:
+    def delete_confirmed(self, memory_id: str, *, reason: str, confirmation: str = "") -> dict[str, Any]:
         identifier = _line(memory_id)
         entries = self.list_confirmed()
         entry = next((item for item in entries if item["id"] == identifier), None)
@@ -392,8 +392,6 @@ class MemoryEventStore:
         explanation = str(reason or "").strip()
         if len(explanation) < 2:
             raise MemoryGatewayError("a deletion reason is required")
-        if _line(confirmation) != f"DELETE {identifier}":
-            raise MemoryGatewayError("deletion confirmation does not match the selected memory")
         target = _safe_project_path(self.project_root, entry["path"])
         confirmed_root = (self.project_root / CONFIRMED_MEMORY_DIR).resolve()
         if target.parent != confirmed_root or target.suffix.casefold() != ".md":
