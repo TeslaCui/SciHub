@@ -38,11 +38,14 @@
         </div>
 
         <nav class="nav-list">
+          <button class="nav-item" data-view="dashboard"><span>◆</span>项目驾驶舱</button>
           <button class="nav-item" data-view="plans"><span>◇</span>实验方案</button>
           <button class="nav-item" data-view="todo"><span>✓</span>待办与计划</button>
           <button class="nav-item active" data-view="logs"><span>◒</span>实验日志</button>
           <button class="nav-item" data-view="records"><span>◌</span>对话记录</button>
           <button class="nav-item" data-view="characterizations"><span>◈</span>表征数据</button>
+          <button class="nav-item" data-view="dataAssets"><span>▦</span>数据工作台</button>
+          <button class="nav-item" data-view="knowledge"><span>⌕</span>知识中心</button>
           <button class="nav-item" data-view="trace"><span>•</span>追溯</button>
           <button class="nav-item" data-view="memory"><span>✣</span>项目记忆</button>
         </nav>
@@ -75,6 +78,11 @@
           <div class="home-project-section"><div><p class="eyebrow">我的项目</p><h2>继续研究</h2></div><div id="homeBody"></div></div>
         </section>
 
+        <section id="dashboardView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">项目驾驶舱</p><h1 id="dashboardProjectTitle">选择一个研究项目</h1><p>维护目标、当前阶段、已完成、下一步和阻塞项；这是 AI 每次对话都会携带的精简项目状态卡。</p></div></div>
+          <div id="dashboardBody"></div>
+        </section>
+
         <section id="logsView" class="view active-view">
           <div class="page-heading compact"><div><p class="eyebrow">实验日志</p><h1 id="logsProjectTitle">选择一个研究项目</h1><p>查看项目内全部实验日志，可按实验方案版本和子实验筛选。</p></div><button class="primary-button" id="newLogButton"><span>+</span> 新增实验日志</button></div>
           <div id="logsBody"></div>
@@ -102,6 +110,16 @@
         <section id="characterizationsView" class="view">
           <div class="page-heading compact"><div><p class="eyebrow">表征数据</p><h1 id="characterizationsProjectTitle">选择一个研究项目</h1><p>集中查看项目的 ICP、XRD、XPS、SEM 与电化学结果；电化学按日期文件夹导入并保留原始 TXT。</p></div><div class="page-heading-actions"><button class="secondary-button" id="importElectrochemistryButton">导入电化学文件夹</button><button class="primary-button" id="importCharacterizationButton"><span>＋</span> 添加表征数据</button></div></div>
           <div id="characterizationsBody"></div>
+        </section>
+
+        <section id="dataAssetsView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">数据工作台</p><h1 id="dataAssetsProjectTitle">选择一个研究项目</h1><p>登记原始数据路径、关联实验与分析说明；CSV/TSV 可仅以只读方式预览和绘图。</p></div><button class="primary-button" id="newDataAssetButton"><span>＋</span> 登记数据资产</button></div>
+          <div id="dataAssetsBody"></div>
+        </section>
+
+        <section id="knowledgeView" class="view">
+          <div class="page-heading compact"><div><p class="eyebrow">知识中心 · 按需检索</p><h1 id="knowledgeProjectTitle">选择一个研究项目</h1><p>先加载项目状态卡，再只检索与问题相关的少量 Markdown 片段。外部资料保持只读；每次检索都会记录来源审计。</p></div></div>
+          <div id="knowledgeBody"></div>
         </section>
 
         <section id="traceView" class="view">

@@ -10,7 +10,8 @@
   const API_SETTINGS_KEY = 'scihub-api-settings-v1';
   const AGENT_SETTINGS_KEY = 'scihub-agent-settings-v1';
   const SYNC_SETTINGS_KEY = 'scihub-sync-settings-v1';
-  const TODO_STORAGE_KEY = 'scihub-todos-v1';
+  const TUTORIAL_PROGRESS_KEY = 'scihub-onboarding-v1';
+  const TUTORIAL_SEEN_KEY = 'scihub-onboarding-seen-v1';
   const AGENT_CONFIG_IDS = [
     ['default', '默认配置'],
     ['log-organizer', '日志整理 Agent'],
@@ -75,6 +76,7 @@
     logFilters: { planId: '', subexperimentId: '' },
     plans: [],
     todos: [],
+    projectState: null,
     planBook: null,
     planEditor: null,
     planGeneration: null,
@@ -89,10 +91,13 @@
     traceSampleId: '',
     agents: '',
     autoPolish: true,
-    useFullProjectMemory: false,
     lastAgentTrace: null,
     memoryPending: [],
     memoryDatabase: null,
+    externalSources: [],
+    dataAssets: [],
+    knowledgeQuery: '',
+    knowledgeResult: null,
     memoryMonitorTimer: null,
     memoryMonitorBusy: false,
     syncStatus: null,
@@ -541,27 +546,30 @@
     R.logSelection.clear();
     R.logFilters = { planId: '', subexperimentId: '' };
     R.autoPolish = true;
-    R.useFullProjectMemory = false;
     R.characterizationFilter = '';
     R.characterizationQuery = '';
     R.trace = null;
     R.traceSampleId = '';
+    R.knowledgeQuery = '';
+    R.knowledgeResult = null;
     R.todos = [];
     R.conversation = null;
     if (!R.active) return;
     try {
-      const [logs, conversations, plans, characterizations, electrochemistry] = await Promise.all([
+      const [logs, conversations, plans, characterizations, electrochemistry, state] = await Promise.all([
         api(`${slugPath(slug)}/logs`),
         api(`${slugPath(slug)}/conversations`),
         api(`${slugPath(slug)}/plans`),
         api(`${slugPath(slug)}/characterizations`),
-        api(`${slugPath(slug)}/characterizations/electrochemistry`)
+        api(`${slugPath(slug)}/characterizations/electrochemistry`),
+        api(`${slugPath(slug)}/state`)
       ]);
       R.logs = logs.logs || [];
       restoreLogImagePreviews(R.logs);
       R.conversations = conversations.conversations || [];
       R.plans = plans.plans || [];
-      R.todos = readTodos(slug);
+      R.projectState = state?.state || null;
+      R.todos = R.projectState?.tasks || [];
       R.characterizations = characterizations || { datasets: [], records: [], types: [] };
       R.electrochemistry = electrochemistry || { datasets: [] };
       R.electrochemistryDataset = null;
@@ -569,6 +577,8 @@
       await loadAgents();
       await loadPendingMemory();
       await loadMemoryDatabase();
+      await loadExternalSources();
+      await loadDataAssets();
       await loadSyncStatus();
     } catch (e) { toast(`打开项目失败：${e.message}`); }
   }
@@ -583,7 +593,7 @@
     loadProject(slug).then(() => {
       renderProjectSidebar();
       if (window.SciHubApp) window.SciHubApp.renderAll();
-      const v = ['plans', 'todo', 'logs', 'records', 'characterizations', 'trace', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'plans';
+      const v = ['dashboard', 'plans', 'todo', 'logs', 'records', 'characterizations', 'dataAssets', 'knowledge', 'trace', 'memory', 'planBook'].includes(currentView()) ? currentView() : 'dashboard';
       if (typeof window.switchView === 'function') window.switchView(v);
       else {
         const target = document.getElementById(`${v}View`);
@@ -598,19 +608,44 @@
     const active = document.querySelector('.view.active-view');
     return active ? active.id.replace('View', '') : 'dashboard';
   }
+  async function loadExternalSources() {
+    if (!R.active) { R.externalSources = []; return []; }
+    try { R.externalSources = (await api(`${slugPath(R.active.slug)}/sources`)).sources || []; }
+    catch { R.externalSources = []; }
+    return R.externalSources;
+  }
+  async function loadDataAssets() {
+    if (!R.active) { R.dataAssets = []; return []; }
+    try { R.dataAssets = (await api(`${slugPath(R.active.slug)}/data-assets`)).assets || []; }
+    catch { R.dataAssets = []; }
+    return R.dataAssets;
+  }
 
-  // 待办与计划使用项目隔离的本地存储，不写入 API Key 或派生索引。
-  function todoStorageKey(slug) { return `${TODO_STORAGE_KEY}:${slug}`; }
-  function readTodos(slug) {
-    try { const value = JSON.parse(localStorage.getItem(todoStorageKey(slug)) || '[]'); return Array.isArray(value) ? value : []; }
-    catch { return []; }
+  async function searchProjectKnowledge(query) {
+    if (!R.active) return null;
+    const result = await api(`${slugPath(R.active.slug)}/memory/context`, {
+      method: 'POST',
+      body: JSON.stringify({ question: query, agentId: 'knowledge-center', maxChars: 7000, pitfallFirst: true })
+    });
+    R.knowledgeQuery = query;
+    R.knowledgeResult = result;
+    return result;
   }
-  function saveTodos() {
-    if (!R.active) return;
-    try { localStorage.setItem(todoStorageKey(R.active.slug), JSON.stringify(R.todos)); }
-    catch { toast('待办保存失败：浏览器本地存储空间不足'); }
+
+  // 待办和项目状态保存到项目内 Markdown，供 AI、后续会话和其他设备共同读取。
+  async function saveTodo(item, isNew = false) {
+    if (!R.active) return null;
+    const base = `${slugPath(R.active.slug)}/state/tasks`;
+    const result = await api(isNew ? base : `${base}/${encodeURIComponent(item.id)}`, {
+      method: isNew ? 'POST' : 'PUT', body: JSON.stringify(item)
+    });
+    const saved = result.task;
+    if (isNew) R.todos.unshift(saved);
+    else R.todos = R.todos.map(value => value.id === saved.id ? saved : value);
+    if (R.projectState) R.projectState.tasks = R.todos;
+    return saved;
   }
-  function todoStatusLabel(status) { return ({todo: '待开始', doing: '进行中', done: '已完成'})[status] || '待开始'; }
+  function todoStatusLabel(status) { return ({todo: '待开始', doing: '进行中', blocked: '阻塞', done: '已完成', archived: '归档'})[status] || '待开始'; }
   function todoPriorityLabel(priority) { return ({high: '高优先级', medium: '中优先级', low: '低优先级'})[priority] || '普通'; }
   function renderTodoView() {
     const title = $('todoProjectTitle'), body = $('todoBody');
@@ -620,21 +655,50 @@
     const counts = { todo: 0, doing: 0, done: 0 };
     R.todos.forEach(item => { counts[item.status] = (counts[item.status] || 0) + 1; });
     const filter = $('todoFilter')?.value || 'all';
-    const columns = ['todo', 'doing', 'done'].map(status => {
+    const columns = ['todo', 'doing', 'blocked', 'done'].map(status => {
       const items = R.todos.filter(item => item.status === status && (filter === 'all' || item.priority === filter));
       return `<section class="todo-column"><div class="todo-column-head"><b>${todoStatusLabel(status)}</b><span>${items.length}</span></div>${items.length ? items.map(item => `<article class="todo-card"><h3>${esc(item.title)}</h3>${item.notes ? `<p>${esc(item.notes)}</p>` : ''}<div class="todo-card-meta"><span class="todo-priority ${item.priority === 'high' ? 'high' : item.priority === 'medium' ? 'medium' : ''}">${todoPriorityLabel(item.priority)}</span>${item.dueDate ? `<time>截止 ${esc(item.dueDate)}</time>` : ''}</div><div class="todo-card-actions"><button class="text-button" data-todo-move="${esc(item.id)}">${status === 'todo' ? '开始处理' : status === 'doing' ? '标记完成' : '重新打开'}</button><button class="text-button" data-todo-edit="${esc(item.id)}">编辑</button><button class="text-button danger-button" data-todo-delete="${esc(item.id)}">删除</button></div></article>`).join('') : '<div class="todo-empty">暂无事项</div>'}</section>`;
     }).join('');
-    body.innerHTML = `<div class="todo-toolbar"><select id="todoFilter" class="todo-filter"><option value="all">全部优先级</option><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">低优先级</option></select><span class="field-note">共 ${R.todos.length} 项 · 已完成 ${counts.done} 项</span></div><div class="todo-summary"><span>待开始 ${counts.todo}</span><span>进行中 ${counts.doing}</span><span>已完成 ${counts.done}</span></div><div class="todo-board">${columns}</div><div class="todo-plans-note"><b>计划提示：</b>实验方案页适合维护可打印的实验方案正文；这里适合拆解近期行动、分析任务和复盘事项。两者可以并行使用。</div>`;
+    body.innerHTML = `<div class="todo-toolbar"><select id="todoFilter" class="todo-filter"><option value="all">全部优先级</option><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">低优先级</option></select><span class="field-note">共 ${R.todos.length} 项 · 已完成 ${counts.done} 项</span></div><div class="todo-summary"><span>待开始 ${counts.todo}</span><span>进行中 ${counts.doing}</span><span>阻塞 ${counts.blocked || 0}</span><span>已完成 ${counts.done}</span></div><div class="todo-board">${columns}</div><div class="todo-plans-note"><b>项目知识库：</b>待办保存为项目内 Markdown，Agent 可从项目状态卡感知进行中、阻塞和下一步工作。</div>`;
     $('todoFilter').value = filter;
     $('todoFilter').addEventListener('change', renderTodoView);
-    body.querySelectorAll('[data-todo-move]').forEach(button => button.addEventListener('click', () => { const item = R.todos.find(x => x.id === button.dataset.todoMove); if (!item) return; item.status = item.status === 'todo' ? 'doing' : item.status === 'doing' ? 'done' : 'todo'; item.updatedAt = iso(); saveTodos(); renderTodoView(); }));
+    body.querySelectorAll('[data-todo-move]').forEach(button => button.addEventListener('click', async () => { const item = R.todos.find(x => x.id === button.dataset.todoMove); if (!item) return; const updated = { ...item, status: item.status === 'todo' ? 'doing' : item.status === 'doing' ? 'done' : 'todo' }; try { await saveTodo(updated); renderTodoView(); } catch (error) { toast(`更新待办失败：${error.message}`); } }));
     body.querySelectorAll('[data-todo-edit]').forEach(button => button.addEventListener('click', () => openTodoDialog(button.dataset.todoEdit)));
-    body.querySelectorAll('[data-todo-delete]').forEach(button => button.addEventListener('click', () => { if (!confirm('确定删除这条待办吗？')) return; R.todos = R.todos.filter(x => x.id !== button.dataset.todoDelete); saveTodos(); renderTodoView(); }));
+    body.querySelectorAll('[data-todo-delete]').forEach(button => button.addEventListener('click', () => { toast('为保护项目记录，待办不支持直接删除；请编辑后将状态设为“归档”。'); }));
+  }
+
+  async function saveProjectState(payload) {
+    if (!R.active) return null;
+    const result = await api(`${slugPath(R.active.slug)}/state`, { method: 'PUT', body: JSON.stringify(payload) });
+    R.projectState = result.state || null;
+    R.todos = R.projectState?.tasks || R.todos;
+    return R.projectState;
+  }
+
+  function renderDashboardView() {
+    const title = $('dashboardProjectTitle'), body = $('dashboardBody');
+    if (!title || !body) return;
+    if (!R.active) { title.textContent = '选择一个研究项目'; body.innerHTML = '<div class="empty-state"><strong>请选择研究项目</strong><p>项目驾驶舱会显示当前进度、下一步、风险与任务。</p></div>'; return; }
+    title.textContent = R.active.name;
+    const state = R.projectState || {};
+    const activeTasks = R.todos.filter(item => ['todo', 'doing', 'blocked'].includes(item.status));
+    const progress = state.progress || {};
+    const taskProgress = progress.tasks || {};
+    const overview = [
+      ['实验日志', progress.logs || 0, 'logs'], ['实验方案', progress.plans || 0, 'plans'],
+      ['数据资产', progress.dataAssets || 0, 'dataAssets'], ['外部资料源', progress.externalSources || 0, 'memory'],
+      ['进行中任务', taskProgress.doing || 0, 'todo'], ['阻塞任务', taskProgress.blocked || 0, 'todo']
+    ];
+    const field = (label, key, placeholder) => `<label class="form-field full"><span>${label}</span><textarea data-state-field="${key}" maxlength="6000" placeholder="${placeholder}">${esc(state[key] || '')}</textarea></label>`;
+    body.innerHTML = `<div class="dashboard-overview">${overview.map(([label, value, view]) => `<button type="button" class="dashboard-metric" data-dashboard-view="${view}"><b>${Number(value)}</b><span>${label}</span></button>`).join('')}</div><div class="dashboard-grid"><section class="dashboard-card dashboard-status-card"><div class="record-field-head"><span>AI 项目状态卡</span><small>每次研究对话都会带入这份精简全局状态；详情按需检索。</small></div><form id="projectStateForm"><div class="form-grid">${field('项目目标', 'goal', '研究目标、边界或核心问题')}${field('当前阶段', 'currentStage', '例如：完成样品制备，正在进行 XRD 表征')}${field('已完成', 'completedSummary', '已完成实验、已验证结论或已交付成果')}${field('下一步', 'nextSteps', '近期研究计划与优先顺序')}${field('阻塞与风险', 'blockers', '异常、资源缺口、待验证假设或外部依赖')}</div><div class="dashboard-actions"><small>最后更新：${esc(state.updatedAt || '尚未保存')}</small><button class="primary-button" type="submit">保存项目状态</button></div></form></section><section class="dashboard-card"><div class="record-field-head"><span>当前任务</span><button class="text-button" id="dashboardOpenTodo">进入待办看板</button></div>${activeTasks.length ? `<div class="dashboard-task-list">${activeTasks.slice(0, 8).map(item => `<div><b>${esc(item.title)}</b><small>${esc(todoStatusLabel(item.status))} · ${esc(todoPriorityLabel(item.priority))}${item.dueDate ? ` · 截止 ${esc(item.dueDate)}` : ''}</small></div>`).join('')}</div>` : '<p class="record-hint">暂无进行中、待开始或阻塞任务。</p>'}</section></div>`;
+    $('projectStateForm').addEventListener('submit', async event => { event.preventDefault(); const data = {}; body.querySelectorAll('[data-state-field]').forEach(input => { data[input.dataset.stateField] = input.value.trim(); }); const button = $('projectStateForm').querySelector('[type=submit]'); button.disabled = true; try { await saveProjectState(data); toast('项目状态卡已保存并纳入 Agent 记忆'); renderDashboardView(); } catch (error) { button.disabled = false; toast(`保存项目状态失败：${error.message}`); } });
+    $('dashboardOpenTodo').onclick = () => window.switchView?.('todo');
+    body.querySelectorAll('[data-dashboard-view]').forEach(button => button.onclick = () => window.switchView?.(button.dataset.dashboardView));
   }
   function openTodoDialog(id = '') {
     if (!R.active) { toast('请先选择或新建一个项目'); return; }
     const item = R.todos.find(x => x.id === id) || { title: '', notes: '', status: 'todo', priority: 'medium', dueDate: '' };
-    openModal(`<div class="modal-header"><div><h2>${id ? '编辑待办' : '新增待办'}</h2><p>待办只保存在当前项目的浏览器本地存储中。</p></div><button class="close-button" data-close-modal>×</button></div><form id="todoForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>事项</span><input id="todoTitleInput" required maxlength="160" value="${esc(item.title)}" placeholder="例如：整理 XRD 数据并比较 V1/V2" /></label><label class="form-field full"><span>备注</span><textarea id="todoNotesInput" maxlength="2000" placeholder="补充验收标准、关联样品或下一步说明">${esc(item.notes || '')}</textarea></label><label class="form-field"><span>状态</span><select id="todoStatusInput"><option value="todo">待开始</option><option value="doing">进行中</option><option value="done">已完成</option></select></label><label class="form-field"><span>优先级</span><select id="todoPriorityInput"><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">普通</option></select></label><label class="form-field"><span>截止日期</span><input id="todoDueInput" type="date" value="${esc(item.dueDate || '')}" /></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存待办</button></div></form>`, () => { $('todoStatusInput').value = item.status; $('todoPriorityInput').value = item.priority; $('todoTitleInput').focus(); $('todoForm').addEventListener('submit', event => { event.preventDefault(); const payload = { ...item, id: item.id || `todo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, title: $('todoTitleInput').value.trim(), notes: $('todoNotesInput').value.trim(), status: $('todoStatusInput').value, priority: $('todoPriorityInput').value, dueDate: $('todoDueInput').value, updatedAt: iso() }; if (id) R.todos = R.todos.map(x => x.id === id ? payload : x); else R.todos.unshift(payload); saveTodos(); closeModal(); renderTodoView(); toast('待办已保存'); }); });
+    openModal(`<div class="modal-header"><div><h2>${id ? '编辑待办' : '新增待办'}</h2><p>待办会保存为项目内 Markdown，可被项目状态卡和 AI 受控检索。</p></div><button class="close-button" data-close-modal>×</button></div><form id="todoForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>事项</span><input id="todoTitleInput" required maxlength="160" value="${esc(item.title)}" placeholder="例如：整理 XRD 数据并比较 V1/V2" /></label><label class="form-field full"><span>备注</span><textarea id="todoNotesInput" maxlength="2000" placeholder="补充验收标准、关联样品或下一步说明">${esc(item.notes || '')}</textarea></label><label class="form-field"><span>状态</span><select id="todoStatusInput"><option value="todo">待开始</option><option value="doing">进行中</option><option value="blocked">阻塞</option><option value="done">已完成</option><option value="archived">归档</option></select></label><label class="form-field"><span>优先级</span><select id="todoPriorityInput"><option value="high">高优先级</option><option value="medium">中优先级</option><option value="low">普通</option></select></label><label class="form-field"><span>截止日期</span><input id="todoDueInput" type="date" value="${esc(item.dueDate || '')}" /></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button class="primary-button" type="submit">保存待办</button></div></form>`, () => { $('todoStatusInput').value = item.status; $('todoPriorityInput').value = item.priority; $('todoTitleInput').focus(); $('todoForm').addEventListener('submit', async event => { event.preventDefault(); const payload = { ...item, title: $('todoTitleInput').value.trim(), notes: $('todoNotesInput').value.trim(), status: $('todoStatusInput').value, priority: $('todoPriorityInput').value, dueDate: $('todoDueInput').value }; const button = $('todoForm').querySelector('[type=submit]'); button.disabled = true; try { await saveTodo(payload, !id); closeModal(); renderTodoView(); toast('待办已保存到项目知识库'); } catch (error) { button.disabled = false; toast(`保存待办失败：${error.message}`); } }); });
   }
 
   // ------------------------------------------------------------- 侧栏渲染 --
@@ -4010,10 +4074,60 @@
     });
   }
 
-  function openUsageTutorial() {
-    openModal(`<div class="modal-header"><div><p class="eyebrow">SciHub 使用教学</p><h2>从项目到实验记录，六步上手</h2><p>所有项目资料默认保存在本机；按顺序完成下面几步，就能建立一条可追溯的科研记录链。</p></div><button class="close-button" data-close-modal aria-label="关闭使用教学">×</button></div>
-      <div class="modal-body usage-tutorial-body"><section class="usage-tutorial-note"><b>开始前</b><span>AI 设置是可选的。未配置 AI 时，仍可手动编辑方案书、记录日志与导入对话。</span></section><ol class="usage-tutorial-steps"><li><div><b>创建或选择研究项目</b><p>在首页创建项目，或用左侧项目下拉框切换。一个项目对应一套独立的方案、日志、对话和项目记忆。</p></div></li><li><div><b>新建实验方案与子实验</b><p>进入“实验方案”后点击“新建实验方案”，填写版本号；再为不同工作内容添加子实验。每个子实验都有各自的方案书与日志。</p></div></li><li><div><b>导入或编辑实验方案书</b><p>在对应子实验中点击“查看实验方案”，可导入 Word、PDF、Markdown 或文本资料，也可以直接编辑。导入资料后可使用 AI 整理成标准方案书。</p></div></li><li><div><b>核对版本改动</b><p>进入方案书后点击“查看版本改动”。系统只比较实验步骤中会影响执行的实际参数，例如质量、时间、温度和转速；新增、删除、调整会以不同颜色标识。</p></div></li><li><div><b>关联方案记录实验日志</b><p>在方案或子实验旁点击“记录日志”，当天日志会自动关联到该方案。也可在“实验日志”页面手写或导入文档，保存后会同步项目记忆。</p></div></li><li><div><b>保存对话并导出项目记忆</b><p>在“对话记录”中新建或导入 AI 对话。右上角“一键导出记忆”会先预览精简上下文：只保留有效方案、版本改动、事实与问题，再让你选择导出位置。</p></div></li></ol><section class="usage-tutorial-privacy"><b>隐私提示</b><span>只有在你主动使用 AI 润色、生成或分析时，相关内容才会发送到你配置的模型接口；API Key 仅保存在当前浏览器。</span></section></div>
-      <div class="modal-footer"><button type="button" class="primary-button" data-close-modal>开始使用</button></div>`);
+  const TUTORIAL_STEPS = [
+    { title: '创建或进入项目', view: 'home', action: 'create', actionLabel: '创建第一个项目', text: '一个项目是一套独立的科研档案。方案、日志、数据、对话和 AI 记忆不会与其他项目混在一起。先创建项目，或在左侧下拉框选择已有项目。' },
+    { title: '填写项目驾驶舱', view: 'dashboard', actionLabel: '打开项目驾驶舱', text: '先写清项目目标、当前阶段、已完成、下一步和阻塞项。AI 每次讨论都会先获得这张精简状态卡；页面顶部还能直接看到日志、方案、数据和待办数量。' },
+    { title: '建立实验方案', view: 'plans', actionLabel: '打开实验方案', text: '新建方案或导入 Word、PDF、Markdown、文本资料。方案是执行基线；可以分出子实验，并在后续检查版本改动。资料中未明确的条件不要让 AI 补写为事实。' },
+    { title: '记录实验日志', view: 'logs', actionLabel: '打开实验日志', text: '每次实验用“新增实验日志”保留原始输入、条件、现象、数据、异常和下一步。可从方案直接进入日志；AI 整理只改善表达，原始输入会保留。' },
+    { title: '登记数据并绘图', view: 'dataAssets', actionLabel: '打开数据工作台', text: '登记原始数据文件路径及样品、状态和关联记录。CSV/TSV/TXT 只读预览，可在浏览器中选择列、切换折线/散点并填写图标题和单位，不会修改原始数据。' },
+    { title: '查询项目知识', view: 'knowledge', actionLabel: '打开知识中心', text: '输入具体科研问题。系统先放入项目导航卡，再检索少量相关 Markdown 片段，并显示本次实际读取的来源和证据状态；不会全文读取知识库。' },
+    { title: '用 AI 对话形成可审核记忆', view: 'records', actionLabel: '打开对话记录', text: 'AI 设置是可选的。对话中的可复用事实、决定、踩坑、待办会先变成候选记忆；你审核后才会进入正式记忆。待办候选可审核为带来源的项目待办。' },
+    { title: '日常工作顺序', view: 'dashboard', actionLabel: '回到项目驾驶舱', text: '推荐流程：驾驶舱更新进度 → 方案确定执行基线 → 日志记录事实 → 数据工作台查看数据 → 知识中心/AI 讨论 → 审核候选记忆与待办。所有原始资料优先保留。' },
+  ];
+
+  function tutorialProgress() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(TUTORIAL_PROGRESS_KEY));
+      return Array.isArray(saved?.completed) ? new Set(saved.completed.filter(value => Number.isInteger(value))) : new Set();
+    } catch { return new Set(); }
+  }
+
+  function saveTutorialProgress(completed) {
+    try { localStorage.setItem(TUTORIAL_PROGRESS_KEY, JSON.stringify({ completed: [...completed], updatedAt: iso() })); } catch { /* optional browser-only guidance state */ }
+  }
+
+  function openUsageTutorial(stepIndex = 0) {
+    const index = Math.max(0, Math.min(Number(stepIndex) || 0, TUTORIAL_STEPS.length - 1));
+    const step = TUTORIAL_STEPS[index];
+    const completed = tutorialProgress();
+    const doneCount = completed.size;
+    const moduleList = [['项目驾驶舱', 'dashboard'], ['实验方案', 'plans'], ['实验日志', 'logs'], ['数据工作台', 'dataAssets'], ['知识中心', 'knowledge'], ['对话与记忆', 'records']];
+    openModal(`<div class="modal-header"><div><p class="eyebrow">SciHub 新手教学</p><h2>第 ${index + 1} / ${TUTORIAL_STEPS.length} 步：${esc(step.title)}</h2><p>这套路线会保存到当前浏览器。完成 ${doneCount} / ${TUTORIAL_STEPS.length} 步；你可以随时从右上角“使用教学”继续。</p></div><button class="close-button" data-close-modal aria-label="关闭使用教学">×</button></div>
+      <div class="modal-body onboarding-body"><section class="usage-tutorial-note"><b>核心原则</b><span>原始科研资料优先保留；AI 只按问题读取相关片段，所有正式记忆与行动都由你审核。</span></section><div class="onboarding-progress" aria-label="教学进度">${TUTORIAL_STEPS.map((item, number) => `<button type="button" data-tutorial-step="${number}" class="${number === index ? 'current' : ''} ${completed.has(number) ? 'done' : ''}" title="${esc(item.title)}">${completed.has(number) ? '✓' : number + 1}</button>`).join('')}</div><section class="onboarding-step"><span>本步目的</span><h3>${esc(step.title)}</h3><p>${esc(step.text)}</p></section><section class="onboarding-modules"><b>功能速查</b><div>${moduleList.map(([label, view]) => `<button type="button" data-tutorial-view="${view}">${esc(label)}</button>`).join('')}</div></section><section class="usage-tutorial-privacy"><b>AI 与隐私</b><span>没有配置 AI 也可以完成全部手动科研记录。只有你主动调用 AI 时，相关内容才会发送到你设置的接口；API Key 仅保存在浏览器配置中。</span></section></div>
+      <div class="modal-footer"><button id="tutorialMarkDone" type="button" class="secondary-button">${completed.has(index) ? '标记为未完成' : '标记本步完成'}</button><button id="tutorialGo" type="button" class="primary-button">${step.actionLabel || '前往此功能'}</button>${index < TUTORIAL_STEPS.length - 1 ? '<button id="tutorialNext" type="button" class="secondary-button">下一步</button>' : '<button type="button" class="secondary-button" data-close-modal>完成教学</button>'}</div>`, () => {
+      $('tutorialMarkDone').onclick = () => { const next = tutorialProgress(); if (next.has(index)) next.delete(index); else next.add(index); saveTutorialProgress(next); openUsageTutorial(index); };
+      $('tutorialNext')?.addEventListener('click', () => openUsageTutorial(index + 1));
+      document.querySelectorAll('[data-tutorial-step]').forEach(button => button.onclick = () => openUsageTutorial(Number(button.dataset.tutorialStep)));
+      document.querySelectorAll('[data-tutorial-view]').forEach(button => button.onclick = () => {
+        closeModal();
+        if (!R.active) { window.switchView?.('home'); toast('请先创建或选择一个项目。'); return; }
+        window.switchView?.(button.dataset.tutorialView);
+      });
+      $('tutorialGo').onclick = () => {
+        closeModal();
+        if (step.action === 'create') { window.switchView?.('home'); openProjectDialog(); return; }
+        if (!R.active) { window.switchView?.('home'); toast('请先创建或选择一个项目。'); return; }
+        window.switchView?.(step.view);
+      };
+    });
+  }
+
+  function openTutorialWelcome() {
+    openModal(`<div class="modal-header"><div><p class="eyebrow">欢迎使用 SciHub</p><h2>要进行 8 步新手教学吗？</h2><p>教学会带你建立第一个科研项目、记录实验、管理数据，并了解 AI 如何安全地读取与写入项目记忆。</p></div><button class="close-button" data-close-modal aria-label="关闭欢迎教学">×</button></div>
+      <div class="modal-body onboarding-body"><section class="usage-tutorial-note"><b>可随时继续</b><span>你可以现在开始，也可以暂时跳过。之后随时点击右上角“使用教学”，从第 1 步或上次完成的位置继续。</span></section><section class="usage-tutorial-privacy"><b>无需先配置 AI</b><span>项目、方案、日志、数据和待办都可手动使用；AI 设置是可选的。</span></section></div>
+      <div class="modal-footer"><button id="tutorialSkipWelcome" type="button" class="secondary-button" data-close-modal>暂时跳过</button><button id="tutorialStartWelcome" type="button" class="primary-button">开始教学</button></div>`, () => {
+      $('tutorialStartWelcome').onclick = () => openUsageTutorial(0);
+    });
   }
 
   function openProjectExportDialog() {
@@ -4077,7 +4191,7 @@
         : '';
       chatHtml = `<div class="conversation-head"><h2>${esc(c.title)}</h2><div class="detail-meta"><span class="model-badge">${esc(c.model)}</span><span>·</span><span>${c.messages.length} 条消息</span><button id="compactConversationButton" class="secondary-button" type="button">压缩上下文</button></div></div>
         <div id="recordMessages" class="messages" style="max-height:460px;overflow:auto">${msgs}</div>
-        ${pendingHtml}${traceHtml}<div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统按需读取项目记忆。（Ctrl/⌘ + Enter 发送）"></textarea><label class="project-memory-toggle"><input id="recordFullMemory" type="checkbox" ${R.useFullProjectMemory ? 'checked' : ''} /><span>本次扩大记忆召回范围</span></label></div><button id="recordSend" class="primary-button">发送</button></div>`;
+        ${pendingHtml}${traceHtml}<div class="record-composer"><div style="display:grid;gap:7px;flex:1"><textarea id="recordInput" placeholder="继续提问；系统会先读取项目状态卡，再按问题检索少量相关资料。（Ctrl/⌘ + Enter 发送）"></textarea><small class="field-note">为保护上下文与可追溯性，对话始终按问题召回相关资料，不会读取整个知识库。</small></div><button id="recordSend" class="primary-button">发送</button></div>`;
     }
     $('recordsBody').innerHTML = `<div class="content-layout conversation-layout"><section class="conversation-list-panel"><div class="list-toolbar"><span>${R.conversations.length} 段对话</span></div><div class="conversation-list">${listHtml}</div></section><section class="conversation-detail-panel">${chatHtml}</section></div>`;
     $('recordsBody').querySelectorAll('[data-record]').forEach(b => b.onclick = () => loadConversation(b.dataset.record));
@@ -4108,7 +4222,6 @@
           };
         });
       });
-      $('recordFullMemory').onchange = e => { R.useFullProjectMemory = e.target.checked; };
       $('recordInput').addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendMessage(); });
       const m = $('recordMessages'); if (m) m.scrollTop = m.scrollHeight;
     }
@@ -4147,7 +4260,7 @@
         ...history
       ], null, {
         operation: 'conversation.reply',
-        memoryMode: R.useFullProjectMemory ? 'full' : 'related',
+        memoryMode: 'related',
         memoryQuery: content
       });
       c.messages.push({ role: 'assistant', content: answer, createdAt: iso() });
@@ -4779,8 +4892,9 @@
     if (!requireProject('memoryProjectTitle', 'memoryBody')) return;
     $('memoryProjectTitle').textContent = R.active.name;
     const p = R.active;
+    const candidateEvidence = item => (item.sourceRefs || []).map(ref => [ref.path || ref.conversationId || '对话来源', ref.quote].filter(Boolean).join('：')).filter(Boolean).slice(0, 2).join('；');
     const pendingHtml = R.memoryPending.length
-      ? `<div class="memory-pending-panel"><div class="record-field-head"><span>待确认记忆（${R.memoryPending.length}）</span></div>${R.memoryPending.map(item => `<div class="memory-pending-item" data-memory-id="${esc(item.id)}"><b>${esc(item.title || item.type)}</b><small>${esc(item.evidenceStatus || 'model_suggestion')} · ${esc(item.proposedText || '')}</small><div><button class="secondary-button memory-confirm-button" data-memory-action="confirm">确认写入 Markdown</button><button class="secondary-button" data-memory-action="edit">编辑</button><button class="secondary-button memory-reject-button" data-memory-action="reject">拒绝</button></div></div>`).join('')}</div>`
+      ? `<div class="memory-pending-panel"><div class="record-field-head"><span>待确认记忆（${R.memoryPending.length}）</span></div>${R.memoryPending.map(item => `<div class="memory-pending-item" data-memory-id="${esc(item.id)}"><b>${esc(item.title || item.type)}</b><small>${esc(item.evidenceStatus || 'model_suggestion')} · ${esc(item.proposedText || '')}${candidateEvidence(item) ? `<br>来源：${esc(candidateEvidence(item))}` : ''}</small><div><button class="secondary-button memory-confirm-button" data-memory-action="confirm">确认写入 Markdown</button>${item.type === 'todo' ? '<button class="secondary-button" data-memory-action="task">审核并创建待办</button>' : ''}<button class="secondary-button" data-memory-action="edit">编辑</button><button class="secondary-button memory-reject-button" data-memory-action="reject">拒绝</button></div></div>`).join('')}</div>`
       : '<div class="record-hint">暂无待确认记忆候选。对话 Agent 会在有可复用信息时异步提取候选。</div>';
     const db = R.memoryDatabase;
     const databaseHtml = db?.status ? (() => {
@@ -4808,6 +4922,9 @@
       </section>`;
     })() : `${memoryMonitorMarkup()}${memoryGraphMarkup()}<section class="memory-database-panel"><div class="record-field-head"><span>项目记忆数据库</span></div><div class="record-hint">正在读取项目索引状态；刷新页面或重新选择项目后会重试。</div></section>`;
     const syncRoot = syncRootFor(p.slug);
+    const sourceRows = R.externalSources.length
+      ? R.externalSources.map(source => `<div class="external-source-item"><div><b>${esc(source.name)}</b><small>${esc(source.path)} · 只读 · ${esc(source.purpose || '未填写用途')}</small></div><span>已登记</span></div>`).join('')
+      : '<p class="record-hint">尚未登记外部资料源。登记后，SciHub 仅索引其中的 Markdown；原文件保持原位且不写入。</p>';
     const syncLabel = R.syncStatus?.configured ? `本地文件：${R.syncStatus.localFiles || 0} · 云端文件：${R.syncStatus.remoteFiles || 0} · 冲突：${R.syncStatus.conflicts?.length || 0}` : '尚未配置同步目录';
     $('memoryBody').innerHTML = `
       <div class="record-panel">
@@ -4817,17 +4934,21 @@
         <div class="record-foot"><span class="record-hint">项目路径：科研项目/${esc(p.slug)}/</span><button id="saveMemBtn" class="primary-button">保存项目记忆</button></div>
         <div class="record-agents"><div class="record-field-head"><span>AGENTS.md（自动更新）</span></div><pre class="agents-preview">${esc(R.agents || '正在读取 AGENTS.md…')}</pre></div>
         ${pendingHtml}
+        <section class="external-sources-panel"><div class="record-field-head"><span>外部项目资料源（只读）</span><button id="addExternalSource" type="button" class="secondary-button">登记资料目录</button></div><p class="record-hint">适用于已有导师项目、Obsidian Vault 或历史资料目录。索引缓存只保存到当前 SciHub 项目，AI 只按问题读取相关片段。</p><div class="external-source-list">${sourceRows}</div></section>
         ${databaseHtml}
         <div class="memory-sync-panel"><div class="record-field-head"><span>Google Drive 本地同步</span></div><div class="form-field full"><label>同步目录</label><div style="display:flex;gap:8px"><input id="syncRootInput" value="${esc(syncRoot)}" placeholder="选择 Google Drive for desktop 的本地目录" style="flex:1" /><button id="chooseSyncRoot" class="secondary-button" type="button">选择目录</button></div><small class="field-note">只同步当前项目；SQLite 索引在另一台设备自动重建，不会自动删除文件。</small></div><div class="record-foot"><span id="syncStatusText" class="record-hint">${esc(syncLabel)}</span><div style="display:flex;gap:8px"><button id="mcpConfigButton" class="secondary-button" type="button">连接 Codex/Claude</button><button id="saveSyncButton" class="secondary-button" type="button">保存配置</button><button id="runSyncButton" class="primary-button" type="button">立即同步</button></div></div></div>
       </div>`;
     bindMemoryGraph();
     $('saveMemBtn').onclick = saveProjectInfo;
+    $('addExternalSource').onclick = openExternalSourceDialog;
     $('chooseSyncRoot').onclick = chooseSyncRoot;
     $('mcpConfigButton').onclick = showMcpConnectionConfig;
     $('saveSyncButton').onclick = saveSyncConfig;
     $('runSyncButton').onclick = runProjectSync;
     $('refreshMemoryDatabase')?.addEventListener('click', async () => {
       await loadMemoryDatabase();
+      await loadExternalSources();
+      await loadDataAssets();
       renderMemoryView();
     });
     $('memoryBody').querySelectorAll('[data-memory-id]').forEach(item => {
@@ -4836,6 +4957,18 @@
           try {
             const action = button.dataset.memoryAction;
             const candidate = R.memoryPending.find(value => value.id === item.dataset.memoryId);
+            if (action === 'task') {
+              const title = window.prompt('确认要创建的项目待办：', candidate?.title || candidate?.proposedText || '');
+              if (title === null || !title.trim()) return;
+              const provenance = candidateEvidence(candidate);
+              const defaultNotes = [candidate?.proposedText || '', `证据状态：${candidate?.evidenceStatus || 'model_suggestion'}`, provenance ? `来源：${provenance}` : '来源：未提供可引用片段'].filter(Boolean).join('\n\n');
+              const notes = window.prompt('待办说明（将保留候选证据与来源）：', defaultNotes) ?? '';
+              await saveTodo({ title: title.trim(), notes: notes.trim(), related: `记忆候选 ${candidate?.id || ''}`, status: 'todo', priority: 'medium', dueDate: '' }, true);
+              toast('已审核并创建带来源的项目待办；原候选仍保留，供你决定是否另行确认为长期记忆。');
+              await loadMemoryDatabase();
+              renderMemoryView();
+              return;
+            }
             if (action === 'edit') {
               const edited = window.prompt('修改记忆候选内容：', candidate?.proposedText || '');
               if (edited === null || !edited.trim()) return;
@@ -4857,6 +4990,87 @@
           else reviewConfirmedMemory(memoryId);
         };
       });
+    });
+  }
+
+  function dataAssetSvg(rows, xKey, yKey, options = {}) {
+    const points = rows.map(row => ({ x: Number(row[xKey]), y: Number(row[yKey]) })).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (points.length < 2) return '<div class="data-asset-chart-empty">请选择包含至少两行数值的 X、Y 列。</div>';
+    const xs = points.map(p => p.x), ys = points.map(p => p.y), minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const scaleX = x => 44 + ((x - minX) / (maxX - minX || 1)) * 430, scaleY = y => 210 - ((y - minY) / (maxY - minY || 1)) * 170;
+    const path = points.map((p, index) => `${index ? 'L' : 'M'}${scaleX(p.x).toFixed(1)},${scaleY(p.y).toFixed(1)}`).join(' ');
+    const type = options.type === 'scatter' ? 'scatter' : 'line';
+    const title = String(options.title || '').trim();
+    const xLabel = `${xKey}${String(options.xUnit || '').trim() ? ` (${String(options.xUnit).trim()})` : ''}`;
+    const yLabel = `${yKey}${String(options.yUnit || '').trim() ? ` (${String(options.yUnit).trim()})` : ''}`;
+    return `<svg class="data-asset-chart" viewBox="0 0 520 250" role="img" aria-label="${esc(yLabel)} 对 ${esc(xLabel)} 图表">${title ? `<text class="data-asset-chart-title" x="260" y="15">${esc(title)}</text>` : ''}<line x1="44" y1="210" x2="480" y2="210"/><line x1="44" y1="${title ? 28 : 20}" x2="44" y2="210"/>${type === 'line' ? `<path d="${path}"/>` : ''}<g>${points.map(p => `<circle cx="${scaleX(p.x)}" cy="${scaleY(p.y)}" r="3"/>`).join('')}</g><text x="260" y="243">${esc(xLabel)} (${minX} – ${maxX})</text><text x="10" y="${title ? 27 : 18}">${esc(yLabel)} (${minY} – ${maxY})</text></svg>`;
+  }
+
+  function renderDataAssetsView() {
+    if (!requireProject('dataAssetsProjectTitle', 'dataAssetsBody')) return;
+    $('dataAssetsProjectTitle').textContent = R.active.name;
+    const body = $('dataAssetsBody');
+    const assets = R.dataAssets || [];
+    body.innerHTML = assets.length ? `<div class="data-assets-grid">${assets.map(asset => `<article class="data-asset-card"><div><span class="characterization-badge">${esc(asset.kind || 'file')}</span><h2>${esc(asset.title)}</h2><p><code>${esc(asset.path)}</code></p></div><div class="data-asset-meta"><span>${asset.exists ? '原文件可访问' : '原文件未找到'}</span>${asset.sampleId ? `<span>样品：${esc(asset.sampleId)}</span>` : ''}<span>状态：${esc(asset.status || 'raw')}</span></div>${asset.notes ? `<p>${esc(asset.notes)}</p>` : ''}${asset.related ? `<small>关联：${esc(asset.related)}</small>` : ''}<div><button type="button" class="secondary-button" data-preview-asset="${esc(asset.id)}">预览 / 绘图</button><button type="button" class="text-button" data-edit-asset="${esc(asset.id)}">编辑登记</button></div></article>`).join('')}</div>` : '<div class="empty-state"><strong>还没有数据资产</strong><p>先登记外部数据文件路径；系统不会导入或修改原文件。</p><button class="primary-button" id="emptyNewDataAsset">登记第一份数据</button></div>';
+    $('newDataAssetButton').onclick = () => openDataAssetDialog();
+    $('emptyNewDataAsset')?.addEventListener('click', () => openDataAssetDialog());
+    body.querySelectorAll('[data-edit-asset]').forEach(button => button.onclick = () => openDataAssetDialog(button.dataset.editAsset));
+    body.querySelectorAll('[data-preview-asset]').forEach(button => button.onclick = () => openDataAssetPreview(button.dataset.previewAsset));
+  }
+
+  function openDataAssetDialog(id = '') {
+    const asset = R.dataAssets.find(item => item.id === id) || { title:'', path:'', kind:'', sampleId:'', related:'', notes:'', status:'raw' };
+    openModal(`<div class="modal-header"><div><h2>${id ? '编辑数据资产' : '登记数据资产'}</h2><p>仅保存路径和元数据。SciHub 不会复制、移动或修改原始数据文件。</p></div><button class="close-button" data-close-modal>×</button></div><form id="dataAssetForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>原始数据文件路径</span><input id="assetPath" required value="${esc(asset.path)}" placeholder="例如：D:\\…\\data.csv"/></label><label class="form-field"><span>显示名称</span><input id="assetTitle" maxlength="160" value="${esc(asset.title)}"/></label><label class="form-field"><span>数据类型</span><input id="assetKind" maxlength="80" value="${esc(asset.kind)}" placeholder="CSV / XRD / 图片 / 原始仪器文件"/></label><label class="form-field"><span>样品编号</span><input id="assetSample" maxlength="160" value="${esc(asset.sampleId)}"/></label><label class="form-field"><span>状态</span><input id="assetStatus" maxlength="50" value="${esc(asset.status || 'raw')}" placeholder="raw / processed / verified"/></label><label class="form-field full"><span>关联资料</span><input id="assetRelated" maxlength="800" value="${esc(asset.related)}" placeholder="关联的实验日志、方案、任务或分析记录"/></label><label class="form-field full"><span>备注</span><textarea id="assetNotes" maxlength="4000">${esc(asset.notes)}</textarea></label></div></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button type="submit" class="primary-button">保存登记</button></div></form>`, () => { $('dataAssetForm').addEventListener('submit', async event => { event.preventDefault(); const button = $('dataAssetForm').querySelector('[type=submit]'); button.disabled=true; try { const payload={title:$('assetTitle').value.trim(),path:$('assetPath').value.trim(),kind:$('assetKind').value.trim(),sampleId:$('assetSample').value.trim(),status:$('assetStatus').value.trim(),related:$('assetRelated').value.trim(),notes:$('assetNotes').value.trim()}; await api(`${slugPath(R.active.slug)}/data-assets${id ? `/${encodeURIComponent(id)}`:''}`,{method:id?'PUT':'POST',body:JSON.stringify(payload)}); await loadDataAssets(); closeModal(); renderDataAssetsView(); toast('数据资产登记已保存'); } catch(error) { button.disabled=false; toast(`保存数据资产失败：${error.message}`); } }); });
+  }
+
+  async function openDataAssetPreview(id) {
+    try {
+      const result = await api(`${slugPath(R.active.slug)}/data-assets/${encodeURIComponent(id)}/preview`);
+      const preview = result.preview;
+      if (!preview) { toast(result.reason || '此文件无法预览'); return; }
+      const columns = preview.columns || [], rows = preview.rows || [];
+      const numeric = columns.filter(key => rows.some(row => Number.isFinite(Number(row[key]))));
+      const table = `<div class="data-asset-table-wrap"><table><thead><tr>${columns.map(key => `<th>${esc(key)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, 100).map(row => `<tr>${columns.map(key => `<td>${esc(row[key] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      const controls = numeric.length >= 2 ? `<div class="data-asset-chart-controls"><label>X 轴 <select id="assetX">${numeric.map(key => `<option value="${esc(key)}">${esc(key)}</option>`).join('')}</select></label><label>Y 轴 <select id="assetY">${numeric.map((key, index) => `<option value="${esc(key)}" ${index === 1 ? 'selected' : ''}>${esc(key)}</option>`).join('')}</select></label><label>图型 <select id="assetChartType"><option value="line">折线 + 点</option><option value="scatter">散点</option></select></label><label>标题 <input id="assetChartTitle" maxlength="160" value="${esc(result.asset.title)}" /></label><label>X 单位 <input id="assetXUnit" maxlength="40" placeholder="例如 V vs RHE" /></label><label>Y 单位 <input id="assetYUnit" maxlength="40" placeholder="例如 mA mg⁻¹" /></label></div>` : '<div class="data-asset-chart-empty">此表未识别到至少两个数值列，因此只显示只读表格。</div>';
+      openModal(`<div class="modal-header"><div><h2>${esc(result.asset.title)}</h2><p>只读预览：${preview.truncated ? '已截断首批行' : '完整小型预览'} · ${esc(preview.delimiter || 'delimited')}。图表仅在浏览器生成，不写回原始文件。</p></div><button class="close-button" data-close-modal>×</button></div><div class="modal-body">${controls}<div id="assetChart"></div>${table}</div><div class="modal-footer"><button type="button" class="primary-button" data-close-modal>关闭</button></div>`, () => {
+        if (numeric.length < 2) return;
+        const draw = () => { $('assetChart').innerHTML = dataAssetSvg(rows, $('assetX').value, $('assetY').value, { type: $('assetChartType').value, title: $('assetChartTitle').value, xUnit: $('assetXUnit').value, yUnit: $('assetYUnit').value }); };
+        ['assetX', 'assetY', 'assetChartType', 'assetChartTitle', 'assetXUnit', 'assetYUnit'].forEach(key => { $(key).onchange = draw; $(key).oninput = draw; });
+        draw();
+      });
+    } catch (error) { toast(`预览数据失败：${error.message}`); }
+  }
+
+  function knowledgeSourceKind(source) {
+    return String(source?.path || '').startsWith('外部资料/') ? '外部只读资料' : '项目内资料';
+  }
+
+  function renderKnowledgeView() {
+    if (!requireProject('knowledgeProjectTitle', 'knowledgeBody')) return;
+    $('knowledgeProjectTitle').textContent = R.active.name;
+    const body = $('knowledgeBody');
+    const result = R.knowledgeResult;
+    const sources = Array.isArray(result?.sources) ? result.sources : [];
+    const resultsHtml = result ? (sources.length
+      ? `<section class="memory-database-panel knowledge-results"><div class="record-field-head"><span>本次按需读取的来源（${sources.length}）</span><small>${result.truncated ? '达到上下文预算，已截断' : '在上下文预算内'}</small></div><p class="record-hint">这些资料因与“${esc(R.knowledgeQuery)}”相关而被读取；未命中的项目资料不会进入本次 AI 上下文。</p><div class="knowledge-source-list">${sources.map((source, index) => `<article class="knowledge-source"><div><b>${index + 1}. ${esc(source.path || '未命名来源')}</b><small>${esc(knowledgeSourceKind(source))} · 章节：${esc(source.heading || '未标注')} · 证据：${esc(source.status || 'reference')}</small></div><span>相关度 ${Number(source.score || 0).toFixed(2)}</span></article>`).join('')}</div><details class="knowledge-context-preview"><summary>查看发送给 AI 的受限参考包</summary><pre>${esc(result.context || '')}</pre></details></section>`
+      : '<section class="memory-database-panel"><b>未找到直接相关的已索引资料。</b><p class="record-hint">可以改用样品编号、实验名称、表征方法、文件名或具体问题重试；这不会触发全库读取。</p></section>')
+      : '<section class="memory-database-panel"><b>尚未检索。</b><p class="record-hint">输入一个研究问题后，系统会先使用项目状态卡定位阶段，再返回少量可追溯的参考片段。</p></section>';
+    body.innerHTML = `<section class="record-panel"><form id="knowledgeSearchForm" class="knowledge-search-form"><label class="form-field full"><span>研究问题或关键词</span><textarea id="knowledgeQueryInput" required maxlength="1000" placeholder="例如：当前 Pt-FeNC 的 ORR 性能结果、异常原因和下一步应验证什么？">${esc(R.knowledgeQuery)}</textarea></label><div class="record-foot"><small class="record-hint">检索只读，不修改实验资料。项目状态卡始终作为导航，详细资料按需召回。</small><button type="submit" class="primary-button">检索项目知识</button></div></form>${resultsHtml}</section>`;
+    $('knowledgeSearchForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const query = $('knowledgeQueryInput').value.trim();
+      if (!query) return;
+      const button = $('knowledgeSearchForm').querySelector('[type=submit]');
+      button.disabled = true; button.textContent = '正在检索…';
+      try { await searchProjectKnowledge(query); renderKnowledgeView(); }
+      catch (error) { button.disabled = false; button.textContent = '检索项目知识'; toast(`知识检索失败：${error.message}`); }
+    });
+  }
+
+  function openExternalSourceDialog() {
+    if (!R.active) return;
+    openModal(`<div class="modal-header"><div><h2>登记外部资料目录</h2><p>该目录只读挂载：SciHub 只检索 Markdown，不移动、复制、覆盖或删除目录中的资料。</p></div><button class="close-button" data-close-modal>×</button></div><form id="externalSourceForm"><div class="modal-body"><div class="form-grid"><label class="form-field full"><span>资料目录</span><input id="externalSourcePath" required placeholder="例如：D:\\桌面文件夹\\大学课业\\导师项目" /></label><label class="form-field"><span>显示名称</span><input id="externalSourceName" maxlength="120" placeholder="例如：导师项目（历史资料）" /></label><label class="form-field"><span>用途说明</span><input id="externalSourcePurpose" maxlength="500" placeholder="例如：只读检索实验方案、日志和项目知识" /></label></div><p class="record-hint">只接受实际存在的本地目录；符号链接、当前 SciHub 项目目录及其子目录会被拒绝。</p></div><div class="modal-footer"><button type="button" class="secondary-button" data-close-modal>取消</button><button type="submit" class="primary-button">登记并建立只读索引</button></div></form>`, () => {
+      $('externalSourceForm').addEventListener('submit', async event => { event.preventDefault(); const button = $('externalSourceForm').querySelector('[type=submit]'); button.disabled = true; try { await api(`${slugPath(R.active.slug)}/sources`, { method:'POST', body: JSON.stringify({ path: $('externalSourcePath').value.trim(), name: $('externalSourceName').value.trim(), purpose: $('externalSourcePurpose').value.trim() }) }); await loadExternalSources(); closeModal(); renderMemoryView(); toast('外部资料目录已只读登记并建立索引'); } catch (error) { button.disabled = false; toast(`登记外部资料目录失败：${error.message}`); } });
     });
   }
 
@@ -4882,7 +5096,7 @@
         const button = $('confirmDeleteMemory');
         button.disabled = true;
         try {
-          await api(`${slugPath(R.active.slug)}/memory/confirmed/${encodeURIComponent(memory.id)}`, { method: 'DELETE', body: JSON.stringify({ reason }) });
+          await api(`${slugPath(R.active.slug)}/memory/confirmed/${encodeURIComponent(memory.id)}`, { method: 'DELETE', body: JSON.stringify({ reason, confirmation: `DELETE ${memory.id}` }) });
           await Promise.all([loadMemoryDatabase(), loadPendingMemory(), loadAgents()]);
           closeModal();
           renderMemoryView();
@@ -5243,12 +5457,15 @@
   function renderActiveView() {
     const v = currentView();
     if (v === 'home') renderHomeView();
+    else if (v === 'dashboard') renderDashboardView();
     else if (v === 'plans') renderPlansView();
     else if (v === 'todo') renderTodoView();
     else if (v === 'planBook') renderPlanBookView();
     else if (v === 'logs') renderLogsView();
     else if (v === 'records') renderRecordsView();
     else if (v === 'characterizations') renderCharacterizationsView();
+    else if (v === 'dataAssets') renderDataAssetsView();
+    else if (v === 'knowledge') renderKnowledgeView();
     else if (v === 'trace') renderTraceView();
     else if (v === 'memory') renderMemoryView();
   }
@@ -5260,12 +5477,15 @@
     renderProjectSidebar();
     renderPlanTaskBanner();
     if (view === 'home') renderHomeView();
+    else if (view === 'dashboard') renderDashboardView();
     else if (view === 'plans') renderPlansView();
     else if (view === 'todo') renderTodoView();
     else if (view === 'planBook') renderPlanBookView();
     else if (view === 'logs') { R.logEditorOpen = false; renderLogsView(); }
     else if (view === 'records') renderRecordsView();
     else if (view === 'characterizations') renderCharacterizationsView();
+    else if (view === 'dataAssets') renderDataAssetsView();
+    else if (view === 'knowledge') renderKnowledgeView();
     else if (view === 'trace') renderTraceView();
     else if (view === 'memory') {
       renderMemoryView();
@@ -5300,7 +5520,18 @@
     document.addEventListener('keydown', e => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's' && ['logs'].includes(currentView())) { e.preventDefault(); saveLog(true); }
     });
-    refreshProjects(false).then(() => { renderActiveView(); if (window.SciHubApp) window.SciHubApp.renderAll(); });
+    refreshProjects(false).then(() => {
+      renderActiveView();
+      if (window.SciHubApp) window.SciHubApp.renderAll();
+      // A first-run prompt makes the tutorial discoverable without changing
+      // any project data.  Once dismissed/opened, it never appears again.
+      try {
+        if (!localStorage.getItem(TUTORIAL_SEEN_KEY)) {
+          localStorage.setItem(TUTORIAL_SEEN_KEY, '1');
+          window.setTimeout(openTutorialWelcome, 350);
+        }
+      } catch { /* browser storage is optional; the toolbar button remains available */ }
+    });
   });
 
   // 暴露给 app.js

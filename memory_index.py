@@ -354,12 +354,14 @@ def _iso_now() -> str:
 class MemoryIndex:
     """Incremental SQLite/FTS index scoped to one project directory."""
 
-    def __init__(self, project_root: str | Path, *, max_chunk_chars: int = 6000):
+    def __init__(self, project_root: str | Path, *, max_chunk_chars: int = 6000, state_root: str | Path | None = None):
         self.project_root = Path(project_root).expanduser().resolve()
         if not self.project_root.exists() or not self.project_root.is_dir():
             raise MemoryIndexError(f"Project directory does not exist: {self.project_root}")
         self.max_chunk_chars = max_chunk_chars
-        self.state_dir = self.project_root / ".scihub"
+        # An external mounted source stays read-only; its derived index can be
+        # owned by the SciHub project instead of creating files beside source.
+        self.state_dir = Path(state_root).expanduser().resolve() if state_root else self.project_root / ".scihub"
         self.db_path = self.state_dir / "memory.sqlite3"
         self.state_path = self.state_dir / "memory-state.json"
         self.status_path = self.state_dir / "index-status.json"
@@ -497,9 +499,10 @@ class MemoryIndex:
                 path.resolve(strict=True).relative_to(self.project_root)
             except (OSError, ValueError):
                 continue
-            # The derived database directory is never itself a source.  Legacy
-            # memory folders remain included intentionally for read-only search.
-            if ".scihub" in relative_parts:
+            # Hidden/tool directories contain runtime prompts, Git metadata or
+            # caches, not project evidence.  They must never enter an Agent's
+            # research context. Legacy non-hidden memory folders remain valid.
+            if any(part.startswith(".") for part in relative_parts):
                 continue
             files.append(path)
         return sorted(files, key=lambda item: item.as_posix().casefold())
