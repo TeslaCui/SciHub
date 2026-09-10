@@ -90,43 +90,56 @@
     </form>
   </section>
 
-  <!-- ── 已登录：科研记录 CRUD ───────────────────────────── -->
+  <!-- ── 已登录：主页 / 实验 / 记录 ─────────────────────── -->
   <section id="app-view" hidden>
-    <div class="toolbar">
-      <input id="search" type="search" placeholder="搜索标题 / 内容 / 标签">
-      <select id="category-filter">
-        <option value="">全部类别</option>
-      </select>
-      <button type="button" id="new-btn" class="primary">＋ 新建记录</button>
+    <nav class="nav" id="main-nav">
+      <button type="button" class="nav-btn active" data-route="home">主页</button>
+      <button type="button" class="nav-btn" data-route="plans">实验方案</button>
+      <button type="button" class="nav-btn" data-route="records">科研记录</button>
+    </nav>
+
+    <div id="view-home" class="view"></div>
+    <div id="view-plans" class="view" hidden></div>
+    <div id="view-plan" class="view" hidden></div>
+    <div id="view-run" class="view" hidden></div>
+
+    <div id="view-records" class="view" hidden>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="搜索标题 / 内容 / 标签">
+        <select id="category-filter">
+          <option value="">全部类别</option>
+        </select>
+        <button type="button" id="new-btn" class="primary">＋ 新建记录</button>
+      </div>
+
+      <form id="record-form" class="card" hidden>
+        <h2 id="form-title">新建科研记录</h2>
+        <label>标题
+          <input id="f-title" required maxlength="200" placeholder="例如：Pt/Fe-N-C 样品 3 的 LSV 测试">
+        </label>
+        <div class="row">
+          <label>类别
+            <select id="f-category"></select>
+          </label>
+          <label>日期
+            <input id="f-date" type="date">
+          </label>
+        </div>
+        <label>标签（英文逗号分隔）
+          <input id="f-tags" placeholder="ORR, LSV, 表征">
+        </label>
+        <label>内容
+          <textarea id="f-content" rows="7" placeholder="记录条件、现象、结论、不确定性与未闭环问题…"></textarea>
+        </label>
+        <div class="actions">
+          <button type="submit" class="primary">保存</button>
+          <button type="button" id="cancel-btn" class="ghost">取消</button>
+        </div>
+      </form>
+
+      <div class="list-head">共 <b id="list-count">0</b> 条记录</div>
+      <div id="records" class="records"></div>
     </div>
-
-    <form id="record-form" class="card" hidden>
-      <h2 id="form-title">新建科研记录</h2>
-      <label>标题
-        <input id="f-title" required maxlength="200" placeholder="例如：Pt/Fe-N-C 样品 3 的 LSV 测试">
-      </label>
-      <div class="row">
-        <label>类别
-          <select id="f-category"></select>
-        </label>
-        <label>日期
-          <input id="f-date" type="date">
-        </label>
-      </div>
-      <label>标签（英文逗号分隔）
-        <input id="f-tags" placeholder="ORR, LSV, 表征">
-      </label>
-      <label>内容
-        <textarea id="f-content" rows="7" placeholder="记录条件、现象、结论、不确定性与未闭环问题…"></textarea>
-      </label>
-      <div class="actions">
-        <button type="submit" class="primary">保存</button>
-        <button type="button" id="cancel-btn" class="ghost">取消</button>
-      </div>
-    </form>
-
-    <div class="list-head">共 <b id="list-count">0</b> 条记录</div>
-    <div id="records" class="records"></div>
   </section>
 </main>
 
@@ -134,5 +147,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="app.js"></script>
+<script src="experiment.js"></script>
 </body>
 </html>

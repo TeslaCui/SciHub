@@ -107,6 +107,7 @@ function applyUser(user) {
   if (state.user) {
     if (changed || !state.records.length) loadRecords();
     if (changed) ensureProfile();
+    if (changed) route('home');
   } else {
     state.records = [];
     state.editingId = null;
@@ -506,3 +507,109 @@ bindEvents();
 renderRecords();
 initAuth();
 registerServiceWorker();
+
+/* ── 路由与主页 ────────────────────────────────────────── */
+
+const ROUTES = ['home', 'plans', 'plan', 'run', 'records'];
+
+function fmtText(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function showView(name) {
+  ROUTES.forEach((r) => {
+    const node = $('view-' + r);
+    if (node) node.hidden = r !== name;
+  });
+
+  const navMap = { plan: 'plans', run: 'home' };
+  const navTarget = navMap[name] || name;
+  document.querySelectorAll('.nav-btn').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.route === navTarget);
+  });
+  window.scrollTo({ top: 0 });
+}
+
+function route(name, param) {
+  if (!state.user) return;
+  const target = ROUTES.indexOf(name) === -1 ? 'home' : name;
+  showView(target);
+
+  if (target === 'home') renderHome();
+  else if (target === 'plans' && window.Plans) window.Plans.list();
+  else if (target === 'plan' && param && window.Plans) window.Plans.editor(param);
+  else if (target === 'run' && param && window.Run) window.Run.render(param);
+}
+
+async function renderHome() {
+  const host = $('view-home');
+  host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
+
+  let runs = [];
+  try {
+    if (window.Run) runs = await window.Run.running();
+  } catch (error) {
+    console.error('[SciHub] 读取进行中实验失败：', error);
+  }
+
+  const { data: recent } = await client
+    .from(TABLE)
+    .select('id,title,category,occurred_on')
+    .order('created_at', { ascending: false })
+    .limit(3);
+
+  host.innerHTML = [
+    '<div class="section-title">进行中的实验</div>',
+    runs.length
+      ? runs.map((r) => [
+          '<article class="home-card">',
+          '  <div class="hc-main">',
+          '    <div class="hc-title">' + esc(r.title) + '</div>',
+          '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中</div>',
+          '  </div>',
+          '  <div class="hc-actions"><button type="button" class="primary" data-run="' + r.id + '">继续</button></div>',
+          '</article>',
+        ].join('\n')).join('\n')
+      : '<div class="empty">当前没有进行中的实验。</div>',
+
+    '<div class="section-title">快捷入口</div>',
+    '<div class="quick-grid">',
+    '  <button type="button" class="quick" data-go="plans"><b>实验方案</b><span>导入 Word 方案、开始一次实验</span></button>',
+    '  <button type="button" class="quick" data-go="records"><b>科研记录</b><span>查看与检索已保存的记录</span></button>',
+    '  <button type="button" class="quick" data-new-record><b>新建记录</b><span>随手记一条实验日志或文献笔记</span></button>',
+    '</div>',
+
+    '<div class="section-title">最近记录</div>',
+    (recent && recent.length)
+      ? recent.map((x) => [
+          '<article class="home-card">',
+          '  <div class="hc-main">',
+          '    <div class="hc-title">' + esc(x.title) + '</div>',
+          '    <div class="hc-meta">' + esc(x.category || '') + ' · ' + esc(x.occurred_on || '') + '</div>',
+          '  </div>',
+          '</article>',
+        ].join('\n')).join('\n')
+      : '<div class="empty">还没有记录。</div>',
+  ].join('\n');
+
+  host.querySelectorAll('[data-run]').forEach((btn) => {
+    btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
+  });
+  host.querySelectorAll('[data-go]').forEach((btn) => {
+    btn.addEventListener('click', () => route(btn.dataset.go));
+  });
+  const newRec = host.querySelector('[data-new-record]');
+  if (newRec) {
+    newRec.addEventListener('click', () => {
+      route('records');
+      setTimeout(() => openForm(null), 0);
+    });
+  }
+}
+
+document.querySelectorAll('.nav-btn').forEach((btn) => {
+  btn.addEventListener('click', () => route(btn.dataset.route));
+});

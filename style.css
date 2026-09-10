@@ -236,3 +236,63 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .status.warn { color: var(--warn); border-color: #fedf89; background: #fffaeb; }
 
 .footer { text-align: center; color: var(--muted); font-size: 12px; padding: 18px; }
+
+/* ── 主导航 ───────────────────────────────────────────── */
+.nav { display: flex; gap: 6px; margin-bottom: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+.nav-btn { flex: 1; background: transparent; color: var(--muted); font-size: 14px; padding: 8px; }
+.nav-btn.active { background: var(--brand); color: var(--brand-ink); font-weight: 600; }
+
+/* ── 主页 ─────────────────────────────────────────────── */
+.section-title { font-size: 14px; font-weight: 600; margin: 20px 2px 10px; }
+.section-title:first-child { margin-top: 4px; }
+
+.home-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--brand);
+  border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 10px;
+}
+.home-card .hc-main { min-width: 0; }
+.home-card .hc-title { font-weight: 600; font-size: 15px; }
+.home-card .hc-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.home-card .hc-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.home-card .hc-actions button { font-size: 13px; padding: 6px 12px; }
+
+.quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.quick { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; text-align: left; }
+.quick b { display: block; font-size: 15px; margin-bottom: 4px; }
+.quick span { color: var(--muted); font-size: 12px; }
+.quick:hover { border-color: var(--brand); }
+
+/* ── 方案与步骤 ───────────────────────────────────────── */
+.step-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 10px; }
+.step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.step-no { width: 24px; height: 24px; flex-shrink: 0; display: grid; place-items: center; border-radius: 50%; background: rgba(15, 118, 110, .1); color: var(--brand); font-size: 12px; font-weight: 600; }
+.step-title-text { font-weight: 600; flex: 1; min-width: 0; }
+.step-instruction { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
+
+.field-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; margin-bottom: 8px; }
+
+/* ── 执行界面 ─────────────────────────────────────────── */
+.run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.progress { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-bottom: 14px; }
+.progress i { display: block; height: 100%; background: var(--brand); width: 0; transition: width .2s; }
+
+.run-step-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
+.run-step-card h2 { font-size: 17px; margin: 0 0 6px; }
+.run-step-card .dur { color: var(--warn); font-size: 12px; margin-bottom: 10px; display: block; }
+.run-step-card .instr { color: var(--muted); font-size: 13px; white-space: pre-wrap; margin-bottom: 16px; }
+
+.data-field { margin-bottom: 14px; }
+.data-field .unit { color: var(--muted); font-size: 12px; margin-left: 6px; }
+
+.photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.photo { position: relative; width: 92px; height: 92px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
+.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo button { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; line-height: 1; font-size: 12px; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; border: none; }
+
+.photo-add { width: 92px; height: 92px; border: 1px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 12px; display: grid; place-items: center; text-align: center; cursor: pointer; }
+.photo-add:hover { border-color: var(--brand); color: var(--brand); }
+
+.run-actions { display: flex; gap: 10px; margin-top: 18px; }
+.run-actions .primary { width: auto; }
+.autosave { color: var(--muted); font-size: 12px; margin-top: 10px; min-height: 18px; }
