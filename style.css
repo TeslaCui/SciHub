@@ -137,6 +137,25 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 .tab.active { background: #fff; color: var(--brand); font-weight: 600; box-shadow: var(--shadow); }
 
+/* 密码框：右侧「显示 / 隐藏」切换 */
+.pw-field { position: relative; display: block; margin-top: 5px; }
+.pw-field input { margin-top: 0; padding-right: 58px; }
+
+.pw-toggle {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+}
+
+.pw-toggle:hover { color: var(--brand); }
+
 /* ── 工具条与列表 ─────────────────────────────────────── */
 .toolbar {
   display: grid;
