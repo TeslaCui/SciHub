@@ -146,7 +146,8 @@
       '  </div>',
       '  <div class="hc-actions">',
       '    <button type="button" class="primary" data-start="' + p.id + '">开始实验</button>',
-      '    <button type="button" class="ghost" data-view="' + p.id + '">查看</button>',
+      '    <button type="button" class="ghost" data-view="' + p.id + '">查看 / 编辑</button>',
+      '    <button type="button" class="ghost" data-rename="' + p.id + '" data-name="' + esc(p.title) + '">重命名</button>',
       '    <button type="button" class="ghost del" data-del="' + p.id + '">删除</button>',
       '  </div>',
       '</article>',
@@ -170,6 +171,7 @@
 
     host.querySelectorAll('[data-start]').forEach((b) => b.addEventListener('click', () => startRun(Number(b.dataset.start))));
     host.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => route('plan', Number(b.dataset.view))));
+    host.querySelectorAll('[data-rename]').forEach((b) => b.addEventListener('click', () => renamePlan(Number(b.dataset.rename), b.dataset.name)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
       if (!window.confirm('删除这个方案？已生成的实验记录不受影响。')) return;
       await client.from(PLAN).delete().eq('id', Number(b.dataset.del));
@@ -198,30 +200,35 @@
 
   function renderDraft() {
     const host = $('view-plan');
+    const editing = !!draft.id;
     host.innerHTML = [
-      '<div class="section-title">核对导入结果</div>',
+      '<div class="section-title">' + (editing ? '编辑方案' : '核对导入结果') + '</div>',
       '<div class="card" style="margin-bottom:14px">',
       '  <label>方案名称<input id="draft-title" value="' + esc(draft.title) + '"></label>',
-      '  <p class="hint small">共 ' + draft.steps.length + ' 个步骤。可修改标题、删掉不需要的步骤或字段，确认后保存。</p>',
+      '  <p class="hint small">共 ' + draft.steps.length + ' 个步骤。' + (editing
+        ? '保存后会更新这个方案；已经开始的实验用的是启动时的快照，不受影响。'
+        : '可修改标题、增删步骤与字段，确认后保存。') + '</p>',
       '</div>',
       draft.steps.map((s, si) => [
         '<div class="step-card" data-step="' + si + '">',
         '  <div class="step-head"><span class="step-no">' + (si + 1) + '</span>',
-        '    <input class="step-title-text" data-title="' + si + '" value="' + esc(s.title) + '">',
+        '    <input class="step-title-text" data-title="' + si + '" value="' + esc(s.title) + '" placeholder="步骤标题">',
         '    <button type="button" class="ghost" data-drop-step="' + si + '">删除步骤</button>',
         '  </div>',
-        s.duration_hint ? '  <div class="step-instruction">时长提示：' + esc(s.duration_hint) + '</div>' : '',
+        '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
+        '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
         '  <div style="margin-top:8px">' + (s.fields.length ? s.fields.map((f, fi) => [
           '    <div class="field-row">',
           '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
           '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit) + '" placeholder="单位，可空">',
           '    </div>',
-        ].join('\n')).join('') : '<p class="hint small">这一节没有识别到填空字段（例如汇总表），可以手动添加或直接跳过。</p>') + '</div>',
+        ].join('\n')).join('') : '<p class="hint small">这一节还没有数据字段，可点下方添加。</p>') + '</div>',
         '  <button type="button" class="ghost" data-add-field="' + si + '" style="margin-top:6px">＋ 添加字段</button>',
         '</div>',
       ].join('\n')).join(''),
+      '<button type="button" class="ghost" id="draft-add-step" style="margin-bottom:10px">＋ 添加步骤</button>',
       '<div class="run-actions">',
-      '  <button type="button" class="primary" id="draft-save">保存方案</button>',
+      '  <button type="button" class="primary" id="draft-save">' + (editing ? '保存修改' : '保存方案') + '</button>',
       '  <button type="button" class="ghost" id="draft-cancel">取消</button>',
       '</div>',
     ].join('\n');
@@ -232,7 +239,11 @@
     draft.title = $('draft-title').value.trim() || draft.title;
     draft.steps.forEach((s, si) => {
       const t = document.querySelector('[data-title="' + si + '"]');
+      const d = document.querySelector('[data-duration="' + si + '"]');
+      const ins = document.querySelector('[data-instruction="' + si + '"]');
       if (t) s.title = t.value.trim();
+      if (d) s.duration_hint = d.value.trim();
+      if (ins) s.instruction = ins.value;
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
         const u = document.querySelector('[data-field-unit="' + si + '-' + fi + '"]');
@@ -255,46 +266,106 @@
 
     host.querySelectorAll('[data-add-field]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
-      draft.steps[Number(b.dataset.addField)].fields.push({ label: '新字段', unit: '' });
+      draft.steps[Number(b.dataset.addField)].fields.push({ label: '', unit: '' });
       renderDraft();
     }));
 
+    $('draft-add-step').addEventListener('click', () => {
+      collectDraft();
+      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', fields: [] });
+      renderDraft();
+    });
+
     $('draft-cancel').addEventListener('click', () => { draft = null; route('plans'); });
 
-    $('draft-save').addEventListener('click', async () => {
-      collectDraft();
-      if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
+    $('draft-save').addEventListener('click', saveDraft);
+  }
 
-      const btn = $('draft-save');
-      btn.disabled = true;
-      try {
+  /* 保存草稿：新建（来自 docx 导入）或更新（编辑已有方案） */
+  async function saveDraft() {
+    collectDraft();
+    if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
+    const title = draft.title.trim() || '未命名实验方案';
+    const wasEdit = !!draft.id;
+
+    const btn = $('draft-save');
+    btn.disabled = true;
+    try {
+      let planId = draft.id;
+
+      if (planId) {
+        const { error } = await client.from(PLAN).update({ title: title }).eq('id', planId);
+        if (error) throw error;
+        const { error: delErr } = await client.from(STEP).delete().eq('plan_id', planId);
+        if (delErr) throw delErr;
+      } else {
         const { data: plan, error } = await client.from(PLAN).insert({
-          title: draft.title, source: draft.source, user_id: state.user.id,
+          title: title, source: draft.source || '', user_id: state.user.id,
         }).select().single();
         if (error) throw error;
-
-        const rows = draft.steps.map((s, i) => ({
-          user_id: state.user.id,
-          plan_id: plan.id,
-          position: i,
-          title: s.title || ('步骤 ' + (i + 1)),
-          instruction: s.instruction || '',
-          fields: s.fields,
-          duration_hint: s.duration_hint || '',
-        }));
-        const { error: stepErr } = await client.from(STEP).insert(rows);
-        if (stepErr) throw stepErr;
-
-        draft = null;
-        setStatus('方案已保存。', 'ok');
-        route('plans');
-      } catch (err) {
-        console.error('[SciHub] 保存方案失败：', err);
-        setStatus('保存失败，请稍后重试。', 'error');
-      } finally {
-        btn.disabled = false;
+        planId = plan.id;
       }
-    });
+
+      const rows = draft.steps.map((s, i) => ({
+        user_id: state.user.id,
+        plan_id: planId,
+        position: i,
+        title: s.title || ('步骤 ' + (i + 1)),
+        instruction: s.instruction || '',
+        fields: s.fields,
+        duration_hint: s.duration_hint || '',
+      }));
+      const { error: stepErr } = await client.from(STEP).insert(rows);
+      if (stepErr) throw stepErr;
+
+      draft = null;
+      setStatus(wasEdit ? '方案已更新。' : '方案已保存。', 'ok');
+      route('plans');
+    } catch (err) {
+      console.error('[SciHub] 保存方案失败：', err);
+      setStatus('保存失败，请稍后重试。', 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  /* 重命名（方案列表与详情页共用） */
+  async function renamePlan(planId, currentTitle) {
+    const name = window.prompt('新的方案名称', currentTitle || '');
+    if (name == null) return;
+    const title = name.trim();
+    if (!title || title === currentTitle) return;
+
+    const { error } = await client.from(PLAN).update({ title: title }).eq('id', planId);
+    if (error) {
+      console.error('[SciHub] 重命名失败：', error);
+      setStatus('重命名失败，请稍后重试。', 'error');
+      return;
+    }
+    setStatus('已重命名为「' + title + '」。', 'ok');
+    if ($('view-plan').hidden) listPlans();
+    else route('plan', planId);
+  }
+
+  /* 进入编辑模式：把已有方案载入可编辑草稿 */
+  async function editPlan(planId) {
+    const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
+    const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (!plan) { setStatus('方案不存在。', 'error'); return; }
+
+    draft = {
+      id: plan.id,
+      title: plan.title,
+      source: plan.source || '',
+      steps: (steps || []).map((s) => ({
+        title: s.title || '',
+        instruction: s.instruction || '',
+        duration_hint: s.duration_hint || '',
+        fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '' })),
+      })),
+    };
+    renderDraft();
+    showView('plan');
   }
 
   /* ══ 方案查看 / 编辑 ════════════════════════════════════ */
@@ -322,12 +393,16 @@
       ].join('\n')).join(''),
       '<div class="run-actions">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
+      '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
+      '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',
     ].join('\n');
 
     $('plan-back').addEventListener('click', () => route('plans'));
     $('plan-start').addEventListener('click', () => startRun(planId));
+    $('plan-edit').addEventListener('click', () => editPlan(planId));
+    $('plan-rename').addEventListener('click', () => renamePlan(planId, plan.title));
   }
 
   /* ══ 开始一次实验（把方案快照进 run_steps）══════════════ */
