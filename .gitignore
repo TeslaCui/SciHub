@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+dist/
+outputs/
+
+# 本机配置、密钥与临时文件
+.env
+.env.*
+*.local
+*.log
+~$*
+*.tmp
+*.bak
+
+# 工具缓存
+.reasonix/
+__pycache__/
+.pytest_cache/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini

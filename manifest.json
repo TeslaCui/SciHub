@@ -1,0 +1,12 @@
+{
+  "name": "SciHub · 科研工作台",
+  "short_name": "SciHub",
+  "description": "静态科研记录工作台：Supabase 账号登录，记录按账号云端隔离。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f9",
+  "theme_color": "#0f766e",
+  "lang": "zh-CN",
+  "icons": []
+}

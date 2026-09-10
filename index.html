@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SciHub · 科研工作台</title>
+<meta name="description" content="静态科研记录工作台：Supabase 账号登录，记录按账号云端隔离。">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">Sci</span>
+    <span class="brand-text"><b>SciHub</b><small>科研工作台</small></span>
+  </div>
+  <div class="user" id="user-box" hidden>
+    <span class="user-email" id="user-email"></span>
+    <button type="button" id="refresh-btn" class="ghost">刷新</button>
+    <button type="button" id="logout-btn" class="ghost">退出</button>
+  </div>
+</header>
+
+<p id="status" class="status" hidden></p>
+
+<main>
+  <!-- ── 未登录：登录 / 注册 ─────────────────────────────── -->
+  <section id="auth-view" class="card auth">
+    <h1>登录科研工作台</h1>
+    <p class="hint">账号与数据托管在 Supabase，按账号隔离；同一个账号可在多设备上访问自己的记录。</p>
+
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab active" data-mode="login">登录</button>
+      <button type="button" class="tab" data-mode="register">注册</button>
+    </div>
+
+    <form id="auth-form" autocomplete="on">
+      <label>邮箱
+        <input id="auth-email" type="email" required autocomplete="email" placeholder="you@example.com">
+      </label>
+      <label>密码
+        <input id="auth-password" type="password" required minlength="6" autocomplete="current-password" placeholder="至少 6 位">
+      </label>
+      <button id="auth-submit" type="submit" class="primary">登录</button>
+    </form>
+    <p class="hint small">首次使用请先「注册」。若 Supabase 开启了邮箱确认，注册后需先到邮箱点确认链接。</p>
+  </section>
+
+  <!-- ── 已登录：科研记录 CRUD ───────────────────────────── -->
+  <section id="app-view" hidden>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="搜索标题 / 内容 / 标签">
+      <select id="category-filter">
+        <option value="">全部类别</option>
+      </select>
+      <button type="button" id="new-btn" class="primary">＋ 新建记录</button>
+    </div>
+
+    <form id="record-form" class="card" hidden>
+      <h2 id="form-title">新建科研记录</h2>
+      <label>标题
+        <input id="f-title" required maxlength="200" placeholder="例如：Pt/Fe-N-C 样品 3 的 LSV 测试">
+      </label>
+      <div class="row">
+        <label>类别
+          <select id="f-category"></select>
+        </label>
+        <label>日期
+          <input id="f-date" type="date">
+        </label>
+      </div>
+      <label>标签（英文逗号分隔）
+        <input id="f-tags" placeholder="ORR, LSV, 表征">
+      </label>
+      <label>内容
+        <textarea id="f-content" rows="7" placeholder="记录条件、现象、结论、不确定性与未闭环问题…"></textarea>
+      </label>
+      <div class="actions">
+        <button type="submit" class="primary">保存</button>
+        <button type="button" id="cancel-btn" class="ghost">取消</button>
+      </div>
+    </form>
+
+    <div class="list-head">共 <b id="list-count">0</b> 条记录</div>
+    <div id="records" class="records"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <span id="footer-note">静态站点 · 数据存于 Supabase（RLS 按账号隔离）</span>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="app.js"></script>
+</body>
+</html>
