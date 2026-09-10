@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SciHub · 科研工作台</title>
-<meta name="description" content="静态科研记录工作台：Supabase 账号登录，记录按账号云端隔离。">
+<meta name="description" content="科研工作台：记录实验日志、文献笔记、表征数据与结果分析。">
 <meta name="theme-color" content="#0f766e">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css">
@@ -28,8 +28,7 @@
 <main>
   <!-- ── 未登录：登录 / 注册 ─────────────────────────────── -->
   <section id="auth-view" class="card auth">
-    <h1>登录科研工作台</h1>
-    <p class="hint">账号与数据托管在 Supabase，按账号隔离；同一个账号可在多设备上访问自己的记录。</p>
+    <h1 id="auth-title">登录</h1>
 
     <div class="tabs" role="tablist">
       <button type="button" class="tab active" data-mode="login">登录</button>
@@ -37,23 +36,37 @@
     </div>
 
     <form id="auth-form" autocomplete="on">
-      <label><span id="auth-identifier-label">邮箱 / 用户名 / 电话</span>
+      <label><span id="auth-identifier-label">账号</span>
         <input id="auth-identifier" type="text" required autocomplete="username" placeholder="邮箱 / 用户名 / 电话">
       </label>
+
       <div id="register-extra" hidden>
         <label>用户名
-          <input id="auth-username" type="text" maxlength="40" autocomplete="off" placeholder="登录时可用它代替邮箱">
+          <input id="auth-username" type="text" maxlength="40" autocomplete="off" placeholder="用户名">
         </label>
-        <label>电话（选填）
-          <input id="auth-phone" type="tel" maxlength="30" autocomplete="off" placeholder="填了也能用来登录">
+        <label>电话
+          <input id="auth-phone" type="tel" maxlength="30" autocomplete="off" placeholder="手机号">
         </label>
       </div>
+
       <label>密码
-        <input id="auth-password" type="password" required minlength="6" autocomplete="current-password" placeholder="至少 6 位">
+        <span class="pw-field">
+          <input id="auth-password" type="password" required autocomplete="current-password" placeholder="密码">
+          <button type="button" class="pw-toggle" data-target="auth-password" aria-label="显示密码">显示</button>
+        </span>
       </label>
+
+      <div id="confirm-extra" hidden>
+        <label>确认密码
+          <span class="pw-field">
+            <input id="auth-password2" type="password" autocomplete="new-password" placeholder="再次输入密码">
+            <button type="button" class="pw-toggle" data-target="auth-password2" aria-label="显示密码">显示</button>
+          </span>
+        </label>
+      </div>
+
       <button id="auth-submit" type="submit" class="primary">登录</button>
     </form>
-    <p class="hint small">首次使用请先「注册」：注册填邮箱 + 用户名（电话选填），之后用「邮箱 / 用户名 / 电话」任一 + 密码即可登录，无需邮箱验证。</p>
   </section>
 
   <!-- ── 已登录：科研记录 CRUD ───────────────────────────── -->
@@ -96,9 +109,7 @@
   </section>
 </main>
 
-<footer class="footer">
-  <span id="footer-note">静态站点 · 数据存于 Supabase（RLS 按账号隔离）</span>
-</footer>
+<footer class="footer">© 2026 SciHub</footer>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="app.js"></script>
