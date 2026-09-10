@@ -618,6 +618,59 @@ if ($('modal')) {
 
 /* ── 路由与主页 ────────────────────────────────────────── */
 
+/* ── 版本标识与更新检查 ────────────────────────────────── */
+
+/* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
+   它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
+const APP_VERSION = '0.7.0';
+
+async function checkVersion() {
+  const label = $('app-version');
+  const btn = $('update-btn');
+  if (label) {
+    label.textContent = 'v' + APP_VERSION;
+    label.className = 'ver';
+    label.title = '当前页面运行的前端版本';
+  }
+  if (btn) btn.hidden = true;
+
+  try {
+    const res = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const latest = String(data.version || '').trim();
+    if (!latest) return;
+
+    if (latest !== APP_VERSION) {
+      if (label) {
+        label.textContent = 'v' + APP_VERSION + ' → v' + latest;
+        label.className = 'ver ver-outdated';
+        label.title = '页面运行的是 v' + APP_VERSION + '，服务器上已是 v' + latest + '，请点击更新';
+      }
+      if (btn) btn.hidden = false;
+    } else if (label) {
+      label.title = '已是最新版本（v' + latest + '）';
+    }
+  } catch (_error) {
+    /* 离线时静默忽略 */
+  }
+}
+
+if ($('update-btn')) {
+  $('update-btn').addEventListener('click', async () => {
+    try {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k)));
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    } catch (_error) { /* 清缓存失败也照样刷新 */ }
+    location.reload();
+  });
+}
+
+checkVersion();
+setInterval(checkVersion, 5 * 60 * 1000);
+
 const ROUTES = ['home', 'plans', 'plan', 'run', 'records'];
 
 function fmtText(ts) {
