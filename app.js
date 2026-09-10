@@ -58,20 +58,18 @@ function setStatus(message, kind) {
   if (kind === 'ok') statusTimer = setTimeout(() => { box.hidden = true; }, 3500);
 }
 
-/* 面向用户的错误文案：不暴露后端实现细节，原始错误只进控制台 */
 function friendly(error) {
   const msg = (error && (error.message || error.error_description || error.details)) || '';
   const code = (error && error.code) || '';
-  console.error('[SciHub]', error);
   if (/Invalid login credentials/i.test(msg)) return '账号或密码不正确。';
-  if (/Email not confirmed/i.test(msg)) return '账号尚未完成邮箱验证。';
-  if (/User already registered/i.test(msg)) return '该邮箱已被注册。';
-  if (/Password should be at least|password.*(short|length)/i.test(msg)) return '密码长度不符合要求。';
-  if (/rate limit|too many/i.test(msg)) return '操作过于频繁，请稍后再试。';
-  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return '网络连接失败，请稍后重试。';
-  if (code === '23505' || /duplicate key/i.test(msg)) return '用户名或电话已被占用。';
-  if (code === '23503') return '账号状态异常，请重新登录。';
-  return '操作失败，请稍后重试。';
+  if (/Email not confirmed/i.test(msg)) return '邮箱未验证：请在 Supabase 关闭 Confirm email（Authentication → Providers → Email）。';
+  if (/User already registered/i.test(msg)) return '该邮箱已注册，请直接登录或换一个邮箱。';
+  if (/Password should be at least/i.test(msg)) return '密码太短：至少 6 位。';
+  if (/rate limit|too many/i.test(msg)) return '请求过于频繁，请稍后再试。';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return '网络请求失败：请检查网络，或确认 Supabase 项目可访问。';
+  if (code === '23505' || /duplicate key/i.test(msg)) return '用户名或电话已被占用，请换一个。';
+  if (code === '23503') return '账号关联已失效，请退出后重新登录。';
+  return msg || '操作失败，请重试。';
 }
 
 function isMissingTable(error) {
@@ -84,7 +82,7 @@ function isMissingTable(error) {
 
 async function initAuth() {
   if (!client) {
-    setStatus('服务加载失败，请检查网络后刷新页面。', 'error');
+    setStatus('Supabase SDK 未加载：请检查网络能否访问 cdn.jsdelivr.net。', 'error');
     $('auth-submit').disabled = true;
     return;
   }
@@ -102,7 +100,7 @@ function applyUser(user) {
   $('auth-view').hidden = !!state.user;
   $('app-view').hidden = !state.user;
   $('user-box').hidden = !state.user;
-  if (state.user) $('user-email').textContent = state.user.email || '';
+  if (state.user) $('user-email').textContent = state.user.email || '(已登录)';
 
   if (state.user) {
     if (changed || !state.records.length) loadRecords();
@@ -115,7 +113,7 @@ function applyUser(user) {
   }
 }
 
-/* ── 登录 / 注册 ───────────────────────────────────────── */
+/* ── 注册 / 登录：邮箱 · 用户名 · 电话，三选一 ───────────── */
 
 async function submitAuth(event) {
   event.preventDefault();
@@ -133,12 +131,12 @@ async function submitAuth(event) {
   }
 }
 
-/* 登录：账号（邮箱 / 用户名 / 电话 任一）+ 密码 */
+/* 登录：邮箱 / 用户名 / 电话 任一 + 密码，不需要任何邮箱验证 */
 async function login() {
   const identifier = $('auth-identifier').value.trim();
   const password = $('auth-password').value;
-  if (!identifier || !password) {
-    setStatus('请填写账号和密码。', 'error');
+  if (!identifier || password.length < 6) {
+    setStatus('请填写账号（邮箱 / 用户名 / 电话）和至少 6 位密码。', 'error');
     return;
   }
 
@@ -147,7 +145,7 @@ async function login() {
     const { data, error } = await client.rpc('research_lookup_login_email', { p_identifier: identifier });
     if (error) throw error;
     if (!data) {
-      setStatus('账号不存在，请检查后重试。', 'error');
+      setStatus('找不到这个用户名 / 电话对应的账号，请检查一下，或改用邮箱登录。', 'error');
       return;
     }
     email = data;
@@ -156,17 +154,15 @@ async function login() {
   const { error } = await client.auth.signInWithPassword({ email: email, password: password });
   if (error) throw error;
   $('auth-password').value = '';
-  $('auth-password2').value = '';
   setStatus('登录成功。', 'ok');
 }
 
-/* 注册：邮箱 + 用户名 + 电话 + 密码（二次确认） */
+/* 注册：邮箱 + 用户名 + 电话（选填）+ 密码 */
 async function register() {
   const email = $('auth-identifier').value.trim();
   const username = $('auth-username').value.trim();
   const phone = $('auth-phone').value.trim();
   const password = $('auth-password').value;
-  const password2 = $('auth-password2').value;
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
     setStatus('请填写正确的邮箱地址。', 'error');
@@ -176,16 +172,8 @@ async function register() {
     setStatus('请填写用户名。', 'error');
     return;
   }
-  if (!phone) {
-    setStatus('请填写电话。', 'error');
-    return;
-  }
-  if (!password) {
-    setStatus('请填写密码。', 'error');
-    return;
-  }
-  if (password !== password2) {
-    setStatus('两次输入的密码不一致。', 'error');
+  if (password.length < 6) {
+    setStatus('密码至少 6 位。', 'error');
     return;
   }
 
@@ -198,32 +186,31 @@ async function register() {
   });
   if (conflictError) throw conflictError;
   if (conflict === 'username') { setStatus('该用户名已被占用，请换一个。', 'error'); return; }
-  if (conflict === 'phone') { setStatus('该电话已被占用，请换一个。', 'error'); return; }
+  if (conflict === 'phone') { setStatus('该电话已被占用，请换一个或留空。', 'error'); return; }
   if (conflict === 'email') { setStatus('该邮箱已注册，请直接登录。', 'error'); return; }
 
   const { data, error } = await client.auth.signUp({ email: email, password: password });
   if (error) throw error;
 
   if (!data.session || !data.user) {
-    /* 项目仍开着邮箱确认，拿不到会话：暂存登记信息，登录成功后补写 */
+    /* 项目仍开着 Confirm email，拿不到会话：暂存登记信息，登录成功后补写 */
     localStorage.setItem(PENDING_PROFILE_KEY, JSON.stringify({ email: email, username: username, phone: phone }));
-    setStatus('账号已创建，请查收邮箱完成验证后登录。', 'warn');
+    setStatus('账号已创建。请先在 Supabase 关闭 Confirm email，然后直接登录即可完成登记。', 'warn');
     return;
   }
 
   const { error: profileError } = await client.from(PROFILE_TABLE).insert({
     user_id: data.user.id,
     username: username,
-    phone: phone,
+    phone: phone || null,
     email: email,
   });
   if (profileError) {
-    setStatus('账号已创建，但资料保存失败：' + friendly(profileError), 'error');
+    setStatus('账号已创建，但用户名 / 电话登记失败：' + friendly(profileError), 'error');
     return;
   }
 
   $('auth-password').value = '';
-  $('auth-password2').value = '';
   setStatus('注册成功，已登录。', 'ok');
 }
 
@@ -249,7 +236,7 @@ async function ensureProfile() {
   if (insertError) return;
 
   localStorage.removeItem(PENDING_PROFILE_KEY);
-  setStatus('资料已同步。', 'ok');
+  setStatus('已补登记用户名 / 电话，之后可用它们登录。', 'ok');
 }
 
 function readPendingProfile() {
@@ -282,9 +269,13 @@ async function loadRecords() {
 
   if (error) {
     state.records = [];
-    state.tableMissing = isMissingTable(error);
-    console.error('[SciHub] 记录读取失败：', error);
-    setStatus('记录暂时无法加载，请稍后重试。', 'error');
+    if (isMissingTable(error)) {
+      state.tableMissing = true;
+      setStatus('数据表 research_records 还不存在：请在 Supabase SQL Editor 执行仓库根目录的 supabase_schema.sql，然后点右上角「刷新」。', 'warn');
+    } else {
+      state.tableMissing = false;
+      setStatus(friendly(error), 'error');
+    }
     renderRecords();
     return;
   }
@@ -326,9 +317,12 @@ async function submitRecord(event) {
     closeForm();
     await loadRecords();
   } catch (error) {
-    state.tableMissing = isMissingTable(error);
-    setStatus(friendly(error), 'error');
-    renderRecords();
+    if (isMissingTable(error)) {
+      state.tableMissing = true;
+      setStatus('数据表不存在：请先执行 supabase_schema.sql。', 'warn');
+    } else {
+      setStatus(friendly(error), 'error');
+    }
   }
 }
 
@@ -383,7 +377,7 @@ function renderRecords() {
   $('list-count').textContent = String(list.length);
 
   if (state.tableMissing) {
-    host.innerHTML = '<div class="empty">记录暂时无法加载，请稍后重试。</div>';
+    host.innerHTML = '<div class="empty">数据表尚未创建。执行 <b>supabase_schema.sql</b> 后即可开始记录。</div>';
     return;
   }
   if (!list.length) {
@@ -445,7 +439,7 @@ function fillCategorySelects() {
   $('category-filter').innerHTML = '<option value="">全部类别</option>' + options;
 }
 
-/* 切换「登录 / 注册」：注册时才展开用户名、电话与确认密码 */
+/* 切换「登录 / 注册」：注册时才显示用户名与电话 */
 function switchAuthMode(mode) {
   state.mode = mode === 'register' ? 'register' : 'login';
   const isRegister = state.mode === 'register';
@@ -454,15 +448,11 @@ function switchAuthMode(mode) {
     t.classList.toggle('active', t.dataset.mode === state.mode);
   });
 
-  $('auth-title').textContent = isRegister ? '注册' : '登录';
-  $('auth-identifier-label').textContent = isRegister ? '邮箱' : '账号';
-  $('auth-identifier').setAttribute('placeholder', isRegister ? '邮箱地址' : '邮箱 / 用户名 / 电话');
+  $('auth-identifier-label').textContent = isRegister ? '邮箱' : '邮箱 / 用户名 / 电话';
+  $('auth-identifier').setAttribute('placeholder', isRegister ? 'you@example.com' : '邮箱 / 用户名 / 电话');
   $('auth-identifier').setAttribute('autocomplete', isRegister ? 'email' : 'username');
   $('register-extra').hidden = !isRegister;
-  $('confirm-extra').hidden = !isRegister;
   $('auth-username').required = isRegister;
-  $('auth-phone').required = isRegister;
-  $('auth-password2').required = isRegister;
   $('auth-submit').textContent = isRegister ? '注册' : '登录';
   $('auth-password').setAttribute('autocomplete', isRegister ? 'new-password' : 'current-password');
 }
@@ -472,20 +462,9 @@ function bindEvents() {
     tab.addEventListener('click', () => switchAuthMode(tab.dataset.mode));
   });
 
-  /* 密码显示 / 隐藏 */
-  document.querySelectorAll('.pw-toggle').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const input = $(btn.dataset.target);
-      const show = input.type === 'password';
-      input.type = show ? 'text' : 'password';
-      btn.textContent = show ? '隐藏' : '显示';
-      btn.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
-    });
-  });
-
   $('auth-form').addEventListener('submit', submitAuth);
   $('logout-btn').addEventListener('click', logout);
-  $('refresh-btn').addEventListener('click', () => { loadRecords(); });
+  $('refresh-btn').addEventListener('click', () => { setStatus('正在刷新…'); loadRecords(); });
   $('new-btn').addEventListener('click', () => openForm(null));
   $('cancel-btn').addEventListener('click', closeForm);
   $('record-form').addEventListener('submit', submitRecord);

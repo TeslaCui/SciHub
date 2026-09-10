@@ -31,13 +31,11 @@ manifest.json / sw.js / version.json   PWA 与版本标记（可选增强）
 
 ## 账号体系
 
-- **注册**：填「邮箱 + 用户名 + 电话 + 密码 + 确认密码」。用户名、邮箱、电话在库内唯一，重复会在注册前被 `research_check_signup` 拦下。
-- **登录**：填「账号（邮箱 / 用户名 / 电话 任一）」+ 密码即可。
-  - 输入含 `@` 时直接按邮箱走标准密码登录；
+- **注册**：填「邮箱 + 用户名 + 电话（选填）+ 密码」。用户名、邮箱、电话在库内唯一，重复会在注册前被 `research_check_signup` 拦下并给出具体提示。
+- **登录**：填「邮箱 / 用户名 / 电话」**任一** + 密码即可，**不需要任何验证码或邮箱确认**。
+  - 输入里含 `@` 时直接按邮箱走标准密码登录；
   - 否则先用 `research_lookup_login_email` 这个 RPC 把用户名 / 电话映射成邮箱，再走同一套密码登录。
-- 界面上密码框支持「显示 / 隐藏」切换，注册需二次确认密码。
-- 这两个 RPC 是 `security definer` 且 `revoke all ... from public` 后再单独授权给 `anon` / `authenticated`，只做「查重」与「标识符→邮箱」；`research_profiles` 表本身受 RLS 保护，任何人只能读写自己那一行。
-- 前端不再校验密码长度；**实际强度由 Supabase 服务端控制**（Authentication → Settings → Minimum password length，最低只到 6 位，无法调更低）。
+- 这两个 RPC 是 `security definer` 且 `revoke all ... from public` 后再单独授权给 `anon` / `authenticated`，只做「查重」和「标识符→邮箱」两件事；`research_profiles` 表本身仍受 RLS 保护，任何人都只能读写自己那一行。
 
 ## 数据模型
 
