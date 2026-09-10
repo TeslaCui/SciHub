@@ -17,10 +17,23 @@
     <span class="logo">Sci</span>
     <span class="brand-text"><b>SciHub</b><small>科研工作台</small></span>
   </div>
+
   <div class="user" id="user-box" hidden>
-    <span class="user-email" id="user-email"></span>
-    <button type="button" id="refresh-btn" class="ghost">刷新</button>
-    <button type="button" id="logout-btn" class="ghost">退出</button>
+    <button type="button" class="user-btn" id="user-menu-btn" aria-haspopup="menu" aria-expanded="false">
+      <span class="avatar" id="user-avatar">S</span>
+      <span class="user-name" id="user-name"></span>
+      <svg class="caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+
+    <div class="user-menu" id="user-menu" role="menu" hidden>
+      <div class="um-head">
+        <div class="um-name" id="um-name"></div>
+        <div class="um-sub" id="um-sub"></div>
+      </div>
+      <button type="button" role="menuitem" data-um="account">账号信息</button>
+      <button type="button" role="menuitem" data-um="password">修改密码</button>
+      <button type="button" role="menuitem" data-um="logout" class="um-danger">退出登录</button>
+    </div>
   </div>
 </header>
 
@@ -144,6 +157,14 @@
 </main>
 
 <footer class="footer">© 2026 SciHub</footer>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card">
+    <h2 id="modal-title"></h2>
+    <div id="modal-body"></div>
+    <div class="actions" id="modal-actions"></div>
+  </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="app.js"></script>

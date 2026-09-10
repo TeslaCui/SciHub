@@ -102,7 +102,8 @@ function applyUser(user) {
   $('auth-view').hidden = !!state.user;
   $('app-view').hidden = !state.user;
   $('user-box').hidden = !state.user;
-  if (state.user) $('user-email').textContent = state.user.email || '';
+  if (state.user) { updateUserChip(); loadProfile(); }
+  else { state.profile = null; closeUserMenu(); closeModal(); }
 
   if (state.user) {
     if (changed || !state.records.length) loadRecords();
@@ -486,8 +487,6 @@ function bindEvents() {
   });
 
   $('auth-form').addEventListener('submit', submitAuth);
-  $('logout-btn').addEventListener('click', logout);
-  $('refresh-btn').addEventListener('click', () => { loadRecords(); });
   $('new-btn').addEventListener('click', () => openForm(null));
   $('cancel-btn').addEventListener('click', closeForm);
   $('record-form').addEventListener('submit', submitRecord);
@@ -507,6 +506,115 @@ bindEvents();
 renderRecords();
 initAuth();
 registerServiceWorker();
+
+/* ── 顶栏用户菜单与弹层 ────────────────────────────────── */
+
+function userLabel() {
+  if (state.profile && state.profile.username) return state.profile.username;
+  const email = (state.user && state.user.email) || '';
+  return email ? email.split('@')[0] : '用户';
+}
+
+function updateUserChip() {
+  const label = userLabel();
+  if ($('user-avatar')) $('user-avatar').textContent = (label[0] || 'S').toUpperCase();
+  if ($('user-name')) $('user-name').textContent = label;
+  if ($('um-name')) $('um-name').textContent = label;
+  if ($('um-sub')) $('um-sub').textContent = (state.user && state.user.email) || '';
+}
+
+function toggleUserMenu(open) {
+  const menu = $('user-menu');
+  if (!menu) return;
+  const next = open == null ? menu.hidden : open;
+  menu.hidden = !next;
+  if ($('user-menu-btn')) $('user-menu-btn').setAttribute('aria-expanded', String(!!next));
+}
+
+function closeUserMenu() { toggleUserMenu(false); }
+
+function openModal(title, bodyHtml, actions) {
+  $('modal-title').textContent = title;
+  $('modal-body').innerHTML = bodyHtml;
+  const bar = $('modal-actions');
+  bar.innerHTML = '';
+  (actions || []).forEach((a) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = a.label;
+    btn.className = a.primary ? 'primary' : 'ghost';
+    btn.addEventListener('click', a.onClick);
+    bar.appendChild(btn);
+  });
+  $('modal').hidden = false;
+}
+
+function closeModal() { $('modal').hidden = true; }
+
+async function loadProfile() {
+  if (!state.user) return;
+  const { data } = await client
+    .from(PROFILE_TABLE).select('username,phone,email')
+    .eq('user_id', state.user.id).maybeSingle();
+  state.profile = data || null;
+  updateUserChip();
+}
+
+function showAccount() {
+  const p = state.profile || {};
+  openModal('账号信息', [
+    '<div class="kv"><b>用户名</b>' + esc(p.username || '—') + '</div>',
+    '<div class="kv"><b>邮箱</b>' + esc(p.email || (state.user && state.user.email) || '—') + '</div>',
+    '<div class="kv"><b>电话</b>' + esc(p.phone || '—') + '</div>',
+  ].join(''), [{ label: '关闭', onClick: closeModal }]);
+}
+
+function showPassword() {
+  openModal('修改密码', [
+    '<label>新密码<input id="new-pw" type="password" autocomplete="new-password" placeholder="输入新密码"></label>',
+    '<label>确认新密码<input id="new-pw2" type="password" autocomplete="new-password" placeholder="再次输入"></label>',
+  ].join(''), [
+    { label: '取消', onClick: closeModal },
+    {
+      label: '保存',
+      primary: true,
+      onClick: async () => {
+        const a = $('new-pw').value;
+        const b = $('new-pw2').value;
+        if (!a) { setStatus('请填写新密码。', 'error'); return; }
+        if (a !== b) { setStatus('两次输入的密码不一致。', 'error'); return; }
+        const { error } = await client.auth.updateUser({ password: a });
+        if (error) { setStatus(friendly(error), 'error'); return; }
+        closeModal();
+        setStatus('密码已更新。', 'ok');
+      },
+    },
+  ]);
+}
+
+if ($('user-menu-btn')) {
+  $('user-menu-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleUserMenu(); });
+}
+
+document.querySelectorAll('[data-um]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    closeUserMenu();
+    const kind = btn.dataset.um;
+    if (kind === 'account') showAccount();
+    else if (kind === 'password') showPassword();
+    else if (kind === 'logout') logout();
+  });
+});
+
+document.addEventListener('click', (e) => {
+  const menu = $('user-menu');
+  if (!menu || menu.hidden) return;
+  if (!e.target.closest('#user-menu') && !e.target.closest('#user-menu-btn')) closeUserMenu();
+});
+
+if ($('modal')) {
+  $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeModal(); });
+}
 
 /* ── 路由与主页 ────────────────────────────────────────── */
 

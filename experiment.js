@@ -316,7 +316,7 @@
         '    <span class="step-title-text">' + esc(s.title) + '</span>',
         s.duration_hint ? '    <span class="tag-mini">' + esc(s.duration_hint) + '</span>' : '',
         '  </div>',
-        '  <div class="step-instruction">' + esc(s.instruction) + '</div>',
+        '  <div class="step-instruction">' + highlight(s.instruction) + '</div>',
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
         '</div>',
       ].join('\n')).join(''),
@@ -421,8 +421,8 @@
       '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步</div>',
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
-      s.duration_hint ? '  <span class="dur">时长提示：' + esc(s.duration_hint) + '</span>' : '',
-      '  <div class="instr">' + esc(s.instruction) + '</div>',
+      s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
+      '  <div class="instr">' + highlight(s.instruction) + '</div>',
       '  <div id="fields"></div>',
       '  <div style="margin-top:14px">',
       '    <div class="hc-meta">实验照片</div>',
@@ -611,6 +611,15 @@
     setStatus('实验已完成，日志已保存到科研记录。', 'ok');
     run.data.status = 'done';
     drawRun();
+  }
+
+  /* 把「数值 + 单位」标成醒目样式：药品用量、温度、时间、转速等关键参数 */
+  const KEY_UNIT = 'g|mg|kg|mL|μL|L|mol|mmol|M|h|min|s|rpm|℃|°C|%|V|mA|mV';
+
+  function highlight(text) {
+    const safe = esc(text == null ? '' : text);
+    const re = new RegExp('(\\d+(?:\\.\\d+)?(?:\\s*[–—~-]\\s*\\d+(?:\\.\\d+)?)?)\\s*(' + KEY_UNIT + ')(?![0-9A-Za-z])', 'g');
+    return safe.replace(re, '<span class="key-num">$1 $2</span>');
   }
 
   function buildLog(r, steps, ended) {
