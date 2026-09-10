@@ -1,6 +1,6 @@
 /* Service Worker：页面走 network-first（避免拿到旧版），静态资源走 cache-first。
  * 改版时同步更新下方 CACHE 版本号与 version.json，旧缓存会在 activate 阶段清理。 */
-const CACHE = 'scihub-research-v0.4.0';
+const CACHE = 'scihub-research-v0.4.1';
 const ASSETS = ['./index.html', './style.css', './app.js', './manifest.json'];
 
 self.addEventListener('install', (event) => {

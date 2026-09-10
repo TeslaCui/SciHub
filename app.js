@@ -478,8 +478,9 @@ function bindEvents() {
       const input = $(btn.dataset.target);
       const show = input.type === 'password';
       input.type = show ? 'text' : 'password';
-      btn.textContent = show ? '隐藏' : '显示';
+      btn.classList.toggle('is-on', show);
       btn.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+      btn.title = show ? '隐藏密码' : '显示密码';
     });
   });
 

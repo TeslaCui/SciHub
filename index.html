@@ -7,6 +7,7 @@
 <meta name="description" content="科研工作台：记录实验日志、文献笔记、表征数据与结果分析。">
 <meta name="theme-color" content="#0f766e">
 <link rel="manifest" href="manifest.json">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='700' fill='%23ffffff' text-anchor='middle'%3ESci%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -52,7 +53,17 @@
       <label>密码
         <span class="pw-field">
           <input id="auth-password" type="password" required autocomplete="current-password" placeholder="密码">
-          <button type="button" class="pw-toggle" data-target="auth-password" aria-label="显示密码">显示</button>
+          <button type="button" class="pw-toggle" data-target="auth-password" aria-label="显示密码" title="显示密码">
+            <svg class="ico-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>
+              <circle cx="12" cy="12" r="2.8"/>
+            </svg>
+            <svg class="ico-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>
+              <circle cx="12" cy="12" r="2.8"/>
+              <line x1="3.6" y1="3.6" x2="20.4" y2="20.4"/>
+            </svg>
+          </button>
         </span>
       </label>
 
@@ -60,7 +71,17 @@
         <label>确认密码
           <span class="pw-field">
             <input id="auth-password2" type="password" autocomplete="new-password" placeholder="再次输入密码">
-            <button type="button" class="pw-toggle" data-target="auth-password2" aria-label="显示密码">显示</button>
+            <button type="button" class="pw-toggle" data-target="auth-password2" aria-label="显示密码" title="显示密码">
+              <svg class="ico-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>
+                <circle cx="12" cy="12" r="2.8"/>
+              </svg>
+              <svg class="ico-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>
+                <circle cx="12" cy="12" r="2.8"/>
+                <line x1="3.6" y1="3.6" x2="20.4" y2="20.4"/>
+              </svg>
+            </button>
           </span>
         </label>
       </div>
