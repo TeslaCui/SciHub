@@ -4,10 +4,12 @@
 -- 用法：Supabase Dashboard → SQL Editor → 粘贴本文件 → Run
 --
 -- 约定：
---   1. 本脚本只创建 research_ 前缀的对象，与同一 Supabase 项目里的其它应用
---      （例如拾光题库的 practice_history / wrong_questions / profiles）互不影响。
+--   1. 本项目是 SciHub 专用实例，脚本只创建 research_ 前缀的对象；
+--      research_ 前缀也让脚本将来被复用到共享项目时，不会与既有表重名。
 --   2. 所有表都启用 RLS，策略统一为「只能读写自己名下的行」（auth.uid() = user_id）。
 --   3. create policy 不支持 IF NOT EXISTS，因此先 DROP POLICY IF EXISTS 再重建。
+--   4. 末尾显式 grant 给 authenticated：即使项目关闭了「Automatically expose new tables」，
+--      登录用户仍能通过 Data API 读写（数据行安全由 RLS 保证）。
 
 -- ─────────────────────────────────────────────────────────────
 -- 科研记录
@@ -34,6 +36,11 @@ create policy "own research records" on research_records
 
 create index if not exists research_records_user_occurred_idx
   on research_records (user_id, occurred_on desc, created_at desc);
+
+-- 显式授权：即使项目没开「Automatically expose new tables」，登录用户也能经由 Data API 读写。
+-- 注意：授权只决定「能否调用 API」，行的可见性仍由上面的 RLS 策略（auth.uid() = user_id）决定。
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on research_records to authenticated;
 
 -- ─────────────────────────────────────────────────────────────
 -- updated_at 自动维护
@@ -65,3 +72,93 @@ select
      where schemaname = 'public' and indexname = 'research_records_user_occurred_idx')          as indexes,
   (select count(*) from information_schema.triggers
      where trigger_name = 'research_records_touch')                                             as triggers;
+
+-- ─────────────────────────────────────────────────────────────
+-- 账号档案：注册登记「用户名 + 电话」，登录支持 邮箱 / 用户名 / 电话 三选一
+-- ─────────────────────────────────────────────────────────────
+create table if not exists research_profiles (
+  user_id    uuid primary key references auth.users on delete cascade,
+  username   text not null check (length(btrim(username)) > 0),
+  phone      text,
+  email      text not null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists research_profiles_username_idx
+  on research_profiles (lower(btrim(username)));
+create unique index if not exists research_profiles_email_idx
+  on research_profiles (lower(btrim(email)));
+create unique index if not exists research_profiles_phone_idx
+  on research_profiles (regexp_replace(coalesce(phone, ''), '[^0-9+]', '', 'g'))
+  where regexp_replace(coalesce(phone, ''), '[^0-9+]', '', 'g') <> '';
+
+alter table research_profiles enable row level security;
+
+drop policy if exists "own research profile" on research_profiles;
+create policy "own research profile" on research_profiles
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+grant select, insert, update, delete on research_profiles to authenticated;
+
+-- 注册前查重：返回冲突的字段名（username / phone / email），无冲突返回空串。
+-- 必须 security definer：注册时用户还没登录，匿名角色读不到 research_profiles。
+create or replace function research_check_signup(p_username text, p_phone text, p_email text)
+returns text
+language sql
+security definer
+set search_path = public
+as $$
+  select case
+    when exists (
+      select 1 from research_profiles
+      where lower(btrim(username)) = lower(btrim(coalesce(p_username, '')))
+    ) then 'username'
+    when btrim(coalesce(p_phone, '')) <> '' and exists (
+      select 1 from research_profiles
+      where regexp_replace(coalesce(phone, ''), '[^0-9+]', '', 'g')
+          = regexp_replace(btrim(p_phone), '[^0-9+]', '', 'g')
+    ) then 'phone'
+    when exists (
+      select 1 from research_profiles
+      where lower(btrim(email)) = lower(btrim(coalesce(p_email, '')))
+    ) then 'email'
+    else ''
+  end
+$$;
+
+-- 登录标识符 → 邮箱：前端拿到邮箱后再走标准密码登录，不需要邮箱验证码。
+create or replace function research_lookup_login_email(p_identifier text)
+returns text
+language sql
+security definer
+set search_path = public
+as $$
+  select email
+  from research_profiles
+  where lower(btrim(username)) = lower(btrim(coalesce(p_identifier, '')))
+     or lower(btrim(email))    = lower(btrim(coalesce(p_identifier, '')))
+     or (
+       regexp_replace(coalesce(phone, ''), '[^0-9+]', '', 'g') <> ''
+       and regexp_replace(coalesce(phone, ''), '[^0-9+]', '', 'g')
+         = regexp_replace(btrim(coalesce(p_identifier, '')), '[^0-9+]', '', 'g')
+     )
+  limit 1
+$$;
+
+-- 默认 public 角色即可执行，必须先收回，再只授权给 anon / authenticated。
+revoke all on function research_check_signup(text, text, text) from public;
+revoke all on function research_lookup_login_email(text) from public;
+grant execute on function research_check_signup(text, text, text) to anon, authenticated;
+grant execute on function research_lookup_login_email(text) to anon, authenticated;
+
+-- ─────────────────────────────────────────────────────────────
+-- 自检 2：账号档案对象。应看到 profile_tables=1, profile_functions=2
+-- ─────────────────────────────────────────────────────────────
+select
+  (select count(*) from information_schema.tables
+     where table_schema = 'public' and table_name = 'research_profiles')             as profile_tables,
+  (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname in ('research_check_signup', 'research_lookup_login_email'))     as profile_functions;

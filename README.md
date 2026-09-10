@@ -18,16 +18,24 @@ manifest.json / sw.js / version.json   PWA 与版本标记（可选增强）
 - Supabase 的 `publishable key` 写在 `app.js` 顶部：这类 key 本来就是公开的，只用来标识项目；真正的安全边界是数据库 **RLS（行级安全）** —— `research_records` 的策略是 `auth.uid() = user_id`，任何账号都只能读写自己的行。
 - **绝不要把 `service_role` key 放进前端**，它会绕过 RLS。
 
-## 首次配置（必做，否则无法写入数据）
+## 首次配置（必做，否则无法注册 / 写入数据）
 
 1. 打开 <https://supabase.com/dashboard>，进入本项目使用的 Supabase 项目。
 2. 左侧 **SQL Editor** → 新建查询 → 粘贴本仓库 `supabase_schema.sql` 的全部内容 → **Run**。
-3. 结果里应看到 `tables=1, policies=1, indexes=1, triggers=1`。
-4. 回到网页点右上角「刷新」，即可开始记录。
+   执行完会输出两行自检：`tables=1, policies=1, indexes=1, triggers=1` 与 `profile_tables=1, profile_functions=2`。
+3. **关闭邮箱验证**：**Authentication → Providers → Email** → 关掉 **Confirm email**。
+   本站按需求不做二次验证 —— 不关这个开关，注册后拿不到会话，必须先去邮箱点确认链接。
+4. 回到网页用「邮箱 + 用户名 + 电话（选填）」注册，即可开始记录。
 
-脚本是幂等的，可重复执行；它只创建 `research_` 前缀的对象，不会动同一项目里其它应用的表。
+脚本是幂等的，可重复执行；它只创建 `research_` 前缀的对象。
 
-> 若注册后无法登录，说明项目开启了 **Confirm email**：到邮箱点确认链接即可，或在 **Authentication → Providers → Email** 里关闭该选项。
+## 账号体系
+
+- **注册**：填「邮箱 + 用户名 + 电话（选填）+ 密码」。用户名、邮箱、电话在库内唯一，重复会在注册前被 `research_check_signup` 拦下并给出具体提示。
+- **登录**：填「邮箱 / 用户名 / 电话」**任一** + 密码即可，**不需要任何验证码或邮箱确认**。
+  - 输入里含 `@` 时直接按邮箱走标准密码登录；
+  - 否则先用 `research_lookup_login_email` 这个 RPC 把用户名 / 电话映射成邮箱，再走同一套密码登录。
+- 这两个 RPC 是 `security definer` 且 `revoke all ... from public` 后再单独授权给 `anon` / `authenticated`，只做「查重」和「标识符→邮箱」两件事；`research_profiles` 表本身仍受 RLS 保护，任何人都只能读写自己那一行。
 
 ## 数据模型
 
@@ -43,6 +51,16 @@ manifest.json / sw.js / version.json   PWA 与版本标记（可选增强）
 | `tags` | text[] | 标签 |
 | `occurred_on` | date | 发生日期（默认今天） |
 | `created_at` / `updated_at` | timestamptz | 创建/更新时间，后者由触发器自动维护 |
+
+`research_profiles`（账号档案，一人一行）：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `user_id` | uuid | 主键，关联 `auth.users`，RLS 依据 |
+| `username` | text | 登录用用户名，库内唯一（忽略大小写与首尾空格） |
+| `phone` | text | 登录用电话，选填；填了则库内唯一（比较时忽略非数字字符） |
+| `email` | text | 注册邮箱，库内唯一（忽略大小写） |
+| `created_at` | timestamptz | 登记时间 |
 
 ## 本地预览
 
@@ -65,21 +83,17 @@ npx serve .
 - `.nojekyll` 用于让 Pages 跳过 Jekyll 处理，直接原样发布静态文件。
 - 改版后如果看到旧内容，是 Service Worker 缓存：`sw.js` 的 `CACHE` 名带版本号，改版时同步更新 `version.json` 与 `sw.js` 里的版本号，或强制刷新（Ctrl+F5）。
 
-## 与「拾光题库」共用同一个 Supabase 项目
+## Supabase 项目
 
-本站当前复用了同一个 Supabase 项目（`wcnmufiabeftlsregamh`）。要点：
+本站使用**独立的 Supabase 项目**（`ttjnxndmjwhwpamyeuva`），与其它应用完全隔离：
 
-| 维度 | 是否共享 | 说明 |
-| --- | --- | --- |
-| 业务数据 | **不共享** | 本站只用 `research_*` 表，与题库的 `practice_history` / `wrong_questions` / `profiles` 完全不同，且都由 RLS 按 `user_id` 隔离。 |
-| 浏览器登录态 | **不共享** | 本站的 `storageKey` 是 `scihub-research-auth`，题库是 `shiguang-quiz-auth`，互不覆盖。 |
-| 登录账号池 | 共享 | 同一个邮箱在两站是同一个 `user_id`（同一账号），对单人使用是便利。 |
-| 免费额度 | 共享 | 数据库 500 MB、带宽 5 GB/月、MAU 由两站共用。 |
-| 表名空间 | 共享 | 新增表需避免与既有表重名，故本站统一用 `research_` 前缀。 |
+- 独立的数据库、独立的登录账号池、独立的免费额度（数据库 500 MB / 带宽 5 GB 每月 / MAU）。
+- 前端 `app.js` 顶部的 `SUPABASE_URL` 与 `SUPABASE_KEY` 指向这个项目；`publishable key` 本来就是公开的，安全边界仍由 RLS 承担。
+- 浏览器登录态使用本项目专用的 `storageKey`（`scihub-research-auth`），不会与其它站点互相顶掉。
 
-### 想换成完全独立的 Supabase 项目
+### 换用另一个 Supabase 项目
 
-1. 在 Supabase 新建项目，SQL Editor 执行本仓库的 `supabase_schema.sql`。
+1. 在新项目的 SQL Editor 执行本仓库的 `supabase_schema.sql`。
 2. 修改 `app.js` 顶部两行：
 
 ```js
@@ -87,7 +101,7 @@ const SUPABASE_URL = '<新项目 URL>';
 const SUPABASE_KEY = '<新项目 publishable / anon key>';
 ```
 
-3. `git push` 即可，其余代码无需改动。
+3. `git push`，其余代码无需改动。
 
 ## 边界与后续
 

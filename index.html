@@ -37,15 +37,23 @@
     </div>
 
     <form id="auth-form" autocomplete="on">
-      <label>邮箱
-        <input id="auth-email" type="email" required autocomplete="email" placeholder="you@example.com">
+      <label><span id="auth-identifier-label">邮箱 / 用户名 / 电话</span>
+        <input id="auth-identifier" type="text" required autocomplete="username" placeholder="邮箱 / 用户名 / 电话">
       </label>
+      <div id="register-extra" hidden>
+        <label>用户名
+          <input id="auth-username" type="text" maxlength="40" autocomplete="off" placeholder="登录时可用它代替邮箱">
+        </label>
+        <label>电话（选填）
+          <input id="auth-phone" type="tel" maxlength="30" autocomplete="off" placeholder="填了也能用来登录">
+        </label>
+      </div>
       <label>密码
         <input id="auth-password" type="password" required minlength="6" autocomplete="current-password" placeholder="至少 6 位">
       </label>
       <button id="auth-submit" type="submit" class="primary">登录</button>
     </form>
-    <p class="hint small">首次使用请先「注册」。若 Supabase 开启了邮箱确认，注册后需先到邮箱点确认链接。</p>
+    <p class="hint small">首次使用请先「注册」：注册填邮箱 + 用户名（电话选填），之后用「邮箱 / 用户名 / 电话」任一 + 密码即可登录，无需邮箱验证。</p>
   </section>
 
   <!-- ── 已登录：科研记录 CRUD ───────────────────────────── -->
