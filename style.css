@@ -139,7 +139,11 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 /* 密码框：右侧眼睛图标切换明文 / 密文 */
 .pw-field { position: relative; display: block; margin-top: 5px; }
-.pw-field input { margin-top: 0; padding-right: 44px; }
+.pw-field input { margin-top: 0; }
+
+/* 眼睛图标只在框里已经有内容时出现（空框时不显示） */
+.pw-field input:not(:placeholder-shown) { padding-right: 44px; }
+.pw-field input:not(:placeholder-shown) ~ .pw-toggle { visibility: visible; opacity: 1; }
 
 .pw-toggle {
   position: absolute;
@@ -155,6 +159,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   background: transparent;
   border: none;
   border-radius: 8px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity .15s;
 }
 
 .pw-toggle:hover { color: var(--brand); background: rgba(15, 118, 110, .08); }
