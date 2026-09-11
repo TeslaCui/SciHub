@@ -622,7 +622,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.10.2';
+const APP_VERSION = '0.11.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -731,6 +731,12 @@ async function renderHome() {
     console.error('[SciHub] 读取进行中实验失败：', error);
   }
 
+  const { data: plans } = await client
+    .from('experiment_plans')
+    .select('id,title')
+    .order('created_at', { ascending: false })
+    .limit(5);
+
   const { data: recent } = await client
     .from(TABLE)
     .select('id,title,category,occurred_on')
@@ -753,11 +759,24 @@ async function renderHome() {
           '  </div>',
           '</article>',
         ].join('\n')).join('\n')
-      : '<div class="empty">当前没有进行中的实验。</div>',
+      : '<div class="empty">当前没有进行中的实验。上轮没做完的实验会一直留在这里，点「继续」就能接着做。</div>',
+
+    '<div class="section-title">开始新的实验</div>',
+    (plans && plans.length)
+      ? plans.map((p) => [
+          '<article class="home-card">',
+          '  <div class="hc-main">',
+          '    <div class="hc-title">' + esc(p.title) + '</div>',
+          '    <div class="hc-meta">按这份方案开始一次新实验</div>',
+          '  </div>',
+          '  <div class="hc-actions"><button type="button" class="plan-start" data-start-plan="' + p.id + '">开始实验</button></div>',
+          '</article>',
+        ].join('\n')).join('\n')
+      : '<div class="empty">还没有实验方案。<br><button type="button" class="ghost" data-go="plans" style="margin-top:10px">去导入 Word 方案</button></div>',
 
     '<div class="section-title">快捷入口</div>',
     '<div class="quick-grid">',
-    '  <button type="button" class="quick" data-go="plans"><b>实验方案</b><span>导入 Word 方案、开始一次实验</span></button>',
+    '  <button type="button" class="quick" data-go="plans"><b>方案管理</b><span>导入、编辑、重命名或删除实验方案</span></button>',
     '  <button type="button" class="quick" data-go="records"><b>科研记录</b><span>查看与检索已保存的记录</span></button>',
     '  <button type="button" class="quick" data-new-record><b>新建记录</b><span>随手记一条实验日志或文献笔记</span></button>',
     '</div>',
@@ -777,6 +796,11 @@ async function renderHome() {
 
   host.querySelectorAll('[data-run]').forEach((btn) => {
     btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
+  });
+  host.querySelectorAll('[data-start-plan]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (window.Plans) window.Plans.start(Number(btn.dataset.startPlan));
+    });
   });
   host.querySelectorAll('[data-go]').forEach((btn) => {
     btn.addEventListener('click', () => route(btn.dataset.go));
