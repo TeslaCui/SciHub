@@ -748,11 +748,17 @@
   function drawPhotos(s) {
     const host = $('photos');
     const images = s.images || [];
-    host.innerHTML = images.map((img) => [
-      '<div class="photo" data-path="' + esc(img.path) + '">',
-      run.urls[img.path] ? '  <img src="' + esc(run.urls[img.path]) + '" alt="' + esc(img.name || '照片') + '">' : '<div style="display:grid;place-items:center;height:100%;color:var(--muted);font-size:11px">加载中</div>',
-      '  <button type="button" data-drop="' + esc(img.path) + '" title="删除">×</button>',
-      '</div>',
+
+    host.innerHTML = images.map((img, idx) => [
+      '<figure class="photo" data-path="' + esc(img.path) + '">',
+      '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="点击放大查看">',
+      run.urls[img.path]
+        ? '    <img src="' + esc(run.urls[img.path]) + '" alt="' + esc(img.caption || img.name || '照片') + '">'
+        : '    <span class="photo-loading">加载中…</span>',
+      '  </button>',
+      '  <button type="button" class="photo-drop" data-drop="' + esc(img.path) + '" title="删除这张">×</button>',
+      '  <input class="photo-caption" data-caption="' + esc(img.path) + '" value="' + esc(img.caption || '') + '" placeholder="加个注解…" maxlength="120">',
+      '</figure>',
     ].join('\n')).join('');
 
     const camera = el('button', { type: 'button', class: 'photo-add' }, '📷<br>拍照');
@@ -763,6 +769,21 @@
     gallery.addEventListener('click', () => $('photo-gallery').click());
     host.appendChild(gallery);
 
+    // 点缩略图放大
+    host.querySelectorAll('[data-zoom]').forEach((b) => {
+      b.addEventListener('click', () => openLightbox(s, Number(b.dataset.zoom)));
+    });
+
+    // 注解：停手 1 秒后随其它字段一起存库
+    host.querySelectorAll('[data-caption]').forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const target = (s.images || []).find((x) => x.path === inp.dataset.caption);
+        if (!target) return;
+        target.caption = inp.value;
+        scheduleSave(s);
+      });
+    });
+
     host.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
       const path = b.dataset.drop;
       if (!window.confirm('删除这张照片？')) return;
@@ -771,6 +792,69 @@
       await saveStep(s, true);
       drawPhotos(s);
     }));
+  }
+
+  /* ── 图片放大查看（灯箱：左右翻页 / Esc 关闭 / 显示注解）── */
+
+  function openLightbox(s, start) {
+    const images = s.images || [];
+    if (!images.length) return;
+
+    let pos = Math.max(0, Math.min(start || 0, images.length - 1));
+    const many = images.length > 1;
+
+    const box = el('div', { class: 'lightbox' }, [
+      '<button type="button" class="lb-btn lb-close" data-lb="close" title="关闭（Esc）">×</button>',
+      many ? '<button type="button" class="lb-btn lb-prev" data-lb="prev" title="上一张（←）">‹</button>' : '',
+      '<figure class="lb-stage">',
+      '  <img id="lb-img" alt="">',
+      '  <figcaption id="lb-cap"></figcaption>',
+      '</figure>',
+      many ? '<button type="button" class="lb-btn lb-next" data-lb="next" title="下一张（→）">›</button>' : '',
+      many ? '<div class="lb-count" id="lb-count"></div>' : '',
+    ].join(''));
+
+    function paint() {
+      const img = images[pos];
+      const node = box.querySelector('#lb-img');
+      if (run.urls[img.path]) node.src = run.urls[img.path];
+      node.alt = img.caption || img.name || '照片';
+      box.querySelector('#lb-cap').textContent = img.caption || '';
+      const counter = box.querySelector('#lb-count');
+      if (counter) counter.textContent = (pos + 1) + ' / ' + images.length;
+    }
+
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      box.remove();
+    }
+
+    function move(delta) {
+      pos = (pos + delta + images.length) % images.length;
+      paint();
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+      else if (e.key === 'ArrowLeft') move(-1);
+      else if (e.key === 'ArrowRight') move(1);
+    }
+
+    box.addEventListener('click', (e) => {
+      const act = e.target.closest('[data-lb]');
+      if (act) {
+        const what = act.dataset.lb;
+        if (what === 'close') close();
+        else if (what === 'prev') move(-1);
+        else if (what === 'next') move(1);
+        return;
+      }
+      if (e.target === box) close();   // 点空白处也关闭
+    });
+
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(box);
+    paint();
   }
 
   /* ── 实时保存（输入停下 1 秒后写库）──────────────────── */
@@ -801,43 +885,98 @@
 
   /* ── 图片上传（支持一次多张）─────────────────────────── */
 
+  /* 手机原图动辄 5~10 MB，先缩到长边 1600px 再上传：成功率高、省流量、加载也快。
+     任何一步失败都回退成原图，绝不因为压缩而让用户传不了照片。 */
+  async function compressImage(file) {
+    if (!/^image\//.test(file.type || '') || /gif|svg/i.test(file.type || '')) return file;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const maxSide = 1600;
+      const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+      if (scale >= 1 && file.size < 2 * 1024 * 1024) { if (bitmap.close) bitmap.close(); return file; }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      if (bitmap.close) bitmap.close();
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+      if (!blob || blob.size >= file.size) return file;
+      const name = String(file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+      return new File([blob], name, { type: 'image/jpeg' });
+    } catch (err) {
+      console.warn('[SciHub] 图片压缩失败，改为上传原图：', err);
+      return file;
+    }
+  }
+
+  /* 把各种形态的错误统一成一句人能看懂的话 */
+  function errorText(err) {
+    if (!err) return '未知错误';
+    if (typeof err === 'string') return err;
+    if (err.message) return err.message;
+    if (err.error) return String(err.error);
+    if (err.statusCode) return 'HTTP ' + err.statusCode;
+    try { return JSON.stringify(err); } catch (_e) { return String(err); }
+  }
+
   async function uploadPhotos(files) {
     const list = Array.from(files || []);
     if (!list.length) return;
 
     let ok = 0;
+    let lastError = '';
     for (let i = 0; i < list.length; i++) {
       $('autosave').textContent = '照片上传中… ' + (i + 1) + ' / ' + list.length;
-      if (await uploadPhoto(list[i], true)) ok++;
+      const result = await uploadPhoto(list[i], true);
+      if (result === true) ok++;
+      else if (typeof result === 'string') lastError = result;
     }
 
     $('autosave').textContent = (ok === list.length)
       ? ('已上传 ' + ok + ' 张 · ' + fmt(now()))
-      : ('已上传 ' + ok + ' / ' + list.length + ' 张（部分失败）');
+      : ('已上传 ' + ok + ' / ' + list.length + ' 张' + (lastError ? '：' + lastError : ''));
     drawPhotos(run.steps[run.pos]);
   }
 
   async function uploadPhoto(file, silent) {
     const s = run.steps[run.pos];
-    const stamp = Date.now() + Math.floor(Math.random() * 1000);
-    const safe = (file.name || 'photo.jpg').replace(/[^\w.\-]/g, '_');
-    const path = state.user.id + '/' + run.id + '/' + s.position + '/' + stamp + '-' + safe;
+    const say = (txt) => { $('autosave').textContent = txt; };
 
-    if (!silent) $('autosave').textContent = '照片上传中…';
-    const { error } = await client.storage.from(BUCKET).upload(path, file, { upsert: false });
-    if (error) {
-      console.error('[SciHub] 上传失败：', error);
-      $('autosave').textContent = '照片上传失败';
-      return false;
+    if (!silent) say('照片上传中…');
+
+    try {
+      const payload = await compressImage(file);
+      const stamp = Date.now() + '-' + Math.floor(Math.random() * 100000);
+      const safe = String(payload.name || 'photo.jpg').replace(/[^\w.\-]/g, '_');
+      // 第一段目录必须是当前用户 id，才符合 Storage 的「只能读写自己目录」策略
+      const path = state.user.id + '/' + run.id + '/' + s.position + '/' + stamp + '-' + safe;
+
+      const { error } = await client.storage.from(BUCKET).upload(path, payload, {
+        upsert: false,
+        contentType: payload.type || 'image/jpeg',
+      });
+      if (error) throw error;
+
+      const { data: signed } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24);
+      if (signed) run.urls[path] = signed.signedUrl;
+
+      s.images = (s.images || []).concat([{
+        path: path,
+        name: file.name || 'photo',
+        caption: '',
+        at: new Date().toISOString(),
+      }]);
+      await saveStep(s, true);
+      if (!silent) drawPhotos(s);
+      return true;
+    } catch (err) {
+      console.error('[SciHub] 上传失败：', err, '| 文件：', file && file.name, file && file.size);
+      const msg = errorText(err);
+      say('照片上传失败：' + msg);
+      return msg;
     }
-
-    const { data: signed } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24);
-    if (signed) run.urls[path] = signed.signedUrl;
-
-    s.images = (s.images || []).concat([{ path: path, name: file.name || 'photo', at: new Date().toISOString() }]);
-    await saveStep(s, true);
-    if (!silent) drawPhotos(s);
-    return true;
   }
 
   /* ── 下一步 / 完成 ────────────────────────────────────── */

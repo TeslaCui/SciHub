@@ -338,13 +338,54 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .data-field { margin-bottom: 14px; }
 .data-field .unit { color: var(--muted); font-size: 12px; margin-left: 6px; }
 
-.photos { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.photo { position: relative; width: 92px; height: 92px; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: var(--bg); }
-.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.photo button { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; padding: 0; line-height: 1; font-size: 12px; border-radius: 50%; background: rgba(0, 0, 0, .55); color: #fff; border: none; }
+.photos { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
 
-.photo-add { width: 92px; height: 92px; border: 1px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 12px; display: grid; place-items: center; text-align: center; cursor: pointer; }
+.photo { position: relative; width: 116px; margin: 0; }
+.photo-open { display: block; width: 116px; height: 116px; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); cursor: zoom-in; }
+.photo-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-loading { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 11px; }
+
+.photo-drop {
+  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0;
+  line-height: 1; font-size: 13px; border-radius: 50%; border: none;
+  background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer;
+}
+.photo-drop:hover { background: #c0392b; }
+
+.photo-caption {
+  width: 116px; margin-top: 4px; padding: 4px 6px;
+  font-size: 12px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--card); color: var(--ink);
+}
+.photo-caption::placeholder { color: var(--muted); }
+.photo-caption:focus { border-color: var(--brand); outline: none; }
+
+.photo-add { width: 116px; height: 116px; border: 1px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 12px; display: grid; place-items: center; text-align: center; cursor: pointer; }
 .photo-add:hover { border-color: var(--brand); color: var(--brand); }
+
+/* ── 灯箱（点击放大查看）───────────────────────────────── */
+.lightbox {
+  position: fixed; inset: 0; z-index: 60;
+  display: grid; place-items: center;
+  background: rgba(8, 18, 22, .88);
+  padding: 24px;
+}
+.lb-stage { margin: 0; max-width: min(96vw, 1200px); max-height: 88vh; display: grid; gap: 10px; justify-items: center; }
+.lb-stage img { max-width: 100%; max-height: 78vh; border-radius: 10px; box-shadow: 0 18px 48px rgba(0, 0, 0, .5); background: #111; }
+.lb-stage figcaption { color: #e8f0ef; font-size: 14px; text-align: center; max-width: 100%; }
+.lb-stage figcaption:empty { display: none; }
+
+.lb-btn {
+  position: absolute; border: none; cursor: pointer; color: #fff;
+  background: rgba(255, 255, 255, .14); border-radius: 50%;
+  display: grid; place-items: center;
+}
+.lb-btn:hover { background: rgba(255, 255, 255, .3); }
+.lb-close { top: 16px; right: 16px; width: 40px; height: 40px; font-size: 22px; }
+.lb-prev, .lb-next { top: 50%; transform: translateY(-50%); width: 46px; height: 46px; font-size: 26px; }
+.lb-prev { left: 16px; }
+.lb-next { right: 16px; }
+.lb-count { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); color: #cfe3e0; font-size: 13px; }
 
 .run-actions { display: flex; gap: 10px; margin-top: 18px; }
 .run-actions .primary { width: auto; }
