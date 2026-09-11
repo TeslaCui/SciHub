@@ -345,12 +345,29 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .notice-mini em { font-style: normal; font-weight: 600; margin-right: 4px; }
 
-/* 深色模式：白底橙框会很刺眼，改成半透明底 + 亮橙文字 */
+/* ── 「方案已更新」提醒（蓝色，与橙色的注意事项区分开）──── */
+.drift {
+  display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 12px 14px;
+  background: #eff6ff; border: 1px solid #93c5fd; border-left: 4px solid #2563eb;
+  border-radius: 10px;
+}
+.drift-body { flex: 1; min-width: 200px; }
+.drift-body b { display: block; color: #1e40af; font-size: 13px; margin-bottom: 4px; }
+.drift-body span { display: block; color: #1e3a8a; font-size: 13px; line-height: 1.6; word-break: break-word; }
+.drift-body em { display: block; margin-top: 5px; font-style: normal; color: #3730a3; font-size: 12px; line-height: 1.5; }
+.drift .ghost { flex-shrink: 0; align-self: center; }
+
+/* 深色模式：白底橙框会很刺眼，改成半透明底 + 亮色文字 */
 @media (prefers-color-scheme: dark) {
   .notice { background: rgba(234, 88, 12, .14); border-color: rgba(251, 146, 60, .5); border-left-color: #fb923c; }
   .notice-body b { color: #fdba74; }
   .notice-body span { color: #fed7aa; }
   .notice-mini { background: rgba(234, 88, 12, .14); border-color: rgba(251, 146, 60, .5); color: #fdba74; }
+  .drift { background: rgba(37, 99, 235, .16); border-color: rgba(96, 165, 250, .5); border-left-color: #60a5fa; }
+  .drift-body b { color: #93c5fd; }
+  .drift-body span { color: #bfdbfe; }
+  .drift-body em { color: #93c5fd; }
 }
 
 .field-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; margin-bottom: 8px; }

@@ -65,10 +65,38 @@
       .filter(Boolean);
   }
 
+  /* 从一段步骤文本里抽「需要现场记录」的字段（「xxx：____ g」这种填空）。
+     同名字段不再合并，而是带上所在句子的试剂名：
+     同一节里的两次「记录实际质量」→「2-MIM 记录实际质量」与「Fe(acac)₃ 记录实际质量」。
+     抽成独立函数，是为了「重新解析已有方案」时能复用同一套规则。 */
+  function detectFields(text) {
+    const FIELD = /([^：:，。；（）()]{2,28})\s*[：:]\s*[_＿]{2,}\s*([A-Za-z%℃°·\/]*)/g;
+    const fields = [];
+    const used = new Set();
+
+    [...String(text || '').matchAll(FIELD)].forEach((f) => {
+      const label = f[1].replace(/^[0-9.\s]+/, '').trim();
+      const unit = f[2] || '';
+      if (!label) return;
+
+      const at = f.index || 0;
+      const agent = guessAgent(String(text).slice(Math.max(0, at - 60), at));
+      const base = agent ? (agent + ' ' + label) : label;
+
+      let finalLabel = base;
+      let n = 2;
+      while (used.has(finalLabel)) { finalLabel = base + '（' + n + '）'; n += 1; }
+      used.add(finalLabel);
+
+      fields.push({ label: finalLabel, unit: unit });
+    });
+
+    return fields;
+  }
+
   /* 段落 → { title, steps:[{title, instruction, fields[]}] } */
   function parsePlan(title, paras) {
     const SECTION = /^([一二三四五六七八九十百]+)\s*[、.．]\s*(.+)$/;
-    const FIELD = /([^：:，。；（）()]{2,28})\s*[：:]\s*[_＿]{2,}\s*([A-Za-z%℃°·\/]*)/g;
     const steps = [];
     let first = '';
 
@@ -86,33 +114,11 @@
       title: title || first || '未命名实验方案',
       steps: steps.map((s, i) => {
         const text = s.lines.join('\n');
-        const fields = [];
-        const used = new Set();
-
-        // 逐个「填空」生成字段。同名字段不再合并，而是带上所在句子的试剂名：
-        // 同一节里的两次「记录实际质量」→「2-MIM 记录实际质量」与「Fe(acac)₃ 记录实际质量」。
-        [...text.matchAll(FIELD)].forEach((f) => {
-          const label = f[1].replace(/^[0-9.\s]+/, '').trim();
-          const unit = f[2] || '';
-          if (!label) return;
-
-          const at = f.index || 0;
-          const agent = guessAgent(text.slice(Math.max(0, at - 60), at));
-          const base = agent ? (agent + ' ' + label) : label;
-
-          let finalLabel = base;
-          let n = 2;
-          while (used.has(finalLabel)) { finalLabel = base + '（' + n + '）'; n += 1; }
-          used.add(finalLabel);
-
-          fields.push({ label: finalLabel, unit: unit });
-        });
-
         return {
           position: i,
           title: s.title,
           instruction: text,
-          fields: fields,
+          fields: detectFields(text),
           duration_hint: guessDuration(text),
           notice: extractNotice(text),
         };
@@ -232,6 +238,7 @@
     // 卡片上的两个图标操作（行内 SVG，无外部依赖）
     const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
     const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+    const ICON_REFRESH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>';
 
     const { data, error } = await client.from(PLAN).select('id,title,source,created_at').order('created_at', { ascending: false });
     if (error) {
@@ -248,6 +255,7 @@
       '  </div>',
       '  <div class="hc-actions">',
       '    <button type="button" class="plan-start" data-start="' + p.id + '">开始实验</button>',
+      '    <button type="button" class="icon-btn" data-upgrade="' + p.id + '" title="按最新规则重新解析（只补充新字段，不动已开始实验）" aria-label="重新解析更新">' + ICON_REFRESH + '</button>',
       '    <button type="button" class="icon-btn" data-rename="' + p.id + '" data-name="' + esc(p.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
       '    <button type="button" class="icon-btn del" data-del="' + p.id + '" title="删除" aria-label="删除">' + ICON_TRASH + '</button>',
       '  </div>',
@@ -277,6 +285,17 @@
     }));
 
     host.querySelectorAll('[data-start]').forEach((b) => b.addEventListener('click', () => startRun(Number(b.dataset.start))));
+    host.querySelectorAll('[data-upgrade]').forEach((b) => b.addEventListener('click', async () => {
+      b.disabled = true;
+      try {
+        await upgradePlan(Number(b.dataset.upgrade));
+      } catch (err) {
+        console.error('[SciHub] 更新方案失败：', err);
+        setStatus('更新失败：' + errorText(err), 'error');
+      } finally {
+        b.disabled = false;
+      }
+    }));
     host.querySelectorAll('[data-rename]').forEach((b) => b.addEventListener('click', () => renamePlan(Number(b.dataset.rename), b.dataset.name)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
       if (!window.confirm('删除这个方案？已生成的实验记录不受影响。')) return;
@@ -284,6 +303,47 @@
       setStatus('方案已删除。', 'ok');
       listPlans();
     }));
+  }
+
+  /* 用当前解析规则重新处理方案里已存的步骤文本，把新版能识别出的
+     数据字段 / 注意事项补充进来（例如老方案升级后多出「离心前注意配平」）。
+     刻意只做「补充」：
+       · 已存在的字段（含手工添加或改过名的）原样保留，绝不覆盖；
+       · experiment_runs / run_steps 完全不碰 —— 已开始的实验沿用启动时的快照。
+     返回实际补充的条目数。 */
+  async function upgradePlan(planId) {
+    const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (!steps || !steps.length) { setStatus('这个方案没有步骤可更新。', 'warn'); return 0; }
+
+    let addedFields = 0;
+    let addedNotices = 0;
+
+    for (const s of steps) {
+      const text = s.instruction || '';
+      const existing = s.fields || [];
+      const have = new Set(existing.map((f) => f.label));
+
+      const merged = existing.slice();
+      detectFields(text).forEach((f) => {
+        if (have.has(f.label)) return;
+        have.add(f.label);
+        merged.push(f);
+        addedFields += 1;
+      });
+
+      const patch = {};
+      if (merged.length !== existing.length) patch.fields = merged;
+      if (!s.notice && extractNotice(text)) { patch.notice = extractNotice(text); addedNotices += 1; }
+      if (!Object.keys(patch).length) continue;
+
+      const { error } = await client.from(STEP).update(patch).eq('id', s.id);
+      if (error) throw error;
+    }
+
+    setStatus(addedFields || addedNotices
+      ? ('已按最新规则更新：补充 ' + addedFields + ' 个参数、' + addedNotices + ' 条注意事项。已开始的实验不受影响。')
+      : '方案已是最新，没有需要补充的内容。', 'ok');
+    return addedFields + addedNotices;
   }
 
   /* ══ docx 导入 → 校对草稿 ═══════════════════════════════ */
@@ -515,6 +575,7 @@
       '<div class="run-actions">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
+      '  <button type="button" class="ghost" id="plan-upgrade">按最新规则更新</button>',
       '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',
@@ -523,6 +584,18 @@
     $('plan-back').addEventListener('click', () => route('plans'));
     $('plan-start').addEventListener('click', () => startRun(planId));
     $('plan-edit').addEventListener('click', () => editPlan(planId));
+    $('plan-upgrade').addEventListener('click', async () => {
+      const btn = $('plan-upgrade');
+      btn.disabled = true;
+      try {
+        await upgradePlan(planId);
+        renderEditor(planId);
+      } catch (err) {
+        console.error('[SciHub] 更新方案失败：', err);
+        setStatus('更新失败：' + errorText(err), 'error');
+        btn.disabled = false;
+      }
+    });
     $('plan-rename').addEventListener('click', () => renamePlan(planId, plan.title));
   }
 
@@ -571,7 +644,54 @@
 
   /* ══ 执行界面 ═══════════════════════════════════════════ */
 
-  const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {}, urlErrors: {} };
+  const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {}, urlErrors: {}, drift: { fields: [] } };
+
+  /* 对比「本次实验的快照」与「方案当前内容」，找出方案里新增的字段。
+     用途：方案更新后提醒用户 —— 这些参数是实验开始之后才加进方案的，快照里没有。 */
+  async function planDrift(r) {
+    if (!r || !r.plan_id) return { fields: [] };
+    const { data: planSteps } = await client.from(STEP).select('position,fields').eq('plan_id', r.plan_id).order('position');
+    if (!planSteps || !planSteps.length) return { fields: [] };
+
+    const runKeys = new Set();
+    run.steps.forEach((s) => (s.fields || []).forEach((f) => runKeys.add(s.position + '::' + f.label)));
+
+    const added = [];
+    planSteps.forEach((ps) => {
+      (ps.fields || []).forEach((f) => {
+        if (runKeys.has(ps.position + '::' + f.label)) return;
+        added.push({ position: ps.position, label: f.label, unit: f.unit || '' });
+      });
+    });
+    return { fields: added };
+  }
+
+  /* 把方案里新增的字段补进本次实验 —— 只追加，已有填写数据一律不动 */
+  async function syncRunFields() {
+    const drift = (run.drift && run.drift.fields) || [];
+    if (!drift.length) return;
+
+    try {
+      for (const item of drift) {
+        const s = run.steps.find((x) => x.position === item.position);
+        if (!s) continue;
+
+        const have = new Set((s.fields || []).map((f) => f.label));
+        if (have.has(item.label)) continue;
+
+        s.fields = (s.fields || []).concat([{ label: item.label, unit: item.unit }]);
+        const { error } = await client.from(RUN_STEP).update({ fields: s.fields }).eq('id', s.id);
+        if (error) throw error;
+      }
+
+      run.drift = { fields: [] };
+      setStatus('已按最新方案补齐参数，原有数据未改动。', 'ok');
+      drawRun();
+    } catch (err) {
+      console.error('[SciHub] 补齐参数失败：', err);
+      setStatus('补齐失败：' + errorText(err), 'error');
+    }
+  }
 
   async function renderRun(runId) {
     const host = $('view-run');
@@ -588,6 +708,7 @@
     run.pos = Math.min(r.current_step || 0, Math.max(0, run.steps.length - 1));
     run.urls = {};
     run.urlErrors = {};
+    run.drift = { fields: [] };
 
     // 预取图片的签名地址（私有 bucket）：一次批量签名，并记录失败原因给缩略图提示
     const paths = [];
@@ -605,6 +726,9 @@
         paths.forEach((p) => { if (!run.urls[p]) run.urlErrors[p] = msg; });
       }
     }
+
+    // 方案后续被更新过？记录差异，供界面提醒用户手动补参数
+    try { run.drift = await planDrift(r); } catch (err) { console.warn('[SciHub] 差异检查失败：', err); }
 
     subscribeRun(runId);   // 多端实时同步
     drawRun();
@@ -654,6 +778,7 @@
     const pct = Math.round((done / run.steps.length) * 100);
     const isLast = run.pos === run.steps.length - 1;
     const resumed = (run.data.current_step || 0) === run.pos && run.pos > 0;
+    const drift = (run.drift && run.drift.fields) || [];
 
     host.innerHTML = [
       '<div class="run-head">',
@@ -666,6 +791,16 @@
       '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
+      drift.length ? [
+        '<div class="drift">',
+        '  <div class="drift-body">',
+        '    <b>方案已更新：' + drift.length + ' 个参数不在本次实验里</b>',
+        '    <span>' + drift.map((d) => '第 ' + (d.position + 1) + ' 步「' + esc(d.label) + (d.unit ? '（' + esc(d.unit) + '）' : '') + '」').join('、') + '</span>',
+        '    <em>本次实验沿用开始时的版本，已填数据不受影响。可点右侧「补齐参数」把它们加进来，再手动填写数值。</em>',
+        '  </div>',
+        '  <button type="button" class="ghost" id="run-sync-fields">补齐参数</button>',
+        '</div>',
+      ].join('\n') : '',
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
@@ -697,6 +832,8 @@
     $('run-exit').addEventListener('click', () => route('home'));
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
+    const syncBtn = $('run-sync-fields');
+    if (syncBtn) syncBtn.addEventListener('click', syncRunFields);
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
