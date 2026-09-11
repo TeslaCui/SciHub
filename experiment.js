@@ -206,6 +206,10 @@
     const host = $('view-plans');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
 
+    // 卡片上的两个图标操作（行内 SVG，无外部依赖）
+    const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
+    const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
     const { data, error } = await client.from(PLAN).select('id,title,source,created_at').order('created_at', { ascending: false });
     if (error) {
       host.querySelector('.empty').textContent = '方案暂时无法加载，请稍后重试。';
@@ -214,16 +218,15 @@
     }
 
     const cards = (data || []).map((p) => [
-      '<article class="home-card">',
+      '<article class="plan-card" data-open="' + p.id + '" title="点击查看与编辑">',
       '  <div class="hc-main">',
       '    <div class="hc-title">' + esc(p.title) + '</div>',
-      '    <div class="hc-meta">' + (p.source ? esc(p.source) + ' · ' : '') + '创建于 ' + fmt(p.created_at) + '</div>',
+      '    <div class="hc-meta">' + (p.source ? esc(p.source) + ' · ' : '') + fmt(p.created_at) + '</div>',
       '  </div>',
       '  <div class="hc-actions">',
-      '    <button type="button" class="primary" data-start="' + p.id + '">开始实验</button>',
-      '    <button type="button" class="ghost" data-view="' + p.id + '">查看 / 编辑</button>',
-      '    <button type="button" class="ghost" data-rename="' + p.id + '" data-name="' + esc(p.title) + '">重命名</button>',
-      '    <button type="button" class="ghost del" data-del="' + p.id + '">删除</button>',
+      '    <button type="button" class="plan-start" data-start="' + p.id + '">开始实验</button>',
+      '    <button type="button" class="icon-btn" data-rename="' + p.id + '" data-name="' + esc(p.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
+      '    <button type="button" class="icon-btn del" data-del="' + p.id + '" title="删除" aria-label="删除">' + ICON_TRASH + '</button>',
       '  </div>',
       '</article>',
     ].join('\n')).join('');
@@ -244,8 +247,13 @@
       if (f) startImport(f);
     });
 
+    // 点卡片进详情（点按钮时不触发）
+    host.querySelectorAll('[data-open]').forEach((card) => card.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      route('plan', Number(card.dataset.open));
+    }));
+
     host.querySelectorAll('[data-start]').forEach((b) => b.addEventListener('click', () => startRun(Number(b.dataset.start))));
-    host.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => route('plan', Number(b.dataset.view))));
     host.querySelectorAll('[data-rename]').forEach((b) => b.addEventListener('click', () => renamePlan(Number(b.dataset.rename), b.dataset.name)));
     host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
       if (!window.confirm('删除这个方案？已生成的实验记录不受影响。')) return;

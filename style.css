@@ -272,6 +272,40 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .home-card .hc-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .home-card .hc-actions button { font-size: 13px; padding: 6px 12px; }
 
+/* ── 方案卡片：信息紧凑，操作用图标 ───────────────────── */
+.plan-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--brand);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px 14px; margin-bottom: 8px; cursor: pointer;
+}
+.plan-card:hover { border-color: var(--brand); }
+.plan-card .hc-main { min-width: 0; }
+.plan-card .hc-title { font-weight: 600; font-size: 15px; }
+.plan-card .hc-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.plan-card .hc-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.plan-start {
+  font-size: 13px; padding: 7px 13px; border-radius: 8px; border: none;
+  background: var(--brand); color: var(--brand-ink); font-weight: 600; white-space: nowrap;
+}
+.plan-start:hover { filter: brightness(1.07); }
+
+.icon-btn {
+  display: grid; place-items: center;
+  width: 34px; height: 34px; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: var(--muted);
+}
+.icon-btn:hover { border-color: var(--brand); color: var(--brand); }
+.icon-btn.del:hover { border-color: var(--danger); color: var(--danger); }
+.icon-btn svg { display: block; }
+
+@media (max-width: 560px) {
+  .plan-card { flex-direction: column; align-items: stretch; }
+  .plan-card .hc-actions { justify-content: flex-end; margin-top: 10px; }
+}
+
 .quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .quick { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; text-align: left; }
 .quick b { display: block; font-size: 15px; margin-bottom: 4px; }

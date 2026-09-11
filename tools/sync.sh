@@ -17,20 +17,31 @@ BRANCH="master"
 
 cd "$REPO"
 
-# ── 1. 先直连试；不通再找宿主代理（WSL 场景）────────────────
+# ── 1. 先直连；不通再找代理 ─────────────────────────────────
+# Git Bash / MSYS 走 Windows 网络栈，代理监听在本机 127.0.0.1；
+# WSL 则要用 Windows 宿主 IP（NAT 网关）。两条都试。
 PROXY=""
 if ! curl -s -o /dev/null --max-time 6 https://github.com; then
-  HOST_IP="$(ip route show default 2>/dev/null | awk '{print $3}' | head -1 || true)"
   for port in 7897 7890 7891 10809 10808 1080; do
-    if [ -n "$HOST_IP" ] && curl -s -o /dev/null --max-time 4 -x "http://${HOST_IP}:${port}" https://github.com; then
-      PROXY="http://${HOST_IP}:${port}"
+    if curl -s -o /dev/null --max-time 4 -x "http://127.0.0.1:${port}" https://github.com; then
+      PROXY="http://127.0.0.1:${port}"
       break
     fi
   done
 
   if [ -z "$PROXY" ]; then
-    echo "直连 github.com 不通，也没找到可用的宿主代理（宿主 IP：${HOST_IP:-未知}）。" >&2
-    echo "请确认 Windows 上的代理软件正在运行，或改用 Git Bash 执行本脚本。" >&2
+    HOST_IP="$(ip route show default 2>/dev/null | awk '{print $3}' | head -1 || true)"
+    for port in 7897 7890 7891 10809 10808 1080; do
+      if [ -n "$HOST_IP" ] && curl -s -o /dev/null --max-time 4 -x "http://${HOST_IP}:${port}" https://github.com; then
+        PROXY="http://${HOST_IP}:${port}"
+        break
+      fi
+    done
+  fi
+
+  if [ -z "$PROXY" ]; then
+    echo "直连 github.com 不通，也没找到可用代理（本机 127.0.0.1 与宿主 ${HOST_IP:-未知} 都试过了）。" >&2
+    echo "请确认 Windows 上的代理软件正在运行。" >&2
     exit 1
   fi
   echo "代理：$PROXY"
