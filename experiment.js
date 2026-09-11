@@ -231,12 +231,22 @@
 
   /* ══ 方案列表 ═══════════════════════════════════════════ */
 
+  /* 字段名归一化：AI 解析与规则解析对同一项常给出不同叫法
+     （「2-MIM 实际称量质量」 vs 「2-MIM 记录实际质量」），
+     去掉只起修饰作用的字词后再比较，避免把同一个字段误判成「新增」。 */
+  function fieldKey(label) {
+    return String(label || '')
+      .replace(/\s+/g, '')
+      .replace(/[（）()【】\[\]：:、，,。.]/g, '')
+      .replace(/记录|实际|称取|称量|读取|填写|测量|测得|请输入|最终|数据/g, '');
+  }
+
   /* 判断一个方案是否还有「按最新规则更新」能补充的内容（纯只读检查，不写库）。
      用来决定要不要显示更新按钮 —— 没有可升级内容就不显示，免得干扰。 */
   function planNeedsUpgrade(s) {
     const text = (s && s.instruction) || '';
-    const have = new Set(((s && s.fields) || []).map((f) => f.label));
-    if (detectFields(text).some((f) => !have.has(f.label))) return true;
+    const have = new Set(((s && s.fields) || []).map((f) => fieldKey(f.label)));
+    if (detectFields(text).some((f) => !have.has(fieldKey(f.label)))) return true;
     return !(s && s.notice) && !!extractNotice(text);
   }
 
@@ -321,45 +331,107 @@
     }));
   }
 
-  /* 用当前解析规则重新处理方案里已存的步骤文本，把新版能识别出的
-     数据字段 / 注意事项补充进来（例如老方案升级后多出「离心前注意配平」）。
-     刻意只做「补充」：
-       · 已存在的字段（含手工添加或改过名的）原样保留，绝不覆盖；
-       · experiment_runs / run_steps 完全不碰 —— 已开始的实验沿用启动时的快照。
-     返回实际补充的条目数。 */
+  /* 按当前解析规则「重建」方案内容：
+       · 字段以最新解析结果为准（同义字段取最新命名，不再新旧并存）；
+       · 旧字段里新规则认不出来的（通常是手工加的）保留在末尾，不丢；
+       · 已有注意事项保留，缺失的按新规则补上；
+       · plan_id 不变，已开始的实验仍指向同一个方案。
+     若同时有进行中的实验在用这个方案，会先询问是否把已填数据迁移到新字段。
+     返回发生变化的步骤数。 */
   async function upgradePlan(planId) {
     const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
     if (!steps || !steps.length) { setStatus('这个方案没有步骤可更新。', 'warn'); return 0; }
 
-    let addedFields = 0;
+    let changedFields = 0;
     let addedNotices = 0;
+    const nextByPosition = {};   // 供后面的数据迁移复用
 
     for (const s of steps) {
       const text = s.instruction || '';
-      const existing = s.fields || [];
-      const have = new Set(existing.map((f) => f.label));
+      const fresh = detectFields(text);
+      const freshKeys = new Set(fresh.map((f) => fieldKey(f.label)));
+      // 新规则认不出来的旧字段（多为手工添加）保留在末尾
+      const extras = (s.fields || []).filter((f) => !freshKeys.has(fieldKey(f.label)));
+      const nextFields = fresh.concat(extras);
+      nextByPosition[s.position] = nextFields;
 
-      const merged = existing.slice();
-      detectFields(text).forEach((f) => {
-        if (have.has(f.label)) return;
-        have.add(f.label);
-        merged.push(f);
-        addedFields += 1;
-      });
+      const currentNotice = s.notice || '';
+      const nextNotice = currentNotice || extractNotice(text);
+
+      const sameFields = JSON.stringify(nextFields) === JSON.stringify(s.fields || []);
+      const sameNotice = nextNotice === currentNotice;
+      if (!sameFields) changedFields += 1;
+      if (!sameNotice) addedNotices += 1;
+      if (sameFields && sameNotice) continue;
 
       const patch = {};
-      if (merged.length !== existing.length) patch.fields = merged;
-      if (!s.notice && extractNotice(text)) { patch.notice = extractNotice(text); addedNotices += 1; }
-      if (!Object.keys(patch).length) continue;
+      if (!sameFields) patch.fields = nextFields;
+      if (!sameNotice) patch.notice = nextNotice;
 
       const { error } = await client.from(STEP).update(patch).eq('id', s.id);
       if (error) throw error;
     }
 
-    setStatus(addedFields || addedNotices
-      ? ('已按最新规则更新：补充 ' + addedFields + ' 个参数、' + addedNotices + ' 条注意事项。已开始的实验不受影响。')
-      : '方案已是最新，没有需要补充的内容。', 'ok');
-    return addedFields + addedNotices;
+    const migrated = await migrateRuns(planId, nextByPosition);
+
+    if (!changedFields && !addedNotices && !migrated) {
+      setStatus('方案已是最新，没有需要补充的内容。', 'ok');
+    } else {
+      setStatus('已按最新规则重建：更新 ' + changedFields + ' 个步骤的字段、补 ' + addedNotices + ' 条注意事项'
+        + (migrated ? '，并迁移了 ' + migrated + ' 个步骤的已填数据' : '') + '。', 'ok');
+    }
+    return changedFields + addedNotices;
+  }
+
+  /* 值是以「字段名」为键存的（如 values['Fe(acac)₃ 记录实际质量']）。
+     方案重建后字段名可能变了，这里按归一化名把旧值搬到新字段名上；
+     搬不走的旧值原样保留 —— 宁可留着看不见，也不能丢数据。 */
+  function migrateStepValues(oldFields, newFields, values) {
+    const src = values || {};
+    const out = {};
+    const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+    newFields.forEach((nf) => {
+      const nk = fieldKey(nf.label);
+      if (has(src, nf.label)) { out[nf.label] = src[nf.label]; return; }      // 同名，直接沿用
+      const hit = (oldFields || []).find((of) => fieldKey(of.label) === nk && has(src, of.label));
+      if (hit) out[nf.label] = src[hit.label];                                 // 按归一化名搬家
+    });
+
+    Object.keys(src).forEach((k) => { if (out[k] === undefined) out[k] = src[k]; });   // 兜底：不丢旧值
+    return out;
+  }
+
+  /* 把方案的重建结果同步到正在进行的实验上（改别人的数据前先征得同意） */
+  async function migrateRuns(planId, nextByPosition) {
+    const { data: runs } = await client.from(RUN).select('id,status').eq('plan_id', planId);
+    const running = (runs || []).filter((r) => r.status === 'running');
+    if (!running.length) return 0;
+
+    const ok = window.confirm(
+      '有 ' + running.length + ' 个进行中的实验使用这个方案。\n\n'
+      + '要把它们已填的数据迁移到新字段上吗？\n'
+      + '（按字段含义自动匹配；匹配不到的值会原样保留，不会丢失）'
+    );
+    if (!ok) return 0;
+
+    let migrated = 0;
+    const { data: runSteps } = await client.from(RUN_STEP).select('*').in('run_id', running.map((r) => r.id));
+
+    for (const rs of (runSteps || [])) {
+      const nextFields = nextByPosition[rs.position];
+      if (!nextFields) continue;
+
+      const nextValues = migrateStepValues(rs.fields, nextFields, rs.values);
+      const changed = JSON.stringify(nextFields) !== JSON.stringify(rs.fields || [])
+        || JSON.stringify(nextValues) !== JSON.stringify(rs.values || {});
+      if (!changed) continue;
+
+      const { error } = await client.from(RUN_STEP).update({ fields: nextFields, values: nextValues }).eq('id', rs.id);
+      if (error) throw error;
+      migrated += 1;
+    }
+    return migrated;
   }
 
   /* ══ docx 导入 → 校对草稿 ═══════════════════════════════ */
@@ -675,12 +747,12 @@
     if (!planSteps || !planSteps.length) return { fields: [] };
 
     const runKeys = new Set();
-    run.steps.forEach((s) => (s.fields || []).forEach((f) => runKeys.add(s.position + '::' + f.label)));
+    run.steps.forEach((s) => (s.fields || []).forEach((f) => runKeys.add(s.position + '::' + fieldKey(f.label))));
 
     const added = [];
     planSteps.forEach((ps) => {
       (ps.fields || []).forEach((f) => {
-        if (runKeys.has(ps.position + '::' + f.label)) return;
+        if (runKeys.has(ps.position + '::' + fieldKey(f.label))) return;
         added.push({ position: ps.position, label: f.label, unit: f.unit || '' });
       });
     });
@@ -697,8 +769,8 @@
         const s = run.steps.find((x) => x.position === item.position);
         if (!s) continue;
 
-        const have = new Set((s.fields || []).map((f) => f.label));
-        if (have.has(item.label)) continue;
+        const have = new Set((s.fields || []).map((f) => fieldKey(f.label)));
+        if (have.has(fieldKey(item.label))) continue;
 
         s.fields = (s.fields || []).concat([{ label: item.label, unit: item.unit }]);
         const { error } = await client.from(RUN_STEP).update({ fields: s.fields }).eq('id', s.id);
