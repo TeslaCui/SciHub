@@ -315,10 +315,12 @@
       b.disabled = true;
       try {
         await upgradePlan(Number(b.dataset.upgrade));
+        // 关键：重新读一遍方案并重绘列表。
+        // 内容补齐后 planNeedsUpgrade 会返回 false，这个按钮也就随之消失。
+        listPlans();
       } catch (err) {
         console.error('[SciHub] 更新方案失败：', err);
         setStatus('更新失败：' + errorText(err), 'error');
-      } finally {
         b.disabled = false;
       }
     }));
