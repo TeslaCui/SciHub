@@ -29,6 +29,25 @@ manifest.json / sw.js / version.json   PWA 与版本标记（可选增强）
 
 脚本是幂等的，可重复执行；它只创建 `research_` 前缀的对象。
 
+## 可选：启用 AI 解析实验方案（DeepSeek）
+
+导入 `.docx` 方案时默认用**规则解析**（正则拆章节与填空），大多数情况够用，但对
+「同一节里多个试剂分别称量」「表格形式的汇总」这类内容容易出错或漏项。启用 AI 解析后由
+DeepSeek 完成结构化，字段更准确（例如能分清 `2-MIM 实际称量质量` 与 `Fe(acac)₃ 实际称量质量`）。
+
+**密钥安全**：DeepSeek 的 API key **绝不能写进前端**（静态站源码人人可见，等于公开密钥）。
+因此本仓库用一个 Supabase Edge Function 做代理，key 只存在 Supabase 服务端。
+
+### 部署步骤
+
+1. **创建函数**：Supabase Dashboard → **Edge Functions** → *Deploy a new function*
+   → 名称填 `parse-plan` → 把 `supabase/functions/parse-plan/index.ts` 的内容粘进去 → **Deploy**。
+   （已装 Supabase CLI 的话也可 `supabase functions deploy parse-plan`。）
+2. **配置密钥**：Dashboard → **Project Settings → Edge Functions → Secrets** → 新增
+   `DEEPSEEK_API_KEY`，值填你在 DeepSeek 平台申请的 key。**不要把 key 发给任何人或写进仓库。**
+3. 前端无需改动：函数部署好后再导入 `.docx` 就会自动走 AI 解析；若调用失败（未部署、
+   密钥缺失、网络异常），会**自动回退规则解析**并给出提示，不影响使用。
+
 ## 账号体系
 
 - **注册**：填「邮箱 + 用户名 + 电话 + 密码 + 确认密码」。用户名、邮箱、电话在库内唯一，重复会在注册前被 `research_check_signup` 拦下。

@@ -149,7 +149,55 @@
     if (!entry) throw new Error('这不是有效的 .docx 文件');
     const xml = await entry.async('string');
     const name = (file.name || '').replace(/\.docx$/i, '');
-    return parsePlan(name, docxParagraphs(xml));
+    return { name: name, paras: docxParagraphs(xml) };
+  }
+
+  /* 用 AI（Edge Function 代理 DeepSeek，密钥只在服务端）把方案文本结构化；
+     不可用时返回 null，由调用方回退到规则解析。 */
+  async function parsePlanSmart(text) {
+    if (!text || !text.trim()) return null;
+    try {
+      const { data, error } = await client.functions.invoke('parse-plan', { body: { text: text } });
+      if (error) throw error;
+      const plan = normalizePlan(data);
+      if (!plan) throw new Error('AI 未返回有效步骤');
+      return plan;
+    } catch (err) {
+      console.warn('[SciHub] AI 解析不可用，改用规则解析：', err);
+      return null;
+    }
+  }
+
+  /* 校验并规范化 AI 返回结构；保证字段名唯一（填写结果以字段名为键存储） */
+  function normalizePlan(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const steps = Array.isArray(raw.steps) ? raw.steps : [];
+    if (!steps.length) return null;
+
+    const out = steps.map((s, i) => {
+      const used = new Set();
+      const fields = (Array.isArray(s && s.fields) ? s.fields : []).map((f) => {
+        const label = String((f && f.label) || '').trim();
+        if (!label) return null;
+        let finalLabel = label;
+        let n = 2;
+        while (used.has(finalLabel)) { finalLabel = label + '（' + n + '）'; n += 1; }
+        used.add(finalLabel);
+        return { label: finalLabel, unit: String((f && f.unit) || '').trim() };
+      }).filter(Boolean);
+
+      return {
+        title: String((s && s.title) || ('步骤 ' + (i + 1))).trim(),
+        instruction: String((s && s.instruction) || '').trim(),
+        duration_hint: String((s && s.duration_hint) || '').trim(),
+        fields: fields,
+      };
+    });
+
+    return {
+      title: String(raw.title || '未命名实验方案').trim(),
+      steps: out,
+    };
   }
 
   /* ══ 方案列表 ═══════════════════════════════════════════ */
@@ -214,9 +262,19 @@
   async function startImport(file) {
     setStatus('正在解析方案…');
     try {
-      draft = await readDocx(file);
+      const { name, paras } = await readDocx(file);
+
+      // 优先用 AI 解析（能区分同名药品、能读表格）；不可用时回退规则解析
+      let plan = await parsePlanSmart(paras.join('\n'));
+      if (plan) {
+        setStatus('AI 解析完成，请核对步骤与字段。', 'ok');
+      } else {
+        plan = parsePlan(name, paras);
+        setStatus('已用规则解析（AI 未启用或调用失败）：请重点核对字段是否齐全。', 'warn');
+      }
+
+      draft = plan;
       draft.source = file.name;
-      setStatus('解析完成，请核对步骤与字段。', 'ok');
       renderDraft();
       route('plan');
     } catch (err) {
