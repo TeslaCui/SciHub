@@ -503,6 +503,7 @@
       '    <div class="hc-meta">实验照片</div>',
       '    <div class="photos" id="photos"></div>',
       '    <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>',
+      '    <input type="file" id="photo-gallery" accept="image/*" multiple hidden>',
       '  </div>',
       '  <div class="run-actions">',
       '    <button type="button" class="ghost" id="run-prev" ' + (run.pos === 0 ? 'disabled' : '') + '>上一步</button>',
@@ -518,9 +519,16 @@
     $('run-exit').addEventListener('click', () => route('home'));
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
+
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
-      if (f) uploadPhoto(f);
+      if (f) uploadPhotos([f]);
+      e.target.value = '';
+    });
+
+    $('photo-gallery').addEventListener('change', (e) => {
+      const files = e.target.files ? Array.from(e.target.files) : [];
+      if (files.length) uploadPhotos(files);
       e.target.value = '';
     });
   }
@@ -567,9 +575,13 @@
       '</div>',
     ].join('\n')).join('');
 
-    const add = el('button', { type: 'button', class: 'photo-add' }, '＋ 拍照 / 选图');
-    add.addEventListener('click', () => $('photo-input').click());
-    host.appendChild(add);
+    const camera = el('button', { type: 'button', class: 'photo-add' }, '📷<br>拍照');
+    camera.addEventListener('click', () => $('photo-input').click());
+    host.appendChild(camera);
+
+    const gallery = el('button', { type: 'button', class: 'photo-add' }, '🖼️<br>相册多选');
+    gallery.addEventListener('click', () => $('photo-gallery').click());
+    host.appendChild(gallery);
 
     host.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
       const path = b.dataset.drop;
@@ -607,20 +619,36 @@
     $('autosave').textContent = '已保存 · ' + fmt(now());
   }
 
-  /* ── 图片上传 ─────────────────────────────────────────── */
+  /* ── 图片上传（支持一次多张）─────────────────────────── */
 
-  async function uploadPhoto(file) {
+  async function uploadPhotos(files) {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+
+    let ok = 0;
+    for (let i = 0; i < list.length; i++) {
+      $('autosave').textContent = '照片上传中… ' + (i + 1) + ' / ' + list.length;
+      if (await uploadPhoto(list[i], true)) ok++;
+    }
+
+    $('autosave').textContent = (ok === list.length)
+      ? ('已上传 ' + ok + ' 张 · ' + fmt(now()))
+      : ('已上传 ' + ok + ' / ' + list.length + ' 张（部分失败）');
+    drawPhotos(run.steps[run.pos]);
+  }
+
+  async function uploadPhoto(file, silent) {
     const s = run.steps[run.pos];
-    const stamp = Date.now();
+    const stamp = Date.now() + Math.floor(Math.random() * 1000);
     const safe = (file.name || 'photo.jpg').replace(/[^\w.\-]/g, '_');
     const path = state.user.id + '/' + run.id + '/' + s.position + '/' + stamp + '-' + safe;
 
-    $('autosave').textContent = '照片上传中…';
+    if (!silent) $('autosave').textContent = '照片上传中…';
     const { error } = await client.storage.from(BUCKET).upload(path, file, { upsert: false });
     if (error) {
       console.error('[SciHub] 上传失败：', error);
       $('autosave').textContent = '照片上传失败';
-      return;
+      return false;
     }
 
     const { data: signed } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24);
@@ -628,7 +656,8 @@
 
     s.images = (s.images || []).concat([{ path: path, name: file.name || 'photo', at: new Date().toISOString() }]);
     await saveStep(s, true);
-    drawPhotos(s);
+    if (!silent) drawPhotos(s);
+    return true;
   }
 
   /* ── 下一步 / 完成 ────────────────────────────────────── */
