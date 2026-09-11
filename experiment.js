@@ -241,13 +241,24 @@
       .replace(/记录|实际|称取|称量|读取|填写|测量|测得|请输入|最终|数据/g, '');
   }
 
-  /* 判断一个方案是否还有「按最新规则更新」能补充的内容（纯只读检查，不写库）。
-     用来决定要不要显示更新按钮 —— 没有可升级内容就不显示，免得干扰。 */
-  function planNeedsUpgrade(s) {
-    const text = (s && s.instruction) || '';
-    const have = new Set(((s && s.fields) || []).map((f) => fieldKey(f.label)));
-    if (detectFields(text).some((f) => !have.has(fieldKey(f.label)))) return true;
-    return !(s && s.notice) && !!extractNotice(text);
+  /* ── 方案解析规则版本（内部判断用）──────────────────────
+     每次改进解析能力（新增字段识别、注意事项提取、同名药品区分…）就把这个数 +1。
+     方案会记下「导入时用的是哪一版」；只要落后，就说明它没享受到后来新增的
+     解析功能，界面会给出「重新解析」入口。
+       v1：初版（只有基本字段识别）
+       v2：注意事项提取 + 同名药品前缀区分
+     注：版本号只在内部用，不展示给用户 —— 用户只需要看到「有东西可重新解析」。 */
+  const PARSE_VERSION = 2;
+
+  /* 这个方案是不是用旧版解析规则导入的（没有记录的老方案视为 v1） */
+  function planNeedsUpgrade(plan) {
+    const version = Number(plan && plan.parse_version) || 1;
+    return version < PARSE_VERSION;
+  }
+
+  /* 保留占位：按需求界面上不展示版本号，需要时把这里改回返回提示文本即可 */
+  function planVersionNote() {
+    return '';
   }
 
   async function listPlans() {
@@ -259,17 +270,12 @@
     const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
     const ICON_REFRESH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>';
 
-    const { data, error } = await client.from(PLAN).select('id,title,source,created_at').order('created_at', { ascending: false });
+    const { data, error } = await client.from(PLAN).select('id,title,source,created_at,parse_version').order('created_at', { ascending: false });
     if (error) {
       host.querySelector('.empty').textContent = '方案暂时无法加载，请稍后重试。';
       console.error('[SciHub] 方案读取失败：', error);
       return;
     }
-
-    // 一次取回所有步骤（而不是每个方案各查一次），据此算出哪些方案还能升级
-    const { data: allSteps } = await client.from(STEP).select('plan_id,fields,instruction,notice');
-    const upgradeable = new Set();
-    (allSteps || []).forEach((s) => { if (planNeedsUpgrade(s)) upgradeable.add(s.plan_id); });
 
     const cards = (data || []).map((p) => [
       '<article class="plan-card" data-open="' + p.id + '" title="点击查看与编辑">',
@@ -279,8 +285,8 @@
       '  </div>',
       '  <div class="hc-actions">',
       '    <button type="button" class="plan-start" data-start="' + p.id + '">开始实验</button>',
-      upgradeable.has(p.id)
-        ? '    <button type="button" class="icon-btn fresh" data-upgrade="' + p.id + '" title="这个方案有新参数可补充：点此按最新规则更新（不影响已开始的实验）" aria-label="按最新规则更新">' + ICON_REFRESH + '</button>'
+      planNeedsUpgrade(p)
+        ? '    <button type="button" class="icon-btn fresh" data-upgrade="' + p.id + '" title="这个方案还没用上最新的解析功能，点此重新解析（不影响已开始的实验）" aria-label="重新解析">' + ICON_REFRESH + '</button>'
         : '',
       '    <button type="button" class="icon-btn" data-rename="' + p.id + '" data-name="' + esc(p.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
       '    <button type="button" class="icon-btn del" data-del="' + p.id + '" title="删除" aria-label="删除">' + ICON_TRASH + '</button>',
@@ -376,32 +382,66 @@
 
     const migrated = await migrateRuns(planId, nextByPosition);
 
+    // 标记为当前解析版本 —— 之后这个方案就不会再提示更新了
+    const { error: markErr } = await client.from(PLAN).update({ parse_version: PARSE_VERSION }).eq('id', planId);
+    if (markErr) throw markErr;
+
     if (!changedFields && !addedNotices && !migrated) {
-      setStatus('方案已是最新，没有需要补充的内容。', 'ok');
+      setStatus('解析规则已是最新（v' + PARSE_VERSION + '），内容没有需要补充的地方。', 'ok');
     } else {
-      setStatus('已按最新规则重建：更新 ' + changedFields + ' 个步骤的字段、补 ' + addedNotices + ' 条注意事项'
+      setStatus('已按最新规则重建（v' + PARSE_VERSION + '）：更新 ' + changedFields + ' 个步骤的字段、补 ' + addedNotices + ' 条注意事项'
         + (migrated ? '，并迁移了 ' + migrated + ' 个步骤的已填数据' : '') + '。', 'ok');
     }
     return changedFields + addedNotices;
   }
 
   /* 值是以「字段名」为键存的（如 values['Fe(acac)₃ 记录实际质量']）。
-     方案重建后字段名可能变了，这里按归一化名把旧值搬到新字段名上；
-     搬不走的旧值原样保留 —— 宁可留着看不见，也不能丢数据。 */
-  function migrateStepValues(oldFields, newFields, values) {
+     方案重建后字段名可能变了，于是要按含义把旧值搬到新字段上：
+       ① 名字完全相同      → 直接沿用
+       ② AI 判定是同一参数  → 搬过去（aiMap 由 match-params 提供）
+       ③ 归一化名相同      → 搬过去
+     三层都匹配不上就原样保留 —— 宁可留着看不见，也不能丢数据。 */
+  function migrateStepValues(oldFields, newFields, values, aiMap) {
     const src = values || {};
     const out = {};
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
     newFields.forEach((nf) => {
+      if (has(src, nf.label)) { out[nf.label] = src[nf.label]; return; }        // ① 同名
+
+      const byAi = (oldFields || []).find((of) => aiMap && aiMap[of.label] === nf.label && has(src, of.label));
+      if (byAi) { out[nf.label] = src[byAi.label]; return; }                    // ② AI 判定
+
       const nk = fieldKey(nf.label);
-      if (has(src, nf.label)) { out[nf.label] = src[nf.label]; return; }      // 同名，直接沿用
       const hit = (oldFields || []).find((of) => fieldKey(of.label) === nk && has(src, of.label));
-      if (hit) out[nf.label] = src[hit.label];                                 // 按归一化名搬家
+      if (hit) out[nf.label] = src[hit.label];                                  // ③ 归一化名
     });
 
     Object.keys(src).forEach((k) => { if (out[k] === undefined) out[k] = src[k]; });   // 兜底：不丢旧值
     return out;
+  }
+
+  /* 请 AI 判断「旧字段 → 新字段」的对应关系（按参数含义，而不只是名字）。
+     返回 { 旧字段名: 新字段名 }；不可用时返回 null，调用方回退到名称匹配。 */
+  async function aiMatchFields(oldLabels, newLabels) {
+    if (!oldLabels.length || !newLabels.length) return null;
+    try {
+      const { data, error } = await client.functions.invoke('match-params', {
+        body: { old: oldLabels, new: newLabels },
+      });
+      if (error) throw error;
+
+      const map = {};
+      ((data && data.pairs) || []).forEach((p) => {
+        if (p && p.from && p.to && oldLabels.indexOf(p.from) !== -1 && newLabels.indexOf(p.to) !== -1) {
+          map[p.from] = p.to;
+        }
+      });
+      return Object.keys(map).length ? map : null;
+    } catch (err) {
+      console.warn('[SciHub] AI 参数匹配不可用，改用名称匹配：', err);
+      return null;
+    }
   }
 
   /* 把方案的重建结果同步到正在进行的实验上（改别人的数据前先征得同意） */
@@ -412,19 +452,36 @@
 
     const ok = window.confirm(
       '有 ' + running.length + ' 个进行中的实验使用这个方案。\n\n'
-      + '要把它们已填的数据迁移到新字段上吗？\n'
-      + '（按字段含义自动匹配；匹配不到的值会原样保留，不会丢失）'
+      + '要把它们已填的数据迁移到新参数上吗？\n'
+      + '（先按名称匹配，再由 AI 判断同义参数；匹配不到的会原样保留，不会丢失）'
     );
     if (!ok) return 0;
 
-    let migrated = 0;
     const { data: runSteps } = await client.from(RUN_STEP).select('*').in('run_id', running.map((r) => r.id));
+    const rows = runSteps || [];
 
-    for (const rs of (runSteps || [])) {
+    // 只把「名字对不上」的那部分交给 AI，减少 token 也降低误配概率
+    const aiMaps = {};
+    for (const rs of rows) {
       const nextFields = nextByPosition[rs.position];
       if (!nextFields) continue;
 
-      const nextValues = migrateStepValues(rs.fields, nextFields, rs.values);
+      const oldLabels = (rs.fields || []).map((f) => f.label);
+      const newLabels = nextFields.map((f) => f.label);
+      const unmatchedOld = oldLabels.filter((l) => newLabels.indexOf(l) === -1);
+      const unmatchedNew = newLabels.filter((l) => oldLabels.indexOf(l) === -1);
+      if (!unmatchedOld.length || !unmatchedNew.length) continue;
+
+      const map = await aiMatchFields(unmatchedOld, unmatchedNew);
+      if (map) aiMaps[rs.id] = map;
+    }
+
+    let migrated = 0;
+    for (const rs of rows) {
+      const nextFields = nextByPosition[rs.position];
+      if (!nextFields) continue;
+
+      const nextValues = migrateStepValues(rs.fields, nextFields, rs.values, aiMaps[rs.id]);
       const changed = JSON.stringify(nextFields) !== JSON.stringify(rs.fields || [])
         || JSON.stringify(nextValues) !== JSON.stringify(rs.values || {});
       if (!changed) continue;
@@ -563,13 +620,15 @@
       let planId = draft.id;
 
       if (planId) {
-        const { error } = await client.from(PLAN).update({ title: title }).eq('id', planId);
+        // 保存后内容就是「当前解析规则 + 手工改动」，因此标记为当前版本
+        const { error } = await client.from(PLAN).update({ title: title, parse_version: PARSE_VERSION }).eq('id', planId);
         if (error) throw error;
         const { error: delErr } = await client.from(STEP).delete().eq('plan_id', planId);
         if (delErr) throw delErr;
       } else {
         const { data: plan, error } = await client.from(PLAN).insert({
           title: title, source: draft.source || '', user_id: state.user.id,
+          parse_version: PARSE_VERSION,
         }).select().single();
         if (error) throw error;
         planId = plan.id;
@@ -631,6 +690,7 @@
         title: s.title || '',
         instruction: s.instruction || '',
         duration_hint: s.duration_hint || '',
+        notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
         fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '' })),
       })),
     };
@@ -648,8 +708,8 @@
     const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
     if (!plan) { host.innerHTML = '<div class="empty">方案不存在。</div>'; return; }
 
-    // 只有确实还有可补充内容时才显示「按最新规则更新」
-    const canUpgrade = (steps || []).some((s) => planNeedsUpgrade(s));
+    // 按解析版本判断：落后于当前规则才显示「重新解析」
+    const canUpgrade = planNeedsUpgrade(plan);
 
     host.innerHTML = [
       '<div class="section-title">' + esc(plan.title) + '</div>',
@@ -668,7 +728,7 @@
       '<div class="run-actions">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
-      canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">按最新规则更新</button>' : '',
+      canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
       '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',

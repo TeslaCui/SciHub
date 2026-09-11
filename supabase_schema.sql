@@ -353,3 +353,19 @@ select
      where table_schema = 'public'
        and table_name in ('plan_steps', 'run_steps')
        and column_name = 'notice')                                  as notice_columns;
+
+-- ─────────────────────────────────────────────────────────────
+-- 方案「解析规则版本」（新增）
+-- 方案记下导入时用的解析规则版本；落后于前端当前版本时，
+-- 界面会像页脚版本号那样提示「解析规则 v1 → v2」并给出更新入口。
+-- 幂等：列已存在则跳过。老方案为 null，前端按 v1 处理 —— 因此会提示更新，
+-- 这正是想要的效果（它们确实是旧规则导入的）。
+-- ─────────────────────────────────────────────────────────────
+alter table public.experiment_plans add column if not exists parse_version int;
+
+-- 自检 6：应看到 parse_version_columns=1
+select
+  (select count(*) from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'experiment_plans'
+       and column_name = 'parse_version')                           as parse_version_columns;

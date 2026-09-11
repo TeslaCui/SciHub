@@ -252,6 +252,16 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .ver-update { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); border: none; }
 .ver-update:hover { filter: brightness(1.07); }
 
+/* 方案卡片上的「解析规则 v1 → v2」：与页脚版本号同一套视觉语言 */
+.ver-stale {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  color: var(--danger); background: #fef3f2; border: 1px solid #fecdca;
+  font-size: 11px; white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .ver-stale { color: #fca5a5; background: rgba(220, 38, 38, .16); border-color: rgba(248, 113, 113, .45); }
+}
+
 /* ── 主导航 ───────────────────────────────────────────── */
 .nav { display: flex; gap: 6px; margin-bottom: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
 .nav-btn { flex: 1; background: transparent; color: var(--muted); font-size: 14px; padding: 8px; }
