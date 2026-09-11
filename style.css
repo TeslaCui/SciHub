@@ -338,29 +338,50 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .data-field { margin-bottom: 14px; }
 .data-field .unit { color: var(--muted); font-size: 12px; margin-left: 6px; }
 
-.photos { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+/* 照片区：自适应网格 —— 一套规则覆盖手机（2 列）/ 平板 / 电脑（多列） */
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
 
-.photo { position: relative; width: 116px; margin: 0; }
-.photo-open { display: block; width: 116px; height: 116px; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); cursor: zoom-in; }
+.photo { position: relative; margin: 0; min-width: 0; }
+.photo-open {
+  display: block; width: 100%; aspect-ratio: 1 / 1; padding: 0;
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  background: var(--bg); cursor: zoom-in;
+}
 .photo-open img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.photo-loading { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 11px; }
+.photo-loading {
+  display: grid; place-items: center; align-content: center; gap: 4px;
+  height: 100%; padding: 8px; text-align: center; word-break: break-word;
+  color: var(--muted); font-size: 11px; line-height: 1.35;
+}
 
 .photo-drop {
-  position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0;
-  line-height: 1; font-size: 13px; border-radius: 50%; border: none;
-  background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer;
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 24px; height: 24px; padding: 0; line-height: 1; font-size: 13px;
+  border-radius: 50%; border: none; background: rgba(0, 0, 0, .55); color: #fff; cursor: pointer;
 }
 .photo-drop:hover { background: #c0392b; }
 
 .photo-caption {
-  width: 116px; margin-top: 4px; padding: 4px 6px;
+  /* box-sizing 是关键：否则 padding+border 会把输入框撑出格子，看起来「压」到相邻照片上 */
+  box-sizing: border-box;
+  width: 100%; margin-top: 6px; padding: 5px 7px;
   font-size: 12px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--card); color: var(--ink);
 }
 .photo-caption::placeholder { color: var(--muted); }
 .photo-caption:focus { border-color: var(--brand); outline: none; }
 
-.photo-add { width: 116px; height: 116px; border: 1px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 12px; display: grid; place-items: center; text-align: center; cursor: pointer; }
+.photo-add {
+  width: 100%; aspect-ratio: 1 / 1; box-sizing: border-box;
+  border: 1px dashed var(--line); border-radius: 10px; background: var(--bg);
+  color: var(--muted); font-size: 12px; display: grid; place-items: center;
+  text-align: center; cursor: pointer;
+}
 .photo-add:hover { border-color: var(--brand); color: var(--brand); }
 
 /* ── 灯箱（点击放大查看）───────────────────────────────── */
@@ -462,7 +483,31 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 @media (max-width: 420px) {
   .nav-btn { font-size: 12px; }
-  .photo, .photo-add { width: 78px; height: 78px; }
+  .photos { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
+  .photo-caption { font-size: 11px; padding: 4px 6px; }
+}
+
+/* 极窄屏：照片固定两列，避免出现「一列」或过小的格子 */
+@media (max-width: 340px) {
+  .photos { grid-template-columns: 1fr 1fr; }
+}
+
+/* ── 平板（竖屏 / 横屏拆成两条，不依赖 CSS 嵌套）──────── */
+@media (min-width: 621px) and (max-width: 1024px) {
+  main { max-width: 780px; }
+  .quick-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .home-card { flex-direction: row; align-items: center; }
+}
+
+/* 平板横屏：横向空间更大，照片给更宽的格子 */
+@media (min-width: 621px) and (max-width: 1024px) and (orientation: landscape) {
+  .photos { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+}
+
+/* 手机横放（矮屏）：压缩竖向留白，保证底部按钮可见 */
+@media (max-height: 520px) and (orientation: landscape) {
+  .topbar { padding: 8px 14px; }
+  .lb-stage img { max-height: 62vh; }
 }
 
 /* ── 电脑端：整体放大，关键内容更醒目 ─────────────────── */
@@ -478,6 +523,21 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .step-title-text { font-size: 17px; }
   .home-card .hc-title { font-size: 16px; }
   .quick b { font-size: 16px; }
+  .photos { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
   input[type=text], input[type=email], input[type=password], input[type=tel], input[type=date],
   input[type=search], input[type=number], select, textarea { font-size: 16px; }
+}
+
+/* ── 大屏 / 超宽屏：限制正文宽度，避免一行过长难读 ────── */
+@media (min-width: 1400px) {
+  main { max-width: 1180px; }
+  .photos { grid-template-columns: repeat(auto-fill, minmax(156px, 1fr)); }
+}
+
+/* 触摸设备：加大可点区域（< 10 mm 的按钮不好按） */
+@media (hover: none) and (pointer: coarse) {
+  .nav-btn { min-height: 44px; }
+  .photo-drop { width: 28px; height: 28px; font-size: 15px; }
+  .lb-btn { min-width: 44px; min-height: 44px; }
+  input, select, textarea { min-height: 42px; }
 }

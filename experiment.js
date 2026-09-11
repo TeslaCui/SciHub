@@ -542,7 +542,7 @@
 
   /* ══ 执行界面 ═══════════════════════════════════════════ */
 
-  const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {} };
+  const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {}, urlErrors: {} };
 
   async function renderRun(runId) {
     const host = $('view-run');
@@ -558,12 +558,22 @@
     // 「继续」时回到上次所在的那一步（current_step 是存在云端的，换设备也一致）
     run.pos = Math.min(r.current_step || 0, Math.max(0, run.steps.length - 1));
     run.urls = {};
+    run.urlErrors = {};
 
-    // 预取图片的签名地址（私有 bucket）
-    for (const s of run.steps) {
-      for (const img of (s.images || [])) {
-        const { data: signed } = await client.storage.from(BUCKET).createSignedUrl(img.path, 60 * 60 * 24);
-        if (signed) run.urls[img.path] = signed.signedUrl;
+    // 预取图片的签名地址（私有 bucket）：一次批量签名，并记录失败原因给缩略图提示
+    const paths = [];
+    run.steps.forEach((s) => (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); }));
+
+    if (paths.length) {
+      const { data: signedList, error: signError } = await client.storage.from(BUCKET).createSignedUrls(paths, 60 * 60 * 24);
+      (signedList || []).forEach((item) => {
+        if (item && item.path && item.signedUrl) run.urls[item.path] = item.signedUrl;
+        else if (item && item.path) run.urlErrors[item.path] = errorText(item.error) || '无法读取';
+      });
+      if (signError) {
+        console.warn('[SciHub] 图片签名失败：', signError);
+        const msg = errorText(signError);
+        paths.forEach((p) => { if (!run.urls[p]) run.urlErrors[p] = msg; });
       }
     }
 
@@ -754,7 +764,7 @@
       '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="点击放大查看">',
       run.urls[img.path]
         ? '    <img src="' + esc(run.urls[img.path]) + '" alt="' + esc(img.caption || img.name || '照片') + '">'
-        : '    <span class="photo-loading">加载中…</span>',
+        : '    <span class="photo-loading">' + ((run.urlErrors || {})[img.path] ? '⚠️ ' + esc(run.urlErrors[img.path]) : '图片准备中…') + '</span>',
       '  </button>',
       '  <button type="button" class="photo-drop" data-drop="' + esc(img.path) + '" title="删除这张">×</button>',
       '  <input class="photo-caption" data-caption="' + esc(img.path) + '" value="' + esc(img.caption || '') + '" placeholder="加个注解…" maxlength="120">',
