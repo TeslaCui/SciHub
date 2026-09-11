@@ -306,6 +306,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .plan-card .hc-actions { justify-content: flex-end; margin-top: 10px; }
 }
 
+/* ── 日期 + 时间选择器（用于「时间」类字段）────────────── */
+.dt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dt-row input { margin-top: 0; min-width: 0; }
+
 .quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .quick { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; text-align: left; }
 .quick b { display: block; font-size: 15px; margin-bottom: 4px; }

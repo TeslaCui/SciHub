@@ -308,3 +308,32 @@ select
   (select count(*) from pg_policies
      where schemaname = 'storage' and tablename = 'objects'
        and policyname like 'own experiment images%')                                                    as exp_image_policies;
+
+-- ─────────────────────────────────────────────────────────────
+-- 实时同步：把「实验执行」相关表加入 Realtime 发布
+-- 同一实验在多台设备上会实时互相推送改动（前端已订阅 run_steps）
+-- 幂等：已在发布中则跳过
+-- ─────────────────────────────────────────────────────────────
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'run_steps'
+  ) then
+    alter publication supabase_realtime add table run_steps;
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'experiment_runs'
+  ) then
+    alter publication supabase_realtime add table experiment_runs;
+  end if;
+end
+$$;
+
+-- 自检 4：Realtime 发布是否已包含这两张表（预期 realtime_tables=2）
+select
+  (select count(*) from pg_publication_tables
+     where pubname = 'supabase_realtime' and schemaname = 'public'
+       and tablename in ('run_steps', 'experiment_runs'))          as realtime_tables;

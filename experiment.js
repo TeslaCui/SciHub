@@ -555,6 +555,7 @@
     run.id = runId;
     run.data = r;
     run.steps = steps || [];
+    // 「继续」时回到上次所在的那一步（current_step 是存在云端的，换设备也一致）
     run.pos = Math.min(r.current_step || 0, Math.max(0, run.steps.length - 1));
     run.urls = {};
 
@@ -566,7 +567,43 @@
       }
     }
 
+    subscribeRun(runId);   // 多端实时同步
     drawRun();
+  }
+
+  /* ── 多端实时同步：订阅这条实验的 run_steps 变化 ───────── */
+
+  let runChannel = null;
+
+  function subscribeRun(runId) {
+    unsubscribeRun();
+    try {
+      runChannel = client
+        .channel('run-steps-' + runId)
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'run_steps', filter: 'run_id=eq.' + runId,
+        }, (payload) => {
+          // 本机正在输入时不打断（避免把他端推来的内容盖到用户光标上）
+          if (run.saveTimer) return;
+          const row = payload.new || payload.old;
+          if (!row || row.id == null) return;
+
+          const idx = run.steps.findIndex((x) => x.id === row.id);
+          if (idx === -1) return;
+
+          run.steps[idx] = Object.assign({}, run.steps[idx], row);
+          if (idx === run.pos) drawRun();
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn('[SciHub] 实时同步不可用（不影响保存）：', err);
+    }
+  }
+
+  function unsubscribeRun() {
+    if (!runChannel) return;
+    try { client.removeChannel(runChannel); } catch (_error) { /* 忽略 */ }
+    runChannel = null;
   }
 
   function drawRun() {
@@ -577,6 +614,7 @@
     const done = run.steps.filter((x) => x.status === 'done').length;
     const pct = Math.round((done / run.steps.length) * 100);
     const isLast = run.pos === run.steps.length - 1;
+    const resumed = (run.data.current_step || 0) === run.pos && run.pos > 0;
 
     host.innerHTML = [
       '<div class="run-head">',
@@ -586,7 +624,9 @@
       '  <div class="hc-actions"><button type="button" class="ghost" id="run-exit">返回主页</button></div>',
       '</div>',
       '<div class="progress"><i style="width:' + pct + '%"></i></div>',
-      '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步</div>',
+      '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步'
+        + (resumed ? ' · <b>上次停在这里</b>' : '')
+        + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
@@ -626,18 +666,52 @@
     });
   }
 
+  /* 字段名里带「时间 / 时刻 / 日期」的，改用日期 + 时间选择器，不用手打 */
+  function isTimeField(label) {
+    return /时间|时刻|日期/.test(String(label || ''));
+  }
+
+  /* 从已存的自由文本里尽量拆出日期与时间（兼容 "2026-09-11 15:44"、"15:44"、"2026-09-11"） */
+  function splitDateTime(value) {
+    const text = String(value == null ? '' : value).trim();
+    const dm = text.match(/\d{4}-\d{2}-\d{2}/);
+    const tm = text.match(/(\d{1,2}):(\d{2})/);
+    return {
+      date: dm ? dm[0] : '',
+      time: tm ? (String(tm[1]).padStart(2, '0') + ':' + tm[2]) : '',
+    };
+  }
+
   function drawFields(s) {
     const host = $('fields');
     const fields = s.fields || [];
     if (!fields.length) {
       host.innerHTML = '<p class="hint small">这一步没有预设字段，可在下方备注里记录。</p>';
     } else {
-      host.innerHTML = fields.map((f, i) => [
-        '<div class="data-field">',
-        '  <label>' + esc(f.label) + (f.unit ? '<span class="unit">(' + esc(f.unit) + ')</span>' : '') + '</label>',
-        '  <input data-key="' + i + '" value="' + esc((s.values || {})[f.label] || '') + '">',
-        '</div>',
-      ].join('\n')).join('');
+      host.innerHTML = fields.map((f, i) => {
+        const value = (s.values || {})[f.label] || '';
+        const head = '<label>' + esc(f.label) + (f.unit ? '<span class="unit">(' + esc(f.unit) + ')</span>' : '') + '</label>';
+
+        if (isTimeField(f.label)) {
+          const parts = splitDateTime(value);
+          return [
+            '<div class="data-field">',
+            '  ' + head,
+            '  <div class="dt-row">',
+            '    <input type="date" data-key="' + i + '" data-part="date" value="' + esc(parts.date) + '">',
+            '    <input type="time" data-key="' + i + '" data-part="time" value="' + esc(parts.time) + '">',
+            '  </div>',
+            '</div>',
+          ].join('\n');
+        }
+
+        return [
+          '<div class="data-field">',
+          '  ' + head,
+          '  <input data-key="' + i + '" value="' + esc(value) + '">',
+          '</div>',
+        ].join('\n');
+      }).join('');
     }
 
     const note = el('div', { class: 'data-field' }, [
@@ -650,7 +724,20 @@
       inp.addEventListener('input', () => {
         const f = fields[Number(inp.dataset.key)];
         s.values = s.values || {};
-        s.values[f.label] = inp.value;
+
+        if (inp.dataset.part) {
+          // 日期与时间分两个控件，合并成 "YYYY-MM-DD HH:mm" 存库
+          let date = '';
+          let time = '';
+          host.querySelectorAll('[data-key="' + inp.dataset.key + '"]').forEach((node) => {
+            if (node.dataset.part === 'date') date = node.value;
+            if (node.dataset.part === 'time') time = node.value;
+          });
+          s.values[f.label] = (date + ' ' + time).trim();
+        } else {
+          s.values[f.label] = inp.value;
+        }
+
         scheduleSave(s);
       });
     });
