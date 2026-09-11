@@ -852,5 +852,45 @@
     return data || [];
   }
 
-  window.Run = { render: renderRun, running: runningRuns };
+  /* 重命名一次实验（只改实验标题，不动方案） */
+  async function renameRun(runId, currentTitle) {
+    const name = window.prompt('新的实验名称', currentTitle || '');
+    if (name == null) return;
+    const title = name.trim();
+    if (!title || title === currentTitle) return;
+
+    const { error } = await client.from(RUN).update({ title: title }).eq('id', runId);
+    if (error) {
+      console.error('[SciHub] 重命名实验失败：', error);
+      setStatus('重命名失败，请稍后重试。', 'error');
+      return;
+    }
+    setStatus('已重命名为「' + title + '」。', 'ok');
+    route('home');
+  }
+
+  /* 删除一次实验：连同它的照片一起清理（Storage 不随表级联删除） */
+  async function removeRun(runId) {
+    if (!window.confirm('删除这次实验？它的所有填写数据与照片都会被永久删除，无法恢复。')) return;
+
+    try {
+      const { data: steps } = await client.from(RUN_STEP).select('images').eq('run_id', runId);
+      const paths = [];
+      (steps || []).forEach((s) => {
+        (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); });
+      });
+      if (paths.length) await client.storage.from(BUCKET).remove(paths);
+
+      const { error } = await client.from(RUN).delete().eq('id', runId); // run_steps 随之级联删除
+      if (error) throw error;
+
+      setStatus('实验已删除。', 'ok');
+      route('home');
+    } catch (err) {
+      console.error('[SciHub] 删除实验失败：', err);
+      setStatus('删除失败，请稍后重试。', 'error');
+    }
+  }
+
+  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun };
 })();

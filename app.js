@@ -622,7 +622,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.10.2';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -705,9 +705,24 @@ function route(name, param) {
   else if (target === 'run' && param && window.Run) window.Run.render(param);
 }
 
+/* 进行中实验卡片上的「重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
+document.addEventListener('click', (e) => {
+  if (!window.Run) return;
+
+  const ren = e.target.closest('[data-run-rename]');
+  if (ren) { window.Run.rename(Number(ren.dataset.runRename), ren.dataset.name); return; }
+
+  const del = e.target.closest('[data-run-del]');
+  if (del) { window.Run.remove(Number(del.dataset.runDel)); }
+});
+
 async function renderHome() {
   const host = $('view-home');
   host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
+
+  // 卡片上的图标操作（行内 SVG，无外部依赖）
+  const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
+  const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
 
   let runs = [];
   try {
@@ -731,7 +746,11 @@ async function renderHome() {
           '    <div class="hc-title">' + esc(r.title) + '</div>',
           '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中</div>',
           '  </div>',
-          '  <div class="hc-actions"><button type="button" class="primary" data-run="' + r.id + '">继续</button></div>',
+          '  <div class="hc-actions">',
+          '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
+          '    <button type="button" class="icon-btn" data-run-rename="' + r.id + '" data-name="' + esc(r.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
+          '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>',
+          '  </div>',
           '</article>',
         ].join('\n')).join('\n')
       : '<div class="empty">当前没有进行中的实验。</div>',
