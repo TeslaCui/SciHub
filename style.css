@@ -301,6 +301,18 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .icon-btn.del:hover { border-color: var(--danger); color: var(--danger); }
 .icon-btn svg { display: block; }
 
+/* 「有新参数可补充」时的更新按钮：用品牌色高亮，与普通图标区分开 */
+.icon-btn.fresh { border-color: var(--brand); color: var(--brand); background: rgba(15, 118, 110, .08); }
+.icon-btn.fresh:hover { background: rgba(15, 118, 110, .16); }
+
+/* 方案详情页的更新按钮：实心品牌色，区别于旁边的 ghost 按钮 */
+.fresh-btn {
+  background: var(--brand); color: var(--brand-ink); border: 1px solid var(--brand);
+  border-radius: 8px; padding: 9px 14px; font-size: 14px; cursor: pointer;
+}
+.fresh-btn:hover { filter: brightness(1.06); }
+.fresh-btn:disabled { opacity: .6; cursor: default; }
+
 @media (max-width: 560px) {
   .plan-card { flex-direction: column; align-items: stretch; }
   .plan-card .hc-actions { justify-content: flex-end; margin-top: 10px; }

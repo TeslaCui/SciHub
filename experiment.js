@@ -231,6 +231,15 @@
 
   /* ══ 方案列表 ═══════════════════════════════════════════ */
 
+  /* 判断一个方案是否还有「按最新规则更新」能补充的内容（纯只读检查，不写库）。
+     用来决定要不要显示更新按钮 —— 没有可升级内容就不显示，免得干扰。 */
+  function planNeedsUpgrade(s) {
+    const text = (s && s.instruction) || '';
+    const have = new Set(((s && s.fields) || []).map((f) => f.label));
+    if (detectFields(text).some((f) => !have.has(f.label))) return true;
+    return !(s && s.notice) && !!extractNotice(text);
+  }
+
   async function listPlans() {
     const host = $('view-plans');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
@@ -247,6 +256,11 @@
       return;
     }
 
+    // 一次取回所有步骤（而不是每个方案各查一次），据此算出哪些方案还能升级
+    const { data: allSteps } = await client.from(STEP).select('plan_id,fields,instruction,notice');
+    const upgradeable = new Set();
+    (allSteps || []).forEach((s) => { if (planNeedsUpgrade(s)) upgradeable.add(s.plan_id); });
+
     const cards = (data || []).map((p) => [
       '<article class="plan-card" data-open="' + p.id + '" title="点击查看与编辑">',
       '  <div class="hc-main">',
@@ -255,7 +269,9 @@
       '  </div>',
       '  <div class="hc-actions">',
       '    <button type="button" class="plan-start" data-start="' + p.id + '">开始实验</button>',
-      '    <button type="button" class="icon-btn" data-upgrade="' + p.id + '" title="按最新规则重新解析（只补充新字段，不动已开始实验）" aria-label="重新解析更新">' + ICON_REFRESH + '</button>',
+      upgradeable.has(p.id)
+        ? '    <button type="button" class="icon-btn fresh" data-upgrade="' + p.id + '" title="这个方案有新参数可补充：点此按最新规则更新（不影响已开始的实验）" aria-label="按最新规则更新">' + ICON_REFRESH + '</button>'
+        : '',
       '    <button type="button" class="icon-btn" data-rename="' + p.id + '" data-name="' + esc(p.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
       '    <button type="button" class="icon-btn del" data-del="' + p.id + '" title="删除" aria-label="删除">' + ICON_TRASH + '</button>',
       '  </div>',
@@ -558,6 +574,9 @@
     const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
     if (!plan) { host.innerHTML = '<div class="empty">方案不存在。</div>'; return; }
 
+    // 只有确实还有可补充内容时才显示「按最新规则更新」
+    const canUpgrade = (steps || []).some((s) => planNeedsUpgrade(s));
+
     host.innerHTML = [
       '<div class="section-title">' + esc(plan.title) + '</div>',
       '  <p class="hint small" style="margin-bottom:12px">' + (plan.source ? '来源：' + esc(plan.source) + ' · ' : '') + '共 ' + (steps || []).length + ' 个步骤</p>',
@@ -575,7 +594,7 @@
       '<div class="run-actions">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
-      '  <button type="button" class="ghost" id="plan-upgrade">按最新规则更新</button>',
+      canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">按最新规则更新</button>' : '',
       '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',
@@ -584,18 +603,20 @@
     $('plan-back').addEventListener('click', () => route('plans'));
     $('plan-start').addEventListener('click', () => startRun(planId));
     $('plan-edit').addEventListener('click', () => editPlan(planId));
-    $('plan-upgrade').addEventListener('click', async () => {
-      const btn = $('plan-upgrade');
-      btn.disabled = true;
-      try {
-        await upgradePlan(planId);
-        renderEditor(planId);
-      } catch (err) {
-        console.error('[SciHub] 更新方案失败：', err);
-        setStatus('更新失败：' + errorText(err), 'error');
-        btn.disabled = false;
-      }
-    });
+    const upBtn = $('plan-upgrade');
+    if (upBtn) {
+      upBtn.addEventListener('click', async () => {
+        upBtn.disabled = true;
+        try {
+          await upgradePlan(planId);
+          renderEditor(planId);
+        } catch (err) {
+          console.error('[SciHub] 更新方案失败：', err);
+          setStatus('更新失败：' + errorText(err), 'error');
+          upBtn.disabled = false;
+        }
+      });
+    }
     $('plan-rename').addEventListener('click', () => renamePlan(planId, plan.title));
   }
 
