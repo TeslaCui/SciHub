@@ -38,7 +38,28 @@ else
   echo "直连 GitHub"
 fi
 
-# ── 2. 提交本地改动 ─────────────────────────────────────────
+# ── 2. 有 node 就先做语法检查（没有则跳过）──────────────────
+NODE_BIN=""
+for candidate in node "/d/LeStoreDownload/Node.js/node.exe"; do
+  if command -v "$candidate" >/dev/null 2>&1 || [ -x "$candidate" ]; then
+    NODE_BIN="$candidate"
+    break
+  fi
+done
+
+if [ -n "$NODE_BIN" ]; then
+  for js in app.js experiment.js sw.js; do
+    if ! "$NODE_BIN" --check "$js"; then
+      echo "语法检查失败：$js —— 已中止推送" >&2
+      exit 1
+    fi
+  done
+  echo "语法检查通过（app.js / experiment.js / sw.js）"
+else
+  echo "未找到 node，跳过语法检查"
+fi
+
+# ── 3. 提交本地改动 ─────────────────────────────────────────
 if [ -n "$(git status --porcelain)" ]; then
   git add -A
   git commit -q -m "${1:-chore: 自动同步}"
@@ -47,7 +68,7 @@ else
   echo "工作区干净，跳过提交。"
 fi
 
-# ── 3. 推送 ─────────────────────────────────────────────────
+# ── 4. 推送 ─────────────────────────────────────────────────
 if [ -n "$PROXY" ]; then
   GIT_TERMINAL_PROMPT=0 git -c "http.proxy=$PROXY" -c "https.proxy=$PROXY" push origin "$BRANCH"
 else

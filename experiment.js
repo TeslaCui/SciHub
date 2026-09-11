@@ -87,15 +87,27 @@
       steps: steps.map((s, i) => {
         const text = s.lines.join('\n');
         const fields = [];
-        const seen = {};
+        const used = new Set();
+
+        // 逐个「填空」生成字段。同名字段不再合并，而是带上所在句子的试剂名：
+        // 同一节里的两次「记录实际质量」→「2-MIM 记录实际质量」与「Fe(acac)₃ 记录实际质量」。
         [...text.matchAll(FIELD)].forEach((f) => {
           const label = f[1].replace(/^[0-9.\s]+/, '').trim();
           const unit = f[2] || '';
-          const key = label + '|' + unit;
-          if (!label || seen[key]) return;
-          seen[key] = 1;
-          fields.push({ label: label, unit: unit });
+          if (!label) return;
+
+          const at = f.index || 0;
+          const agent = guessAgent(text.slice(Math.max(0, at - 60), at));
+          const base = agent ? (agent + ' ' + label) : label;
+
+          let finalLabel = base;
+          let n = 2;
+          while (used.has(finalLabel)) { finalLabel = base + '（' + n + '）'; n += 1; }
+          used.add(finalLabel);
+
+          fields.push({ label: finalLabel, unit: unit });
         });
+
         return {
           position: i,
           title: s.title,
@@ -105,6 +117,21 @@
         };
       }),
     };
+  }
+
+  /* 从「填空」前面那段文字里猜出涉及的试剂名（化学式 / 缩写），用来区分同名字段 */
+  function guessAgent(context) {
+    if (!context) return '';
+    const patterns = [
+      /[A-Z][A-Za-z]*\([^)]+\)[\w₀-₉·.\-]*/,
+      /\b\d+-[A-Za-z]{2,}\b/,
+      /\b[A-Z][a-z]?\d[\w₀-₉]*/,
+    ];
+    for (const re of patterns) {
+      const m = context.match(re);
+      if (m) return m[0];
+    }
+    return '';
   }
 
   /* 从文本里猜时长提示（如「24 h」「过夜」「12 h」「4 h」） */

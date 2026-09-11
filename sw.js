@@ -1,7 +1,19 @@
-/* Service Worker：页面走 network-first（避免拿到旧版），静态资源走 cache-first。
- * 改版时同步更新下方 CACHE 版本号与 version.json，旧缓存会在 activate 阶段清理。 */
-const CACHE = 'scihub-research-v0.8.0';
-const ASSETS = ['./index.html', './style.css', './app.js', './experiment.js', './manifest.json'];
+/* Service Worker：全部走 network-first。
+ *
+ * 为什么不用 cache-first：本站的内容随每次发布更新，而用户拿到旧版 JS 会陷入
+ * 「提示有新版本却怎么都更新不了」的死循环（HTTP 缓存 + SW 缓存双重拦截）。
+ * 现在一律先请求网络；成功就顺手把响应写进缓存，失败才回退缓存（离线兜底）。
+ *
+ * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
+ */
+const CACHE = 'scihub-research-v0.9.0';
+const ASSETS = [
+  './index.html',
+  './style.css?v=0.9.0',
+  './app.js?v=0.9.0',
+  './experiment.js?v=0.9.0',
+  './manifest.json?v=0.9.0',
+];
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -21,18 +33,20 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return; // Supabase / CDN 请求不介入，始终走网络
+  if (url.origin !== self.location.origin) return; // Supabase / CDN 始终走网络
 
-  if (request.mode === 'navigate' || request.destination === 'document') {
-    event.respondWith(fetch(request).catch(() => caches.match('./index.html')));
-    return;
-  }
+  // HTML 强制绕过 HTTP 缓存：HTML 里的 ?v= 参数决定了资源 URL，
+  // 若 HTML 本身被缓存住，新版本就永远传不下去。
+  const isDocument = request.mode === 'navigate' || request.destination === 'document';
+  const target = isDocument ? new Request(request, { cache: 'no-store' }) : request;
 
   event.respondWith(
-    caches.match(request).then((hit) => hit || fetch(request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
-      return response;
-    }))
+    fetch(target)
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+        return response;
+      })
+      .catch(() => caches.match(request).then((hit) => hit || caches.match('./index.html')))
   );
 });
