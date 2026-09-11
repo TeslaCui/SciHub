@@ -323,6 +323,36 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .step-title-text { font-weight: 600; flex: 1; min-width: 0; }
 .step-instruction { color: var(--muted); font-size: 13px; white-space: pre-wrap; }
 
+/* ── 注意事项提醒 ─────────────────────────────────────── */
+/* 执行界面：橙色警示条，扫一眼就能看到，避免漏掉关键提醒 */
+.notice {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 10px 0; padding: 11px 13px;
+  background: #fff7ed; border: 1px solid #fdba74; border-left: 4px solid #ea580c;
+  border-radius: 10px;
+}
+.notice-icon { font-size: 16px; line-height: 1.4; flex-shrink: 0; }
+.notice-body { min-width: 0; }
+.notice-body b { display: block; color: #9a3412; font-size: 13px; margin-bottom: 3px; }
+.notice-body span { color: #7c2d12; font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+
+/* 方案详情 / 核对页：紧凑一行 */
+.notice-mini {
+  display: flex; align-items: flex-start; gap: 6px;
+  margin-top: 8px; padding: 7px 10px;
+  background: #fff7ed; border: 1px solid #fdba74; border-radius: 8px;
+  color: #9a3412; font-size: 13px; line-height: 1.5;
+}
+.notice-mini em { font-style: normal; font-weight: 600; margin-right: 4px; }
+
+/* 深色模式：白底橙框会很刺眼，改成半透明底 + 亮橙文字 */
+@media (prefers-color-scheme: dark) {
+  .notice { background: rgba(234, 88, 12, .14); border-color: rgba(251, 146, 60, .5); border-left-color: #fb923c; }
+  .notice-body b { color: #fdba74; }
+  .notice-body span { color: #fed7aa; }
+  .notice-mini { background: rgba(234, 88, 12, .14); border-color: rgba(251, 146, 60, .5); color: #fdba74; }
+}
+
 .field-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; margin-bottom: 8px; }
 
 /* ── 执行界面 ─────────────────────────────────────────── */

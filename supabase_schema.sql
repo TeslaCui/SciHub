@@ -337,3 +337,19 @@ select
   (select count(*) from pg_publication_tables
      where pubname = 'supabase_realtime' and schemaname = 'public'
        and tablename in ('run_steps', 'experiment_runs'))          as realtime_tables;
+
+-- ─────────────────────────────────────────────────────────────
+-- 步骤「注意事项」（新增）
+-- 方案步骤与执行快照各留一列，用来在执行界面醒目提醒，例如：
+--   「正常溶液呈红色，出现沉淀即异常」「离心前注意配平」
+-- 幂等：列已存在则跳过；老数据为 null，界面按「没有注意事项」处理
+-- ─────────────────────────────────────────────────────────────
+alter table public.plan_steps add column if not exists notice text;
+alter table public.run_steps  add column if not exists notice text;
+
+-- 自检 5：应看到 notice_columns=2
+select
+  (select count(*) from information_schema.columns
+     where table_schema = 'public'
+       and table_name in ('plan_steps', 'run_steps')
+       and column_name = 'notice')                                  as notice_columns;

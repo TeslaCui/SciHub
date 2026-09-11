@@ -114,9 +114,30 @@
           instruction: text,
           fields: fields,
           duration_hint: guessDuration(text),
+          notice: extractNotice(text),
         };
       }),
     };
+  }
+
+  /* 挑出步骤里的「注意事项」：方案中「注意：… ⚠ … 切记…」这类句子。
+     这些文字仍然保留在 instruction 里，这里只是再摘出一份，好在执行时醒目提醒。
+     识别不了就返回空串，不会影响其它解析结果。 */
+  function extractNotice(text) {
+    const hits = [];
+    String(text || '').split('\n').forEach((line) => {
+      const t = line.trim();
+      if (!t) return;
+      if (!/注意|警告|提示|切记|务必|避免|严禁|小心|异常|风险|⚠|❗/.test(t)) return;
+
+      const cleaned = t
+        .replace(/^[\s0-9.、．()（）]*/, '')
+        .replace(/^(注意|警告|提示|说明|备注)[：:]\s*/, '')
+        .trim();
+
+      if (cleaned && hits.indexOf(cleaned) === -1) hits.push(cleaned);
+    });
+    return hits.join('；');
   }
 
   /* 从「填空」前面那段文字里猜出涉及的试剂名（化学式 / 缩写），用来区分同名字段 */
@@ -190,6 +211,8 @@
         title: String((s && s.title) || ('步骤 ' + (i + 1))).trim(),
         instruction: String((s && s.instruction) || '').trim(),
         duration_hint: String((s && s.duration_hint) || '').trim(),
+        // AI 没单独给 notice 时，就从 instruction 里按关键词兜底提取
+        notice: String((s && s.notice) || '').trim() || extractNotice(s && s.instruction),
         fields: fields,
       };
     });
@@ -310,6 +333,7 @@
         '  </div>',
         '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
         '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
+        '  <textarea data-notice="' + si + '" rows="2" placeholder="注意事项（如：正常溶液呈红色，出现沉淀即异常；离心前注意配平）" style="margin-top:8px">' + esc(s.notice || '') + '</textarea>',
         '  <div style="margin-top:8px">' + (s.fields.length ? s.fields.map((f, fi) => [
           '    <div class="field-row">',
           '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
@@ -334,9 +358,11 @@
       const t = document.querySelector('[data-title="' + si + '"]');
       const d = document.querySelector('[data-duration="' + si + '"]');
       const ins = document.querySelector('[data-instruction="' + si + '"]');
+      const nt = document.querySelector('[data-notice="' + si + '"]');
       if (t) s.title = t.value.trim();
       if (d) s.duration_hint = d.value.trim();
       if (ins) s.instruction = ins.value;
+      if (nt) s.notice = nt.value.trim();
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
         const u = document.querySelector('[data-field-unit="' + si + '-' + fi + '"]');
@@ -365,7 +391,7 @@
 
     $('draft-add-step').addEventListener('click', () => {
       collectDraft();
-      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', fields: [] });
+      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', notice: '', fields: [] });
       renderDraft();
     });
 
@@ -405,6 +431,7 @@
         position: i,
         title: s.title || ('步骤 ' + (i + 1)),
         instruction: s.instruction || '',
+        notice: s.notice || '',
         fields: s.fields,
         duration_hint: s.duration_hint || '',
       }));
@@ -481,6 +508,7 @@
         s.duration_hint ? '    <span class="tag-mini">' + esc(s.duration_hint) + '</span>' : '',
         '  </div>',
         '  <div class="step-instruction">' + highlight(s.instruction) + '</div>',
+        s.notice ? '  <div class="notice-mini"><em>⚠ 注意</em><span>' + highlight(s.notice) + '</span></div>' : '',
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
         '</div>',
       ].join('\n')).join(''),
@@ -522,6 +550,7 @@
         position: s.position,
         title: s.title,
         instruction: s.instruction,
+        notice: s.notice || '',
         fields: s.fields,
         values: {},
         images: [],
@@ -640,6 +669,12 @@
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
+      s.notice ? [
+        '  <div class="notice">',
+        '    <span class="notice-icon" aria-hidden="true">⚠</span>',
+        '    <div class="notice-body"><b>注意事项</b><span>' + highlight(s.notice) + '</span></div>',
+        '  </div>',
+      ].join('\n') : '',
       '  <div class="instr">' + highlight(s.instruction) + '</div>',
       '  <div id="fields"></div>',
       '  <div style="margin-top:14px">',
