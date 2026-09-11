@@ -1129,4 +1129,7 @@
   }
 
   window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun };
+
+  // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
+  window.dispatchEvent(new CustomEvent('scihub:ready'));
 })();

@@ -622,7 +622,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.12.2';
+const APP_VERSION = '0.12.3';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -705,6 +705,13 @@ function route(name, param) {
   else if (target === 'run' && param && window.Run) window.Run.render(param);
 }
 
+/* experiment.js 执行完会广播 scihub:ready。
+   若此时正停在首页，就补渲染一次 —— 与 renderHome 里的等待互为双保险。 */
+window.addEventListener('scihub:ready', () => {
+  const home = $('view-home');
+  if (state.user && home && !home.hidden) renderHome();
+});
+
 /* 进行中实验卡片上的「重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
 document.addEventListener('click', (e) => {
   if (!window.Run) return;
@@ -719,6 +726,12 @@ document.addEventListener('click', (e) => {
 async function renderHome() {
   const host = $('view-home');
   host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
+
+  // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
+  // 那样会静默拿到空列表（表现为「刷新后要切走再切回来才显示」）。这里等它就绪。
+  for (let i = 0; i < 20 && !window.Run; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 
   // 卡片上的图标操作（行内 SVG，无外部依赖）
   const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
