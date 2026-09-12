@@ -248,13 +248,14 @@
   }
 
   /* ── 方案解析规则版本（内部判断用）──────────────────────
-     每次改进解析能力（新增字段识别、注意事项提取、同名药品区分…）就把这个数 +1。
-     方案会记下「导入时用的是哪一版」；只要落后，就说明它没享受到后来新增的
-     解析功能，界面会给出「重新解析」入口。
+     每次改进解析能力就把这个数 +1。方案会记下「导入时用的是哪一版」；
+     只要落后，就说明它没享受到后来新增的解析能力，界面会给出「重新解析」入口。
        v1：初版（只有基本字段识别）
        v2：注意事项提取 + 同名药品前缀区分
-     注：版本号只在内部用，不展示给用户 —— 用户只需要看到「有东西可重新解析」。 */
-  const PARSE_VERSION = 2;
+       v3：把热解程序完整保留进步骤说明（执行界面据此显示热解程序计算器）
+           + 字段可指定填写方式
+     注：版本号只在内部用，不展示给用户。 */
+  const PARSE_VERSION = 3;
 
   /* 这个方案是不是用旧版解析规则导入的（没有记录的老方案视为 v1） */
   function planNeedsUpgrade(plan) {
@@ -1122,21 +1123,19 @@
 
   /* 拆成 [{kind:'temp'|'time'|'end', value}] */
   function pyroParts(seq) {
-    return String(seq || '')
-      .replace(/\s+/g, '')
-      .split(/(?=--|C-?\d|T-?\d)/i)
-      .map((t) => t.trim())
-      .filter(Boolean)
-      .map((tk) => {
-        const c = tk.match(/^C(-?\d+(?:\.\d+)?)$/i);
-        if (c) return { kind: 'temp', value: Number(c[1]) };
-        const t = tk.match(/^T(-?\d+(?:\.\d+)?)$/i);
-        if (t) return { kind: 'time', value: Number(t[1]) };
-        const e = tk.match(/^--(\d*)$/);
-        if (e) return { kind: 'end', value: Number(e[1]) || 0 };
-        return null;
-      })
-      .filter(Boolean);
+    const text = String(seq || '').replace(/\s+/g, '');
+    const out = [];
+    // 程序各段用「-」相连（C30-T60-C30-T184-…--121），所以不能先按「-」切分再逐段解析 ——
+    // 那样每段都会带上一个前导「-」，^C\d / ^T\d 全都匹配不上。
+    // 这里改成整体扫描，遇到 C / T / -- 就取一个。
+    const re = /C(-?\d+(?:\.\d+)?)|T(-?\d+(?:\.\d+)?)|--(\d*)/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[1] !== undefined) out.push({ kind: 'temp', value: Number(m[1]) });
+      else if (m[2] !== undefined) out.push({ kind: 'time', value: Number(m[2]) });
+      else out.push({ kind: 'end', value: Number(m[3]) || 0 });
+    }
+    return out;
   }
 
   /* 按室温与升温速率重算，返回 { segs, total, oldRoom, room } */
@@ -1147,7 +1146,13 @@
 
     const oldRoom = temps[0].value;                 // 程序里第一个温度点＝当初的室温
     const room = Number(roomTemp);
-    if (Number.isFinite(room) && room !== 0) temps[0].value = room;
+    const useRoom = Number.isFinite(room) && room !== 0;
+
+    // 关键：室温在程序里往往出现多次（C30-T60-C30-… 里开头一次、「回到室温」又一次），
+    // 必须一起替换 —— 只换第一个的话，前后温度对不上，保温段会被误判成升温段。
+    if (useRoom) {
+      parts.forEach((p) => { if (p.kind === 'temp' && p.value === oldRoom) p.value = room; });
+    }
 
     const r = Number(rate) > 0 ? Number(rate) : 0;
     const segs = [];
@@ -1173,7 +1178,7 @@
       total += minutes;
     });
 
-    return { segs, total, oldRoom, room: Number.isFinite(room) && room !== 0 ? room : oldRoom };
+    return { segs, total, oldRoom, room: useRoom ? room : oldRoom };
   }
 
   /* 从程序反推升温速率（取第一个升温段） */
@@ -1192,13 +1197,31 @@
     return 5;
   }
 
-  /* 执行界面里那块可折叠的计算器（没识别到程序就不渲染） */
+  /* 判断这段文字是不是「完整的热解程序」。
+     必须够严格 —— 普通步骤里偶尔出现 C30、T60 这类字样不能算，
+     否则每一步都会冒出个计算器。判定依据：
+       · 至少 3 个温度点 + 2 段时长（真正的程序都是多段的）
+       · 温度跨度 ≥ 100℃（热解必然大幅升温）
+       · 且带终止标记（--N），或最高温 ≥ 300℃ */
+  function looksLikePyro(seq) {
+    const parts = pyroParts(seq);
+    const temps = parts.filter((p) => p.kind === 'temp').map((p) => p.value);
+    const times = parts.filter((p) => p.kind === 'time');
+    if (times.length < 2 || temps.length < 3) return false;
+
+    const maxT = Math.max.apply(null, temps);
+    const minT = Math.min.apply(null, temps);
+    if (maxT - minT < 100) return false;
+
+    return parts.some((p) => p.kind === 'end') || maxT >= 300;
+  }
+
+  /* 执行界面里那块可折叠的计算器（不是热解程序就不渲染） */
   function pyroBlock(s) {
     const seq = findPyroSeq(s.instruction || '');
-    if (!seq) return '';
-    const parts = pyroParts(seq);
-    if (parts.filter((p) => p.kind === 'time').length < 1) return '';
+    if (!seq || !looksLikePyro(seq)) return '';
 
+    const parts = pyroParts(seq);
     const room = (parts.find((p) => p.kind === 'temp') || {}).value;
     const rate = guessPyroRate(seq);
 
