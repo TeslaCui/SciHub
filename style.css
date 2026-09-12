@@ -527,6 +527,20 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .autosave { color: var(--muted); font-size: 12px; margin-top: 10px; min-height: 18px; }
 
 /* ── 顶栏用户菜单 ─────────────────────────────────────── */
+/* 右上角的「小工具」入口（在用户头像左侧；margin-left:auto 把它俩一起推到右边） */
+.tool-btn {
+  display: flex; align-items: center; gap: 6px;
+  margin-left: auto; margin-right: 10px;
+  background: transparent; border: 1px solid var(--line); border-radius: 999px;
+  padding: 6px 12px; color: var(--muted); font-size: 13px;
+}
+.tool-btn:hover { color: var(--brand); border-color: var(--brand); background: var(--bg); }
+.tool-btn svg { flex-shrink: 0; }
+@media (max-width: 560px) {
+  .tool-btn span { display: none; }         /* 窄屏只留图标，省地方 */
+  .tool-btn { padding: 6px 9px; }
+}
+
 .user { position: relative; }
 
 .user-btn {
@@ -674,7 +688,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .pyro-field { display: block; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
 /* 程序是一串代号，用等宽字体更易核对 */
 .pyro-field input { margin-top: 4px; font-family: ui-monospace, Consolas, "Courier New", monospace; }
-.pyro-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 三个输入（初始温度 / 升温速率 / 最终温度）：窄屏自动折行 */
+.pyro-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
 
 .pyro-result { border-top: 1px dashed var(--line); padding-top: 10px; }
 .pyro-line {

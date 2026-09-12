@@ -1144,21 +1144,34 @@
     return out;
   }
 
-  /* 按室温与升温速率重算，返回 { segs, total, oldRoom, room } */
-  function calcPyro(seq, roomTemp, rate) {
+  /* 按「初始温度 / 升温速率 / 最终温度」重算程序：
+       ① 程序里所有等于原初始温度的温度点 → 换成输入的初始温度
+       ② 程序里最高的那个温度点（最终温度）→ 换成输入的最终温度
+       ③ 前后温度不同的段＝升温，耗时 = |Δ| ÷ 速率（覆盖程序里写死的旧值）
+       ④ 温度相同＝保温，用程序里的原值
+     返回 { segs, total, room, finalTemp, oldRoom, oldMax } */
+  function calcPyro(seq, roomTemp, rate, finalTemp) {
     const parts = pyroParts(seq);
     const temps = parts.filter((p) => p.kind === 'temp');
     if (!temps.length) return null;
 
-    const oldRoom = temps[0].value;                 // 程序里第一个温度点＝当初的室温
-    const room = Number(roomTemp);
-    const useRoom = Number.isFinite(room) && room !== 0;
+    const oldRoom = temps[0].value;                 // 程序里第一个温度点＝当初的初始温度
+    const oldMax = Math.max.apply(null, temps.map((p) => p.value));
 
-    // 关键：室温在程序里往往出现多次（C30-T60-C30-… 里开头一次、「回到室温」又一次），
-    // 必须一起替换 —— 只换第一个的话，前后温度对不上，保温段会被误判成升温段。
-    if (useRoom) {
-      parts.forEach((p) => { if (p.kind === 'temp' && p.value === oldRoom) p.value = room; });
-    }
+    const roomNum = Number(roomTemp);
+    const finalNum = Number(finalTemp);
+    const useRoom = Number.isFinite(roomNum) && roomNum !== 0;
+    const useFinal = Number.isFinite(finalNum) && finalNum > 0;
+    const room = useRoom ? roomNum : oldRoom;
+    const finalT = useFinal ? finalNum : oldMax;
+
+    // 初始温度在程序里往往出现多次（C30-T60-C30-… 开头一次、「回到室温」又一次），
+    // 必须一起替换 —— 只换第一个的话前后温度对不上，保温段会被误判成升温。
+    parts.forEach((p) => {
+      if (p.kind !== 'temp') return;
+      if (p.value === oldRoom) p.value = room;
+      else if (p.value === oldMax) p.value = finalT;   // 最终温度（可能有多处，如升温到 950 与保温 950）
+    });
 
     const r = Number(rate) > 0 ? Number(rate) : 0;
     const segs = [];
@@ -1175,7 +1188,7 @@
 
       let minutes = p.value;
       let ramp = false;
-      // 前后温度不同 → 这是升温段，耗时由温升与速率决定（覆盖程序里写死的旧值）
+      // 前后温度不同 → 升温段，耗时由温升与速率决定（覆盖程序里写死的旧值）
       if (from != null && to != null && to !== from && r > 0) {
         ramp = true;
         minutes = Math.round((Math.abs(to - from) / r) * 10) / 10;
@@ -1184,7 +1197,7 @@
       total += minutes;
     });
 
-    return { segs, total, oldRoom, room: useRoom ? room : oldRoom };
+    return { segs, total, room, finalTemp: finalT, oldRoom, oldMax };
   }
 
   /* 从程序反推升温速率（取第一个升温段） */
@@ -1252,7 +1265,9 @@
     // （旧方案里那串程序常常根本没被解析进步骤说明，这时更需要一个能填的地方。）
     const seq = pyroSeqForStep(s);
     const parts = pyroParts(seq);
-    const room = (parts.find((p) => p.kind === 'temp') || {}).value;
+    const temps = parts.filter((p) => p.kind === 'temp').map((p) => p.value);
+    const room = temps.length ? temps[0] : '';
+    const maxT = temps.length ? Math.max.apply(null, temps) : '';
     const rate = seq ? guessPyroRate(seq) : 5;
 
     return [
@@ -1261,8 +1276,9 @@
       '  <div class="pyro-body">',
       '    <label class="pyro-field">热解程序<input id="pyro-seq" value="' + esc(seq) + '" spellcheck="false" placeholder="如 C30-T60-C30-T184-C950-T60-C950--121"></label>',
       '    <div class="pyro-grid">',
-      '      <label class="pyro-field">室温（℃）<input type="number" step="any" inputmode="decimal" id="pyro-room" value="' + esc(room == null ? '' : room) + '" placeholder="如 30"></label>',
+      '      <label class="pyro-field">初始温度（℃）<input type="number" step="any" inputmode="decimal" id="pyro-room" value="' + esc(room) + '" placeholder="如 30"></label>',
       '      <label class="pyro-field">升温速率（℃/min）<input type="number" step="any" inputmode="decimal" id="pyro-rate" value="' + esc(rate) + '"></label>',
+      '      <label class="pyro-field">最终温度（℃）<input type="number" step="any" inputmode="decimal" id="pyro-final" value="' + esc(maxT) + '" placeholder="如 950"></label>',
       '    </div>',
       '    <div id="pyro-out"></div>',
       '  </div>',
@@ -1274,13 +1290,18 @@
     const out = $('pyro-out');
     if (!out) return;
 
-    const res = calcPyro($('pyro-seq').value, $('pyro-room').value, $('pyro-rate').value);
+    const res = calcPyro($('pyro-seq').value, $('pyro-room').value, $('pyro-rate').value, $('pyro-final').value);
     if (!res || !res.segs.length) {
       out.innerHTML = '<p class="hint small">没识别出程序。示例：C30-T60-C30-T184-C950-T60-C950--121</p>';
       return;
     }
 
-    out.innerHTML = [
+    out.innerHTML = renderPyroResult(res, $('pyro-rate').value);
+  }
+
+  /* 把计算结果渲染成逐段列表 + 合计（执行界面与右上角小工具共用） */
+  function renderPyroResult(res, rateText) {
+    return [
       '<div class="pyro-result">',
       res.segs.map((g) => {
         const from = g.from == null ? '—' : g.from + '℃';
@@ -1289,7 +1310,8 @@
         return '<div class="pyro-line"><b>' + what + '</b><span>' + esc(from + ' → ' + to) + '</span><em>' + g.minutes + ' min</em></div>';
       }).join(''),
       '<div class="pyro-total">合计 <b>' + Math.round(res.total * 10) / 10 + ' min</b>'
-        + '（约 ' + (Math.round(res.total / 6) / 10) + ' h）· 室温 ' + res.room + '℃ · 速率 ' + esc(String($('pyro-rate').value)) + ' ℃/min</div>',
+        + '（约 ' + (Math.round(res.total / 6) / 10) + ' h）· ' + res.room + ' → ' + res.finalTemp + '℃ · 速率 '
+        + esc(String(rateText)) + ' ℃/min</div>',
       '</div>',
     ].join('');
   }
@@ -1297,11 +1319,43 @@
   function bindPyro() {
     if (!$('pyro-seq')) return;
     drawPyro();
-    ['pyro-seq', 'pyro-room', 'pyro-rate'].forEach((id) => {
+    ['pyro-seq', 'pyro-room', 'pyro-rate', 'pyro-final'].forEach((id) => {
       const node = $(id);
       if (node) node.addEventListener('input', drawPyro);
     });
   }
+
+  /* ── 右上角「小工具」：不依赖具体实验的独立面板 ────────── */
+
+  function openPyroTool() {
+    openModal('🔥 热解程序计算器', [
+      '<label>热解程序<input id="tp-seq" value="C30-T60-C30-T184-C950-T60-C950--121" spellcheck="false"></label>',
+      '<div class="pyro-grid" style="margin-top:10px">',
+      '  <label>初始温度（℃）<input type="number" step="any" inputmode="decimal" id="tp-room" value="30"></label>',
+      '  <label>升温速率（℃/min）<input type="number" step="any" inputmode="decimal" id="tp-rate" value="5"></label>',
+      '  <label>最终温度（℃）<input type="number" step="any" inputmode="decimal" id="tp-final" value="950"></label>',
+      '</div>',
+      '<div id="tp-out" style="margin-top:12px"></div>',
+    ].join(''), [{ label: '关闭', onClick: closeModal }]);
+
+    const draw = () => {
+      const out = $('tp-out');
+      if (!out) return;
+      const res = calcPyro($('tp-seq').value, $('tp-room').value, $('tp-rate').value, $('tp-final').value);
+      out.innerHTML = (res && res.segs.length)
+        ? renderPyroResult(res, $('tp-rate').value)
+        : '<p class="hint small">没识别出程序。示例：C30-T60-C30-T184-C950-T60-C950--121</p>';
+    };
+
+    ['tp-seq', 'tp-room', 'tp-rate', 'tp-final'].forEach((id) => {
+      const node = $(id);
+      if (node) node.addEventListener('input', draw);
+    });
+    draw();
+  }
+
+  /* 供 app.js 的「小工具」入口调用 */
+  window.Tools = { openPyroCalculator: openPyroTool };
 
   function drawFields(s) {
     const host = $('fields');
