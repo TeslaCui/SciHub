@@ -631,3 +631,41 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .lb-btn { min-width: 44px; min-height: 44px; }
   input, select, textarea { min-height: 42px; }
 }
+
+/* ── 热解程序计算器（可折叠）──────────────────────────── */
+.pyro {
+  margin: 12px 0;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+}
+.pyro > summary {
+  cursor: pointer; padding: 10px 13px;
+  font-size: 14px; font-weight: 600; color: var(--brand);
+  list-style: none;
+}
+.pyro > summary::-webkit-details-marker { display: none; }
+.pyro > summary::before { content: "▸ "; }
+.pyro[open] > summary::before { content: "▾ "; }
+.pyro-body { padding: 0 13px 13px; }
+
+.pyro-field { display: block; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+/* 程序是一串代号，用等宽字体更易核对 */
+.pyro-field input { margin-top: 4px; font-family: ui-monospace, Consolas, "Courier New", monospace; }
+.pyro-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.pyro-result { border-top: 1px dashed var(--line); padding-top: 10px; }
+.pyro-line {
+  display: grid; grid-template-columns: 54px 1fr auto; gap: 8px;
+  align-items: baseline; font-size: 13px; padding: 3px 0;
+}
+.pyro-line b { color: var(--brand); font-weight: 600; }
+.pyro-line span { color: var(--ink); }
+.pyro-line em { font-style: normal; font-variant-numeric: tabular-nums; }
+.pyro-total { margin-top: 8px; font-size: 13px; color: var(--muted); }
+.pyro-total b { color: var(--brand); font-size: 15px; }
+
+@media (prefers-color-scheme: dark) {
+  .pyro { background: rgba(255, 255, 255, .03); }
+}
+@media (max-width: 560px) {
+  .pyro-grid { grid-template-columns: 1fr; }
+}

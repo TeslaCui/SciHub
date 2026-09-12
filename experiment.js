@@ -1047,6 +1047,7 @@
         '  </div>',
       ].join('\n') : '',
       '  <div class="instr">' + highlight(s.instruction) + '</div>',
+      pyroBlock(s),
       '  <div id="fields"></div>',
       '  <div style="margin-top:14px">',
       '    <div class="hc-meta">实验照片 / 视频</div>',
@@ -1065,6 +1066,7 @@
 
     drawFields(s);
     drawPhotos(s);
+    bindPyro(s);
 
     $('run-exit').addEventListener('click', () => route('home'));
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
@@ -1101,6 +1103,151 @@
       date: dm ? dm[0] : '',
       time: tm ? (String(tm[1]).padStart(2, '0') + ':' + tm[2]) : '',
     };
+  }
+
+  /* ── 热解程序计算器 ───────────────────────────────────────
+     程序写法：
+       C<温度>   温度点（程序里第一个 C 就是室温）
+       T<时长>   该段耗时，描述「上一个温度点 → 下一个温度点」这一段
+       --<数字>  终止标记
+     例：C30-T60-C30-T184-C950-T60-C950--121
+       30℃ 保温 60 min → 30℃→950℃ 升温（184 min）→ 950℃ 保温 60 min → 终止
+     升温段的耗时由「温升 ÷ 速率」决定，所以室温一变就要重算 —— 这就是计算器的用处。 */
+
+  /* 从步骤文字里找出热解程序（识别不到就返回空串） */
+  function findPyroSeq(text) {
+    const m = String(text || '').match(/C-?\d+(?:\.\d+)?(?:\s*[-–—,，]?\s*[CT]-?\d+(?:\.\d+)?)+(?:\s*[-–—]+\s*\d*)?/i);
+    return m ? m[0].replace(/\s+/g, '').replace(/[–—，,]/g, '-') : '';
+  }
+
+  /* 拆成 [{kind:'temp'|'time'|'end', value}] */
+  function pyroParts(seq) {
+    return String(seq || '')
+      .replace(/\s+/g, '')
+      .split(/(?=--|C-?\d|T-?\d)/i)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .map((tk) => {
+        const c = tk.match(/^C(-?\d+(?:\.\d+)?)$/i);
+        if (c) return { kind: 'temp', value: Number(c[1]) };
+        const t = tk.match(/^T(-?\d+(?:\.\d+)?)$/i);
+        if (t) return { kind: 'time', value: Number(t[1]) };
+        const e = tk.match(/^--(\d*)$/);
+        if (e) return { kind: 'end', value: Number(e[1]) || 0 };
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  /* 按室温与升温速率重算，返回 { segs, total, oldRoom, room } */
+  function calcPyro(seq, roomTemp, rate) {
+    const parts = pyroParts(seq);
+    const temps = parts.filter((p) => p.kind === 'temp');
+    if (!temps.length) return null;
+
+    const oldRoom = temps[0].value;                 // 程序里第一个温度点＝当初的室温
+    const room = Number(roomTemp);
+    if (Number.isFinite(room) && room !== 0) temps[0].value = room;
+
+    const r = Number(rate) > 0 ? Number(rate) : 0;
+    const segs = [];
+    let total = 0;
+    let last = null;
+
+    parts.forEach((p, i) => {
+      if (p.kind === 'temp') { last = p.value; return; }
+      if (p.kind !== 'time') return;                // end 标记不参与计算
+
+      const next = (parts.slice(i + 1).find((x) => x.kind === 'temp') || {}).value;
+      const from = last;
+      const to = next;
+
+      let minutes = p.value;
+      let ramp = false;
+      // 前后温度不同 → 这是升温段，耗时由温升与速率决定（覆盖程序里写死的旧值）
+      if (from != null && to != null && to !== from && r > 0) {
+        ramp = true;
+        minutes = Math.round((Math.abs(to - from) / r) * 10) / 10;
+      }
+      segs.push({ from, to, minutes, ramp });
+      total += minutes;
+    });
+
+    return { segs, total, oldRoom, room: Number.isFinite(room) && room !== 0 ? room : oldRoom };
+  }
+
+  /* 从程序反推升温速率（取第一个升温段） */
+  function guessPyroRate(seq) {
+    const parts = pyroParts(seq);
+    let last = null;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.kind === 'temp') { last = p.value; continue; }
+      if (p.kind !== 'time' || last == null) continue;
+      const next = (parts.slice(i + 1).find((x) => x.kind === 'temp') || {}).value;
+      if (next != null && next !== last && p.value > 0) {
+        return Math.round((Math.abs(next - last) / p.value) * 100) / 100;
+      }
+    }
+    return 5;
+  }
+
+  /* 执行界面里那块可折叠的计算器（没识别到程序就不渲染） */
+  function pyroBlock(s) {
+    const seq = findPyroSeq(s.instruction || '');
+    if (!seq) return '';
+    const parts = pyroParts(seq);
+    if (parts.filter((p) => p.kind === 'time').length < 1) return '';
+
+    const room = (parts.find((p) => p.kind === 'temp') || {}).value;
+    const rate = guessPyroRate(seq);
+
+    return [
+      '<details class="pyro">',
+      '  <summary>🔥 热解程序计算器</summary>',
+      '  <div class="pyro-body">',
+      '    <label class="pyro-field">热解程序<input id="pyro-seq" value="' + esc(seq) + '" spellcheck="false"></label>',
+      '    <div class="pyro-grid">',
+      '      <label class="pyro-field">室温（℃）<input type="number" step="any" inputmode="decimal" id="pyro-room" value="' + esc(room) + '"></label>',
+      '      <label class="pyro-field">升温速率（℃/min）<input type="number" step="any" inputmode="decimal" id="pyro-rate" value="' + esc(rate) + '"></label>',
+      '    </div>',
+      '    <div id="pyro-out"></div>',
+      '  </div>',
+      '</details>',
+    ].join('\n');
+  }
+
+  function drawPyro() {
+    const out = $('pyro-out');
+    if (!out) return;
+
+    const res = calcPyro($('pyro-seq').value, $('pyro-room').value, $('pyro-rate').value);
+    if (!res || !res.segs.length) {
+      out.innerHTML = '<p class="hint small">没识别出程序。示例：C30-T60-C30-T184-C950-T60-C950--121</p>';
+      return;
+    }
+
+    out.innerHTML = [
+      '<div class="pyro-result">',
+      res.segs.map((g) => {
+        const from = g.from == null ? '—' : g.from + '℃';
+        const to = g.to == null ? '—' : g.to + '℃';
+        const what = g.ramp ? '升温' : (g.from === g.to ? '保温' : '降温');
+        return '<div class="pyro-line"><b>' + what + '</b><span>' + esc(from + ' → ' + to) + '</span><em>' + g.minutes + ' min</em></div>';
+      }).join(''),
+      '<div class="pyro-total">合计 <b>' + Math.round(res.total * 10) / 10 + ' min</b>'
+        + '（约 ' + (Math.round(res.total / 6) / 10) + ' h）· 室温 ' + res.room + '℃ · 速率 ' + esc(String($('pyro-rate').value)) + ' ℃/min</div>',
+      '</div>',
+    ].join('');
+  }
+
+  function bindPyro() {
+    if (!$('pyro-seq')) return;
+    drawPyro();
+    ['pyro-seq', 'pyro-room', 'pyro-rate'].forEach((id) => {
+      const node = $(id);
+      if (node) node.addEventListener('input', drawPyro);
+    });
   }
 
   function drawFields(s) {
