@@ -803,7 +803,9 @@
         s.duration_hint ? '    <span class="tag-mini">' + esc(s.duration_hint) + '</span>' : '',
         '  </div>',
         '  <div class="step-instruction">' + highlight(s.instruction) + '</div>',
-        s.notice ? '  <div class="notice-mini"><em>⚠ 注意</em><span>' + highlight(s.notice) + '</span></div>' : '',
+        s.notice ? '  <div class="notice-mini"><em>⚠ 注意</em><div class="notice-items">'
+          + noticeLines(s).map((line) => '<span class="notice-item">' + highlight(line) + '</span>').join('')
+          + '</div></div>' : '',
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
         '</div>',
       ].join('\n')).join(''),
@@ -1044,7 +1046,10 @@
       s.notice ? [
         '  <div class="notice">',
         '    <span class="notice-icon" aria-hidden="true">⚠</span>',
-        '    <div class="notice-body"><b>注意事项</b><span>' + highlight(s.notice) + '</span></div>',
+        '    <div class="notice-body"><b>注意事项</b>',
+        // 一条一行、带圆点 —— 之前用「；」连成一整句，扫读时容易串行
+        noticeLines(s).map((line) => '      <span class="notice-item">' + highlight(line) + '</span>').join('\n'),
+        '    </div>',
         '  </div>',
       ].join('\n') : '',
       '  <div class="instr">' + highlight(s.instruction) + '</div>',
@@ -1216,10 +1221,34 @@
     return parts.some((p) => p.kind === 'end') || maxT >= 300;
   }
 
-  /* 执行界面里那块可折叠的计算器（不是热解程序就不渲染） */
+  /* 这一步算不算「热解步骤」：
+     ① 步骤说明里直接写了完整程序 → 算；
+     ② 否则看标题/说明里有没有热解相关字样（热解 / 碳化 / 煅烧 / 管式炉 / 程序升温…）。
+        程序通常写在方案的另一处（比如「设定升温程序」那一步），所以这里只负责
+        把计算器摆到正确的步骤上，而不是要求程序必须写在本步。 */
+  function isPyroStep(s) {
+    const own = findPyroSeq(s.instruction || '');
+    if (own && looksLikePyro(own)) return true;
+    const hay = String(s.title || '') + '\n' + String(s.instruction || '');
+    return /热解|碳化|煅烧|管式炉|程序升温|pyrolysis/i.test(hay);
+  }
+
+  /* 取这条实验里可用的热解程序：当前步骤优先，否则用其它步骤里找到的那一个 */
+  function pyroSeqForStep(s) {
+    const own = findPyroSeq(s.instruction || '');
+    if (own && looksLikePyro(own)) return own;
+    for (const x of (run.steps || [])) {
+      const q = findPyroSeq(x.instruction || '');
+      if (q && looksLikePyro(q)) return q;
+    }
+    return '';
+  }
+
+  /* 执行界面里那块可折叠的计算器（不是热解步骤就不渲染） */
   function pyroBlock(s) {
-    const seq = findPyroSeq(s.instruction || '');
-    if (!seq || !looksLikePyro(seq)) return '';
+    if (!isPyroStep(s)) return '';
+    const seq = pyroSeqForStep(s);
+    if (!seq) return '';
 
     const parts = pyroParts(seq);
     const room = (parts.find((p) => p.kind === 'temp') || {}).value;
