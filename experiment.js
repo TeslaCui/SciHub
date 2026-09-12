@@ -1399,7 +1399,42 @@
     }));
   }
 
-  /* ── 图片放大查看（灯箱：左右翻页 / Esc 关闭 / 显示注解）── */
+  /* ── 灯箱：放大查看 / 播放 / 存到设备 ─────────────────── */
+
+  /* 浏览器出于安全限制不能静默写入系统相册，所以这里优先调「系统分享面板」
+     （手机上会弹出「存储图像 / 视频」，点一下就进相册），不支持时退化为下载。 */
+  async function saveMediaToDevice(item) {
+    const url = run.urls[item.path];
+    if (!url) { setStatus('这个文件还没准备好，稍后再试。', 'warn'); return; }
+
+    try {
+      const video = isVideoFile(item);
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const name = String(item.name || (video ? 'video.mp4' : 'photo.jpg')).replace(/[^\w.\-]/g, '_');
+      const file = new File([blob], name, { type: blob.type || item.type || '' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        setStatus('已弹出系统面板，选「存储图像 / 视频」即可存进相册。', 'ok');
+        return;
+      }
+
+      // 桌面浏览器或旧版：落到「下载」文件夹
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      setStatus('已保存到「下载」文件夹。', 'ok');
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;      // 用户取消分享，不算失败
+      console.error('[SciHub] 保存失败：', err);
+      setStatus('保存失败：' + errorText(err), 'error');
+    }
+  }
 
   function openLightbox(s, start) {
     const images = s.images || [];
@@ -1416,7 +1451,10 @@
       '  <figcaption id="lb-cap"></figcaption>',
       '</figure>',
       many ? '<button type="button" class="lb-btn lb-next" data-lb="next" title="下一个（→）">›</button>' : '',
-      many ? '<div class="lb-count" id="lb-count"></div>' : '',
+      '<div class="lb-foot">',
+      many ? '  <div class="lb-count" id="lb-count"></div>' : '',
+      '  <button type="button" class="ghost" id="lb-save" title="会弹出系统面板供你存储到相册">⬇ 存到相册</button>',
+      '</div>',
     ].join(''));
 
     function paint() {
@@ -1461,6 +1499,9 @@
       }
       if (e.target === box) close();   // 点空白处也关闭
     });
+
+    // 存到相册/设备（存的是当前正在看的这一张或这一段）
+    box.querySelector('#lb-save').addEventListener('click', () => saveMediaToDevice(images[pos]));
 
     document.addEventListener('keydown', onKey);
     document.body.appendChild(box);

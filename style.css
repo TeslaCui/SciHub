@@ -496,7 +496,14 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .lb-prev, .lb-next { top: 50%; transform: translateY(-50%); width: 46px; height: 46px; font-size: 26px; }
 .lb-prev { left: 16px; }
 .lb-next { right: 16px; }
-.lb-count { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); color: #cfe3e0; font-size: 13px; }
+/* 灯箱底部一行：张数 + 存到相册（在深色遮罩上，用浅色描边按钮） */
+.lb-foot {
+  position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px;
+}
+.lb-count { color: #cfe3e0; font-size: 13px; }
+.lb-foot .ghost { color: #e8f0ef; border-color: rgba(255, 255, 255, .35); background: transparent; }
+.lb-foot .ghost:hover { color: #fff; border-color: rgba(255, 255, 255, .7); }
 
 .run-actions { display: flex; gap: 10px; margin-top: 18px; }
 .run-actions .primary { width: auto; }
