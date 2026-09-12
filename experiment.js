@@ -1025,7 +1025,10 @@
       '  <div><b>' + esc(run.data.title) + '</b>',
       '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + ' · 已进行 ' + sinceText(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成' : '') + '</div>',
       '  </div>',
-      '  <div class="hc-actions"><button type="button" class="ghost" id="run-exit">返回主页</button></div>',
+      '  <div class="hc-actions">',
+      '    <button type="button" class="ghost" id="run-export">导出数据</button>',
+      '    <button type="button" class="ghost" id="run-exit">返回主页</button>',
+      '  </div>',
       '</div>',
       '<div class="progress"><i style="width:' + pct + '%"></i></div>',
       '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步'
@@ -1076,6 +1079,7 @@
     bindPyro(s);
 
     $('run-exit').addEventListener('click', () => route('home'));
+    $('run-export').addEventListener('click', exportRunData);
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
     const syncBtn = $('run-sync-fields');
@@ -1504,6 +1508,56 @@
       await saveStep(s, true);
       drawPhotos(s);
     }));
+  }
+
+  /* ── 导出本次实验的数据 ───────────────────────────────── */
+
+  /* 一行 = 一个字段；没有字段的步骤也会占一行，保证步骤齐全。
+     照片/视频本体不进 CSV（它们是二进制），但会记录张数便于核对。
+     表头带 BOM，Excel 打开中文不乱码。 */
+  function exportRunData() {
+    if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
+
+    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['实验名称', '步骤号', '步骤标题', '字段', '数值', '单位', '步骤备注', '照片数', '注意事项'].map(cell).join(',')];
+
+    run.steps.forEach((s) => {
+      const fields = s.fields || [];
+      const vals = s.values || {};
+      const note = s.note || '';
+      const notice = s.notice || '';
+      const imgCount = (s.images || []).length;
+
+      if (!fields.length) {
+        lines.push([run.data.title, s.position + 1, s.title, '', '', '', note, imgCount, notice].map(cell).join(','));
+        return;
+      }
+      fields.forEach((f) => {
+        lines.push([
+          run.data.title,
+          s.position + 1,
+          s.title,
+          f.label,
+          vals[f.label] == null ? '' : vals[f.label],
+          f.unit || '',
+          note,
+          imgCount,
+          notice,
+        ].map(cell).join(','));
+      });
+    });
+
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    // 文件名里的非法字符要换掉，否则部分系统无法保存
+    const safeTitle = String(run.data.title || '实验').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+    a.download = safeTitle + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    setStatus('已导出 ' + run.steps.length + ' 个步骤的数据。', 'ok');
   }
 
   /* ── 灯箱：放大查看 / 播放 / 存到设备 ─────────────────── */
