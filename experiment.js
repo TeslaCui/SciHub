@@ -210,7 +210,13 @@
         let n = 2;
         while (used.has(finalLabel)) { finalLabel = label + '（' + n + '）'; n += 1; }
         used.add(finalLabel);
-        return { label: finalLabel, unit: String((f && f.unit) || '').trim() };
+        // AI 若给了填写方式就采纳；没给则留空，运行时由 fieldTypeOf 按字段名推断
+        const type = String((f && f.type) || '').trim().toLowerCase();
+        return {
+          label: finalLabel,
+          unit: String((f && f.unit) || '').trim(),
+          type: FIELD_TYPES.some((x) => x.value === type) ? type : '',
+        };
       }).filter(Boolean);
 
       return {
@@ -521,6 +527,33 @@
     }
   }
 
+  /* 字段的填写方式 —— 决定执行界面用哪种输入控件 */
+  const FIELD_TYPES = [
+    { value: 'text', label: '文本' },
+    { value: 'number', label: '数字' },
+    { value: 'time', label: '时间' },
+    { value: 'date', label: '日期' },
+    { value: 'datetime', label: '日期 + 时间' },
+  ];
+
+  /* 取字段的填写方式：优先用显式设定的；老数据按字段名猜（与旧行为一致） */
+  function fieldTypeOf(f) {
+    const t = String((f && f.type) || '').toLowerCase();
+    if (FIELD_TYPES.some((x) => x.value === t)) return t;
+    const label = String((f && f.label) || '');
+    if (/时间|时刻/.test(label)) return 'datetime';
+    if (/日期/.test(label)) return 'date';
+    return 'text';
+  }
+
+  /* 注意事项以一个字符串存储（多条用「；」分隔），编辑时拆成一行一条 */
+  function noticeLines(s) {
+    const raw = String((s && s.notice) || '').trim();
+    if (!raw) return [''];
+    const lines = raw.split(/[；;]\s*/).map((x) => x.trim()).filter(Boolean);
+    return lines.length ? lines : [''];
+  }
+
   function renderDraft() {
     const host = $('view-plan');
     const editing = !!draft.id;
@@ -540,14 +573,34 @@
         '  </div>',
         '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
         '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
-        '  <textarea data-notice="' + si + '" rows="2" placeholder="注意事项（如：正常溶液呈红色，出现沉淀即异常；离心前注意配平）" style="margin-top:8px">' + esc(s.notice || '') + '</textarea>',
-        '  <div style="margin-top:8px">' + (s.fields.length ? s.fields.map((f, fi) => [
+
+        // 注意事项：一行一条，可增可删（存库时仍合并成一个字符串）
+        '  <div class="sub-block">',
+        '    <div class="sub-head"><span>⚠ 注意事项</span>',
+        '      <button type="button" class="ghost tiny" data-add-notice="' + si + '">＋ 添加一条</button>',
+        '    </div>',
+        noticeLines(s).map((line, ni) => [
+        '    <div class="line-row">',
+        '      <input data-notice="' + si + '-' + ni + '" value="' + esc(line) + '" placeholder="如：出现沉淀即为异常">',
+        '      <button type="button" class="icon-btn del" data-drop-notice="' + si + '-' + ni + '" title="删除这条" aria-label="删除这条">×</button>',
+        '    </div>',
+        ].join('\n')).join(''),
+        '  </div>',
+
+        '  <div class="sub-block">',
+        '    <div class="sub-head"><span>数据字段</span>',
+        '      <button type="button" class="ghost tiny" data-add-field="' + si + '">＋ 添加字段</button>',
+        '    </div>',
+        (s.fields.length ? s.fields.map((f, fi) => [
           '    <div class="field-row">',
           '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
-          '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit) + '" placeholder="单位，可空">',
+          '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit || '') + '" placeholder="单位，可空">',
+          '      <select data-field-type="' + si + '-' + fi + '" title="填写方式">',
+          FIELD_TYPES.map((x) => '        <option value="' + x.value + '"' + (fieldTypeOf(f) === x.value ? ' selected' : '') + '>' + x.label + '</option>').join('\n'),
+          '      </select>',
           '    </div>',
-        ].join('\n')).join('') : '<p class="hint small">这一节还没有数据字段，可点下方添加。</p>') + '</div>',
-        '  <button type="button" class="ghost" data-add-field="' + si + '" style="margin-top:6px">＋ 添加字段</button>',
+        ].join('\n')).join('') : '<p class="hint small">这一节还没有数据字段，可点上方添加。</p>'),
+        '  </div>',
         '</div>',
       ].join('\n')).join(''),
       '<button type="button" class="ghost" id="draft-add-step" style="margin-bottom:10px">＋ 添加步骤</button>',
@@ -560,21 +613,31 @@
   }
 
   function collectDraft() {
+    const host = $('view-plan');
     draft.title = $('draft-title').value.trim() || draft.title;
     draft.steps.forEach((s, si) => {
       const t = document.querySelector('[data-title="' + si + '"]');
       const d = document.querySelector('[data-duration="' + si + '"]');
       const ins = document.querySelector('[data-instruction="' + si + '"]');
-      const nt = document.querySelector('[data-notice="' + si + '"]');
       if (t) s.title = t.value.trim();
       if (d) s.duration_hint = d.value.trim();
       if (ins) s.instruction = ins.value;
-      if (nt) s.notice = nt.value.trim();
+
+      // 注意事项：把多行输入合并回一个「；」分隔的字符串，空行忽略
+      const rows = host.querySelectorAll('[data-notice^="' + si + '-"]');
+      if (rows.length) {
+        const lines = [];
+        rows.forEach((inp) => { const v = inp.value.trim(); if (v) lines.push(v); });
+        s.notice = lines.join('；');
+      }
+
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
         const u = document.querySelector('[data-field-unit="' + si + '-' + fi + '"]');
+        const ty = document.querySelector('[data-field-type="' + si + '-' + fi + '"]');
         if (n) f.label = n.value.trim();
         if (u) f.unit = u.value.trim();
+        if (ty) f.type = ty.value;
       });
       s.fields = s.fields.filter((f) => f.label);
     });
@@ -592,7 +655,25 @@
 
     host.querySelectorAll('[data-add-field]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
-      draft.steps[Number(b.dataset.addField)].fields.push({ label: '', unit: '' });
+      draft.steps[Number(b.dataset.addField)].fields.push({ label: '', unit: '', type: 'text' });
+      renderDraft();
+    }));
+
+    // 注意事项：添加一条 / 删除一条
+    host.querySelectorAll('[data-add-notice]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const s = draft.steps[Number(b.dataset.addNotice)];
+      s.notice = noticeLines(s).concat(['']).join('；');
+      renderDraft();
+    }));
+
+    host.querySelectorAll('[data-drop-notice]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const parts = String(b.dataset.dropNotice).split('-');
+      const s = draft.steps[Number(parts[0])];
+      const lines = noticeLines(s);
+      lines.splice(Number(parts[1]), 1);
+      s.notice = lines.filter(Boolean).join('；');
       renderDraft();
     }));
 
@@ -691,7 +772,7 @@
         instruction: s.instruction || '',
         duration_hint: s.duration_hint || '',
         notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
-        fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '' })),
+        fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
       })),
     };
     renderDraft();
@@ -1006,7 +1087,7 @@
     });
   }
 
-  /* 字段名里带「时间 / 时刻 / 日期」的，改用日期 + 时间选择器，不用手打 */
+  /* 兼容旧数据：字段名里带「时间 / 时刻 / 日期」时按时间类处理（新方案走 fieldTypeOf） */
   function isTimeField(label) {
     return /时间|时刻|日期/.test(String(label || ''));
   }
@@ -1030,17 +1111,31 @@
     } else {
       host.innerHTML = fields.map((f, i) => {
         const value = (s.values || {})[f.label] || '';
+        const type = fieldTypeOf(f);
         const head = '<label>' + esc(f.label) + (f.unit ? '<span class="unit">(' + esc(f.unit) + ')</span>' : '') + '</label>';
+        const parts = splitDateTime(value);
 
-        if (isTimeField(f.label)) {
-          const parts = splitDateTime(value);
+        // 时间 / 日期 / 日期+时间：用原生选择器，避免手打出格式错误
+        if (type === 'datetime' || type === 'date' || type === 'time') {
+          const cells = [];
+          if (type !== 'time') cells.push('<input type="date" data-key="' + i + '" data-part="date" value="' + esc(parts.date) + '">');
+          if (type !== 'date') cells.push('<input type="time" data-key="' + i + '" data-part="time" value="' + esc(parts.time) + '">');
           return [
             '<div class="data-field">',
             '  ' + head,
             '  <div class="dt-row">',
-            '    <input type="date" data-key="' + i + '" data-part="date" value="' + esc(parts.date) + '">',
-            '    <input type="time" data-key="' + i + '" data-part="time" value="' + esc(parts.time) + '">',
+            '    ' + cells.join('\n    '),
             '  </div>',
+            '</div>',
+          ].join('\n');
+        }
+
+        // 数字：用 number 控件，手机上会弹数字键盘，也能挡住非数字输入
+        if (type === 'number') {
+          return [
+            '<div class="data-field">',
+            '  ' + head,
+            '  <input type="number" step="any" inputmode="decimal" data-key="' + i + '" value="' + esc(value) + '">',
             '</div>',
           ].join('\n');
         }

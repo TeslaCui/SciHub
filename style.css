@@ -328,8 +328,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .plan-card .hc-actions { justify-content: flex-end; margin-top: 10px; }
 }
 
-/* ── 日期 + 时间选择器（用于「时间」类字段）────────────── */
-.dt-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* ── 日期 / 时间选择器（日期、时间或两者都要）──────────── */
+/* auto-fit：只放一个控件时它会占满整行，两个时并排 */
+.dt-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
 .dt-row input { margin-top: 0; min-width: 0; }
 
 .quick-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
@@ -392,7 +393,18 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .drift-body em { color: #93c5fd; }
 }
 
-.field-row { display: grid; grid-template-columns: 1fr 96px; gap: 10px; margin-bottom: 8px; }
+/* 字段行：字段名 / 单位 / 填写方式（文本、数字、时间…） */
+.field-row { display: grid; grid-template-columns: 1fr 92px 108px; gap: 10px; margin-bottom: 8px; }
+
+/* ── 编辑方案里的子区块（注意事项 / 数据字段）──────────── */
+.sub-block { margin-top: 10px; }
+.sub-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 6px; color: var(--muted); font-size: 13px;
+}
+.ghost.tiny { font-size: 12px; padding: 4px 10px; }
+/* 注意事项的一行：输入框 + 删除按钮 */
+.line-row { display: grid; grid-template-columns: 1fr 34px; gap: 8px; margin-bottom: 6px; }
 
 /* ── 执行界面 ─────────────────────────────────────────── */
 .run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
