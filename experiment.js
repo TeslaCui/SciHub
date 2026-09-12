@@ -254,8 +254,9 @@
        v2：注意事项提取 + 同名药品前缀区分
        v3：把热解程序完整保留进步骤说明（执行界面据此显示热解程序计算器）
            + 字段可指定填写方式
+       v4：步骤粒度按工序归并（同一工序的多行描述不再被拆成好几步）
      注：版本号只在内部用，不展示给用户。 */
-  const PARSE_VERSION = 3;
+  const PARSE_VERSION = 4;
 
   /* 这个方案是不是用旧版解析规则导入的（没有记录的老方案视为 v1） */
   function planNeedsUpgrade(plan) {
@@ -1247,20 +1248,20 @@
   /* 执行界面里那块可折叠的计算器（不是热解步骤就不渲染） */
   function pyroBlock(s) {
     if (!isPyroStep(s)) return '';
+    // 找不到程序也照样渲染 —— 这样用户可以自己把程序粘进来。
+    // （旧方案里那串程序常常根本没被解析进步骤说明，这时更需要一个能填的地方。）
     const seq = pyroSeqForStep(s);
-    if (!seq) return '';
-
     const parts = pyroParts(seq);
     const room = (parts.find((p) => p.kind === 'temp') || {}).value;
-    const rate = guessPyroRate(seq);
+    const rate = seq ? guessPyroRate(seq) : 5;
 
     return [
       '<details class="pyro">',
       '  <summary>🔥 热解程序计算器</summary>',
       '  <div class="pyro-body">',
-      '    <label class="pyro-field">热解程序<input id="pyro-seq" value="' + esc(seq) + '" spellcheck="false"></label>',
+      '    <label class="pyro-field">热解程序<input id="pyro-seq" value="' + esc(seq) + '" spellcheck="false" placeholder="如 C30-T60-C30-T184-C950-T60-C950--121"></label>',
       '    <div class="pyro-grid">',
-      '      <label class="pyro-field">室温（℃）<input type="number" step="any" inputmode="decimal" id="pyro-room" value="' + esc(room) + '"></label>',
+      '      <label class="pyro-field">室温（℃）<input type="number" step="any" inputmode="decimal" id="pyro-room" value="' + esc(room == null ? '' : room) + '" placeholder="如 30"></label>',
       '      <label class="pyro-field">升温速率（℃/min）<input type="number" step="any" inputmode="decimal" id="pyro-rate" value="' + esc(rate) + '"></label>',
       '    </div>',
       '    <div id="pyro-out"></div>',
