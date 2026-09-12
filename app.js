@@ -492,6 +492,36 @@ function bindEvents() {
   $('record-form').addEventListener('submit', submitRecord);
   $('search').addEventListener('input', (e) => { state.q = e.target.value; renderRecords(); });
   $('category-filter').addEventListener('change', (e) => { state.category = e.target.value; renderRecords(); });
+
+  // 导出：把当前筛选出的记录存成 CSV（带 BOM，Excel 打开中文不乱码）
+  if ($('export-btn')) {
+    $('export-btn').addEventListener('click', () => {
+      const rows = visibleRecords();
+      if (!rows.length) { setStatus('当前没有可导出的记录。', 'warn'); return; }
+
+      const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [['标题', '类别', '日期', '标签', '内容'].map(cell).join(',')];
+      rows.forEach((r) => {
+        lines.push([
+          r.title,
+          r.category,
+          r.occurred_on,
+          (r.tags || []).join(' / '),
+          r.content,
+        ].map(cell).join(','));
+      });
+
+      const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = '科研记录-' + new Date().toISOString().slice(0, 10) + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      setStatus('已导出 ' + rows.length + ' 条记录。', 'ok');
+    });
+  }
 }
 
 function registerServiceWorker() {
@@ -631,7 +661,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.23.0';
+const APP_VERSION = '0.24.0';
 
 async function checkVersion() {
   const label = $('app-version');
