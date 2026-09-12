@@ -968,10 +968,11 @@
       '  <div class="instr">' + highlight(s.instruction) + '</div>',
       '  <div id="fields"></div>',
       '  <div style="margin-top:14px">',
-      '    <div class="hc-meta">实验照片</div>',
+      '    <div class="hc-meta">实验照片 / 视频</div>',
       '    <div class="photos" id="photos"></div>',
-      '    <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>',
-      '    <input type="file" id="photo-gallery" accept="image/*" multiple hidden>',
+      // 不加 capture：否则手机上只会直接开相机，无法从相册里选已有视频
+      '    <input type="file" id="photo-input" accept="image/*,video/*" hidden>',
+      '    <input type="file" id="photo-gallery" accept="image/*,video/*" multiple hidden>',
       '  </div>',
       '  <div class="run-actions">',
       '    <button type="button" class="ghost" id="run-prev" ' + (run.pos === 0 ? 'disabled' : '') + '>上一步</button>',
@@ -992,13 +993,15 @@
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
-      if (f) uploadPhotos([f]);
+      const target = run.steps[run.pos];   // 记下「此刻」是哪一步，避免上传完成时串到下一步
+      if (f) uploadPhotos([f], target);
       e.target.value = '';
     });
 
     $('photo-gallery').addEventListener('change', (e) => {
       const files = e.target.files ? Array.from(e.target.files) : [];
-      if (files.length) uploadPhotos(files);
+      const target = run.steps[run.pos];
+      if (files.length) uploadPhotos(files, target);
       e.target.value = '';
     });
   }
@@ -1082,23 +1085,46 @@
     nt.addEventListener('input', () => { s.note = nt.value; scheduleSave(s); });
   }
 
+  /* 判断一条媒体是不是视频（上传时记了 type；老数据按扩展名兜底） */
+  function isVideoFile(img) {
+    if (!img) return false;
+    if (/^video\//.test(img.type || '')) return true;
+    return /\.(mp4|mov|m4v|webm|avi|3gp)$/i.test(String(img.path || ''));
+  }
+
   function drawPhotos(s) {
     const host = $('photos');
     const images = s.images || [];
 
-    host.innerHTML = images.map((img, idx) => [
-      '<figure class="photo" data-path="' + esc(img.path) + '">',
-      '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="点击放大查看">',
-      run.urls[img.path]
-        ? '    <img src="' + esc(run.urls[img.path]) + '" alt="' + esc(img.caption || img.name || '照片') + '">'
-        : '    <span class="photo-loading">' + ((run.urlErrors || {})[img.path] ? '⚠️ ' + esc(run.urlErrors[img.path]) : '图片准备中…') + '</span>',
-      '  </button>',
-      '  <button type="button" class="photo-drop" data-drop="' + esc(img.path) + '" title="删除这张">×</button>',
-      '  <input class="photo-caption" data-caption="' + esc(img.path) + '" value="' + esc(img.caption || '') + '" placeholder="加个注解…" maxlength="120">',
-      '</figure>',
-    ].join('\n')).join('');
+    host.innerHTML = images.map((img, idx) => {
+      const video = isVideoFile(img);
+      const url = run.urls[img.path];
+      let inner;
 
-    const camera = el('button', { type: 'button', class: 'photo-add' }, '📷<br>拍照');
+      if (!url) {
+        inner = '<span class="photo-loading">'
+          + ((run.urlErrors || {})[img.path] ? '⚠️ ' + esc(run.urlErrors[img.path]) : '准备中…')
+          + '</span>';
+      } else if (video) {
+        // preload=metadata 只取首帧当封面，不会把整个视频下载下来
+        inner = '<video src="' + esc(url) + '" muted preload="metadata" playsinline></video>'
+          + '<span class="media-play" aria-hidden="true">▶</span>';
+      } else {
+        inner = '<img src="' + esc(url) + '" alt="' + esc(img.caption || img.name || '照片') + '">';
+      }
+
+      return [
+        '<figure class="photo" data-path="' + esc(img.path) + '">',
+        '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="' + (video ? '点击播放' : '点击放大查看') + '">',
+        '    ' + inner,
+        '  </button>',
+        '  <button type="button" class="photo-drop" data-drop="' + esc(img.path) + '" title="删除">×</button>',
+        '  <input class="photo-caption" data-caption="' + esc(img.path) + '" value="' + esc(img.caption || '') + '" placeholder="加个注解…" maxlength="120">',
+        '</figure>',
+      ].join('\n');
+    }).join('');
+
+    const camera = el('button', { type: 'button', class: 'photo-add' }, '📷<br>拍照 / 录像');
     camera.addEventListener('click', () => $('photo-input').click());
     host.appendChild(camera);
 
@@ -1142,21 +1168,26 @@
 
     const box = el('div', { class: 'lightbox' }, [
       '<button type="button" class="lb-btn lb-close" data-lb="close" title="关闭（Esc）">×</button>',
-      many ? '<button type="button" class="lb-btn lb-prev" data-lb="prev" title="上一张（←）">‹</button>' : '',
+      many ? '<button type="button" class="lb-btn lb-prev" data-lb="prev" title="上一个（←）">‹</button>' : '',
       '<figure class="lb-stage">',
-      '  <img id="lb-img" alt="">',
+      '  <div id="lb-media"></div>',
       '  <figcaption id="lb-cap"></figcaption>',
       '</figure>',
-      many ? '<button type="button" class="lb-btn lb-next" data-lb="next" title="下一张（→）">›</button>' : '',
+      many ? '<button type="button" class="lb-btn lb-next" data-lb="next" title="下一个（→）">›</button>' : '',
       many ? '<div class="lb-count" id="lb-count"></div>' : '',
     ].join(''));
 
     function paint() {
-      const img = images[pos];
-      const node = box.querySelector('#lb-img');
-      if (run.urls[img.path]) node.src = run.urls[img.path];
-      node.alt = img.caption || img.name || '照片';
-      box.querySelector('#lb-cap').textContent = img.caption || '';
+      const item = images[pos];
+      const host = box.querySelector('#lb-media');
+      const url = run.urls[item.path] || '';
+
+      // 每次切换都重建节点：视频切走时才不会在后台继续播放
+      host.innerHTML = isVideoFile(item)
+        ? '<video src="' + esc(url) + '" controls playsinline preload="metadata"></video>'
+        : '<img src="' + esc(url) + '" alt="' + esc(item.caption || item.name || '照片') + '">';
+
+      box.querySelector('#lb-cap').textContent = item.caption || '';
       const counter = box.querySelector('#lb-count');
       if (counter) counter.textContent = (pos + 1) + ' / ' + images.length;
     }
@@ -1258,30 +1289,35 @@
     try { return JSON.stringify(err); } catch (_e) { return String(err); }
   }
 
-  async function uploadPhotos(files) {
+  /* targetStep：上传按钮被点击时所在的那一步。
+     必须显式传入 —— 上传要压缩 + 走网络，期间用户完全可能已经翻到下一步，
+     若在这里读 run.steps[run.pos]，照片就会挂到错误的步骤上。 */
+  async function uploadPhotos(files, targetStep) {
     const list = Array.from(files || []);
-    if (!list.length) return;
+    const s = targetStep || run.steps[run.pos];
+    if (!list.length || !s) return;
 
     let ok = 0;
     let lastError = '';
     for (let i = 0; i < list.length; i++) {
-      $('autosave').textContent = '照片上传中… ' + (i + 1) + ' / ' + list.length;
-      const result = await uploadPhoto(list[i], true);
+      $('autosave').textContent = '上传中… ' + (i + 1) + ' / ' + list.length;
+      const result = await uploadPhoto(list[i], true, s);
       if (result === true) ok++;
       else if (typeof result === 'string') lastError = result;
     }
 
     $('autosave').textContent = (ok === list.length)
-      ? ('已上传 ' + ok + ' 张 · ' + fmt(now()))
-      : ('已上传 ' + ok + ' / ' + list.length + ' 张' + (lastError ? '：' + lastError : ''));
-    drawPhotos(run.steps[run.pos]);
+      ? ('已上传 ' + ok + ' 个 · ' + fmt(now()))
+      : ('已上传 ' + ok + ' / ' + list.length + ' 个' + (lastError ? '：' + lastError : ''));
+    // 只有还停在这一步时才重绘，否则会把用户当前看的步骤界面刷掉
+    if (run.steps[run.pos] === s) drawPhotos(s);
   }
 
-  async function uploadPhoto(file, silent) {
-    const s = run.steps[run.pos];
+  async function uploadPhoto(file, silent, targetStep) {
+    const s = targetStep || run.steps[run.pos];
     const say = (txt) => { $('autosave').textContent = txt; };
 
-    if (!silent) say('照片上传中…');
+    if (!silent) say('上传中…');
 
     try {
       const payload = await compressImage(file);
@@ -1302,6 +1338,7 @@
       s.images = (s.images || []).concat([{
         path: path,
         name: file.name || 'photo',
+        type: payload.type || file.type || '',   // 用来区分照片与视频
         caption: '',
         at: new Date().toISOString(),
       }]);
@@ -1311,7 +1348,7 @@
     } catch (err) {
       console.error('[SciHub] 上传失败：', err, '| 文件：', file && file.name, file && file.size);
       const msg = errorText(err);
-      say('照片上传失败：' + msg);
+      say('上传失败：' + msg);
       return msg;
     }
   }
