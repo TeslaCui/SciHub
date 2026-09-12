@@ -600,6 +600,7 @@
           '      <select data-field-type="' + si + '-' + fi + '" title="填写方式">',
           FIELD_TYPES.map((x) => '        <option value="' + x.value + '"' + (fieldTypeOf(f) === x.value ? ' selected' : '') + '>' + x.label + '</option>').join('\n'),
           '      </select>',
+          '      <button type="button" class="icon-btn del" data-drop-field="' + si + '-' + fi + '" title="删除这个字段" aria-label="删除这个字段">×</button>',
           '    </div>',
         ].join('\n')).join('') : '<p class="hint small">这一节还没有数据字段，可点上方添加。</p>'),
         '  </div>',
@@ -658,6 +659,14 @@
     host.querySelectorAll('[data-add-field]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
       draft.steps[Number(b.dataset.addField)].fields.push({ label: '', unit: '', type: 'text' });
+      renderDraft();
+    }));
+
+    // 数据字段：删除一行
+    host.querySelectorAll('[data-drop-field]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const parts = String(b.dataset.dropField).split('-');
+      draft.steps[Number(parts[0])].fields.splice(Number(parts[1]), 1);
       renderDraft();
     }));
 

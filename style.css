@@ -410,8 +410,14 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .drift-body em { color: #93c5fd; }
 }
 
-/* 字段行：字段名 / 单位 / 填写方式（文本、数字、时间…） */
-.field-row { display: grid; grid-template-columns: 1fr 92px 108px; gap: 10px; margin-bottom: 8px; }
+/* 字段行：字段名 / 单位 / 填写方式（文本、数字、时间…）/ 删除按钮 */
+.field-row { display: grid; grid-template-columns: 1fr 84px 104px 34px; gap: 8px; margin-bottom: 8px; align-items: center; }
+
+/* 窄屏：字段名独占一行，单位/填写方式/删除挤成第二行 */
+@media (max-width: 720px) {
+  .field-row { grid-template-columns: 1fr 1fr 34px; }
+  .field-row > input:first-child { grid-column: 1 / -1; }
+}
 
 /* 执行界面的数据字段：参数多时自动分两列（手机上仍是一列），备注独占整行 */
 #fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 18px; }
