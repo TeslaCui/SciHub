@@ -235,6 +235,55 @@
     };
   }
 
+  /* 把「同一道工序」被拆成的相邻步骤合并掉。
+     解析器（尤其是规则解析）常把一个工序的几行拆成好几步，例如
+     「950℃热解」与紧随其后的「热解后冷却、称量」。
+     判定：相邻两步标题互为子串（忽略标点）；或后一步以「继续/随后/接着…」开头。
+     合并时标题取较短的（更概括），说明按顺序拼接，字段/注意事项/热解程序一并合并。 */
+  function mergeAdjacentSteps(steps) {
+    if (!steps || steps.length < 2) return steps || [];
+
+    const key = (s) => String(s || '').replace(/[\s（）()【】\[\]：:、，,。.·—\-]/g, '');
+    // 再去掉括号里的补充说明，便于比对「950℃热解」与「950℃热解后冷却称量」
+    const norm = (s) => key(s).replace(/[（(][^）)]*[）)]/g, '');
+    const out = [];
+
+    steps.forEach((s) => {
+      const prev = out[out.length - 1];
+      if (prev) {
+        const a = key(prev.title);
+        const b = key(s.title);
+        const an = norm(prev.title);
+        const bn = norm(s.title);
+        const stem = 4;   // 开头若干个字相同即视为同一工序（如「950℃热解」）
+
+        const related = (a && b && (a.indexOf(b) !== -1 || b.indexOf(a) !== -1))
+          || (an.length >= stem && bn.length >= stem && an.slice(0, stem) === bn.slice(0, stem))
+          || /^(继续|随后|接着|然后|之后)/.test(String(s.title || ''));
+
+        if (related) {
+          if (b && (!a || b.length < a.length)) prev.title = s.title;
+          prev.instruction = [prev.instruction, s.instruction].filter(Boolean).join('\n');
+          if (s.notice) prev.notice = [prev.notice, s.notice].filter(Boolean).join('；');
+          if (!prev.pyro_seq && s.pyro_seq) prev.pyro_seq = s.pyro_seq;
+          if (!prev.duration_hint && s.duration_hint) prev.duration_hint = s.duration_hint;
+
+          const have = new Set((prev.fields || []).map((f) => f.label));
+          (s.fields || []).forEach((f) => {
+            if (have.has(f.label)) return;
+            have.add(f.label);
+            prev.fields = (prev.fields || []).concat([f]);
+          });
+          return;
+        }
+      }
+      out.push(Object.assign({}, s, { fields: (s.fields || []).slice() }));
+    });
+
+    // 合并后重新编号，保证 position 连续
+    return out.map((s, i) => Object.assign({}, s, { position: i }));
+  }
+
   /* ══ 方案列表 ═══════════════════════════════════════════ */
 
   /* 字段名归一化：AI 解析与规则解析对同一项常给出不同叫法
@@ -520,6 +569,9 @@
       }
 
       draft = plan;
+      // 解析常把同一工序拆成多步（例如「950℃热解」+「热解后冷却称量」），这里自动合并一次，
+      // 合并结果仍会展示在校对页，可以手动再调。
+      draft.steps = mergeAdjacentSteps(draft.steps);
       draft.source = file.name;
       renderDraft();
       route('plan');
@@ -1613,54 +1665,117 @@
     }));
   }
 
-  /* ── 导出本次实验的数据 ───────────────────────────────── */
+  /* ── 导出本次实验的数据（Word 文档）───────────────────── */
 
-  /* 一行 = 一个字段；没有字段的步骤也会占一行，保证步骤齐全。
-     照片/视频本体不进 CSV（它们是二进制），但会记录张数便于核对。
-     表头带 BOM，Excel 打开中文不乱码。 */
-  function exportRunData() {
-    if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
+  /* 生成 .docx：docx 本质就是个 zip，里面放几个固定名字的 XML。
+     这里只用最小结构：Content_Types + rels + word/document.xml。 */
+  async function buildDocx(paragraphs) {
+    const JSZip = await loadJSZip();
+    const zip = new JSZip();
 
-    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const lines = [['实验名称', '步骤号', '步骤标题', '字段', '数值', '单位', '步骤备注', '照片数', '注意事项'].map(cell).join(',')];
+    const xml = (s) => String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-    run.steps.forEach((s) => {
-      const fields = s.fields || [];
-      const vals = s.values || {};
-      const note = s.note || '';
-      const notice = s.notice || '';
-      const imgCount = (s.images || []).length;
+    zip.file('[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>');
 
-      if (!fields.length) {
-        lines.push([run.data.title, s.position + 1, s.title, '', '', '', note, imgCount, notice].map(cell).join(','));
-        return;
-      }
-      fields.forEach((f) => {
-        lines.push([
-          run.data.title,
-          s.position + 1,
-          s.title,
-          f.label,
-          vals[f.label] == null ? '' : vals[f.label],
-          f.unit || '',
-          note,
-          imgCount,
-          notice,
-        ].map(cell).join(','));
-      });
+    zip.folder('_rels').file('.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>');
+
+    const body = paragraphs.map((item) => {
+      const text = typeof item === 'string' ? item : item.text;
+      const o = typeof item === 'string' ? {} : item;
+
+      let rPr = '';
+      if (o.bold) rPr += '<w:b/>';
+      if (o.size) rPr += '<w:sz w:val="' + (o.size * 2) + '"/>';
+      if (o.color) rPr += '<w:color w:val="' + o.color + '"/>';
+
+      const pPr = o.align ? '<w:pPr><w:jc w:val="' + o.align + '"/></w:pPr>' : '';
+      return '<w:p>' + pPr
+        + '<w:r>' + (rPr ? '<w:rPr>' + rPr + '</w:rPr>' : '')
+        + '<w:t xml:space="preserve">' + xml(text) + '</w:t></w:r></w:p>';
+    }).join('');
+
+    zip.folder('word').file('document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:body>' + body
+      + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+      + '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
+      + '</w:body></w:document>');
+
+    return zip.generateAsync({
+      type: 'blob',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     });
+  }
 
-    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  /* 触发浏览器下载 */
+  function downloadBlob(blob, filename) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    // 文件名里的非法字符要换掉，否则部分系统无法保存
-    const safeTitle = String(run.data.title || '实验').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
-    a.download = safeTitle + '-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-    setStatus('已导出 ' + run.steps.length + ' 个步骤的数据。', 'ok');
+  }
+
+  /* 把本次实验的步骤与填写数据导成一个 Word 文档 */
+  async function exportRunData() {
+    if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
+
+    const title = run.data.title || '实验';
+    const paras = [
+      { text: title, bold: true, size: 16, align: 'center' },
+      { text: '开始于 ' + fmt(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中'), size: 9, align: 'center' },
+      '',
+    ];
+
+    run.steps.forEach((s) => {
+      paras.push({ text: '第 ' + (s.position + 1) + ' 步：' + (s.title || ''), bold: true, size: 12 });
+      if (s.pyro_seq) paras.push({ text: '热解程序：' + s.pyro_seq, size: 10 });
+      if (s.duration_hint) paras.push({ text: '时长提示：' + s.duration_hint, size: 10 });
+      // 注意事项用橙色标出，和界面里的警示条呼应
+      noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '⚠ ' + line, size: 10, color: 'C05621' }));
+      if (s.instruction) paras.push({ text: s.instruction, size: 10 });
+
+      const fields = s.fields || [];
+      const vals = s.values || {};
+      if (fields.length) {
+        paras.push({ text: '填写数据：', size: 10, bold: true });
+        fields.forEach((f) => {
+          const v = vals[f.label];
+          const shown = (v == null || v === '') ? '（未填）' : v;
+          paras.push({ text: '　' + f.label + '：' + shown + (f.unit ? ' ' + f.unit : ''), size: 10 });
+        });
+      }
+      if (s.note) paras.push({ text: '备注：' + s.note, size: 10 });
+      const imgs = (s.images || []).length;
+      if (imgs) paras.push({ text: '照片 / 视频：' + imgs + ' 个', size: 10 });
+      paras.push('');
+    });
+
+    try {
+      setStatus('正在生成 Word 文档…');
+      const blob = await buildDocx(paras);
+      const safe = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+      downloadBlob(blob, safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
+      setStatus('已导出 ' + run.steps.length + ' 个步骤到 Word 文档。', 'ok');
+    } catch (err) {
+      console.error('[SciHub] 导出失败：', err);
+      setStatus('导出失败：' + errorText(err), 'error');
+    }
   }
 
   /* ── 灯箱：放大查看 / 播放 / 存到设备 ─────────────────── */
