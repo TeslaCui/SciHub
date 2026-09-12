@@ -702,6 +702,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 /* 三个输入（初始温度 / 升温速率 / 最终温度）：窄屏自动折行 */
 .pyro-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
 
+/* 方案编辑页里的「热解程序」输入框：等宽字体便于逐字核对 */
+.pyro-input {
+  width: 100%; box-sizing: border-box;
+  font-family: ui-monospace, Consolas, "Courier New", monospace;
+}
+
 .pyro-result { border-top: 1px dashed var(--line); padding-top: 10px; }
 .pyro-line {
   display: grid; grid-template-columns: 54px 1fr auto; gap: 8px;

@@ -369,3 +369,20 @@ select
      where table_schema = 'public'
        and table_name = 'experiment_plans'
        and column_name = 'parse_version')                           as parse_version_columns;
+
+-- ─────────────────────────────────────────────────────────────
+-- 步骤「热解程序」（新增）
+-- 建方案时就把程序定下来，例如：
+--   C30-T60-C30-T184-C950-T60-C950--121
+-- 执行界面据此显示热解程序计算器（初始温度 / 升温速率 / 最终温度可现场调整并重算）。
+-- 幂等：列已存在则跳过。老数据为 null，界面会退化为从步骤说明里自动识别。
+-- ─────────────────────────────────────────────────────────────
+alter table public.plan_steps add column if not exists pyro_seq text;
+alter table public.run_steps  add column if not exists pyro_seq text;
+
+-- 自检 7：应看到 pyro_seq_columns=2
+select
+  (select count(*) from information_schema.columns
+     where table_schema = 'public'
+       and table_name in ('plan_steps', 'run_steps')
+       and column_name = 'pyro_seq')                                as pyro_seq_columns;

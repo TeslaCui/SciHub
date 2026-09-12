@@ -576,6 +576,12 @@
         '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
         '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
 
+        // 热解程序：建方案时就定下来，执行界面据此显示计算器（留空则自动从说明里找）
+        '  <div class="sub-block">',
+        '    <div class="sub-head"><span>🔥 热解程序</span><span class="hint small">留空则在执行界面自动从步骤说明里识别</span></div>',
+        '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="如 C30-T60-C30-T184-C950-T60-C950--121">',
+        '  </div>',
+
         // 注意事项：一行一条，可增可删（存库时仍合并成一个字符串）
         '  <div class="sub-block">',
         '    <div class="sub-head"><span>⚠ 注意事项</span>',
@@ -633,6 +639,10 @@
         rows.forEach((inp) => { const v = inp.value.trim(); if (v) lines.push(v); });
         s.notice = lines.join('；');
       }
+
+      // 热解程序（方案里显式填的那一串）
+      const pyro = document.querySelector('[data-pyro="' + si + '"]');
+      if (pyro) s.pyro_seq = pyro.value.trim();
 
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
@@ -733,6 +743,7 @@
         title: s.title || ('步骤 ' + (i + 1)),
         instruction: s.instruction || '',
         notice: s.notice || '',
+        pyro_seq: s.pyro_seq || '',
         fields: s.fields,
         duration_hint: s.duration_hint || '',
       }));
@@ -783,6 +794,7 @@
         instruction: s.instruction || '',
         duration_hint: s.duration_hint || '',
         notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
+        pyro_seq: s.pyro_seq || '',
         fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
       })),
     };
@@ -873,6 +885,7 @@
         title: s.title,
         instruction: s.instruction,
         notice: s.notice || '',
+        pyro_seq: s.pyro_seq || '',
         fields: s.fields,
         values: {},
         images: [],
@@ -1249,22 +1262,28 @@
   }
 
   /* 这一步算不算「热解步骤」：
-     ① 步骤说明里直接写了完整程序 → 算；
-     ② 否则看标题/说明里有没有热解相关字样（热解 / 碳化 / 煅烧 / 管式炉 / 程序升温…）。
-        程序通常写在方案的另一处（比如「设定升温程序」那一步），所以这里只负责
-        把计算器摆到正确的步骤上，而不是要求程序必须写在本步。 */
+     ① 方案/快照里显式填了热解程序 → 算；
+     ② 步骤说明里直接写了完整程序 → 算；
+     ③ 否则看标题/说明里有没有热解相关字样（热解 / 碳化 / 煅烧 / 管式炉 / 程序升温…）。
+        程序通常写在方案的另一处，所以这里只负责把计算器摆到正确的步骤上。 */
   function isPyroStep(s) {
+    if (s && s.pyro_seq && looksLikePyro(s.pyro_seq)) return true;
     const own = findPyroSeq(s.instruction || '');
     if (own && looksLikePyro(own)) return true;
     const hay = String(s.title || '') + '\n' + String(s.instruction || '');
     return /热解|碳化|煅烧|管式炉|程序升温|pyrolysis/i.test(hay);
   }
 
-  /* 取这条实验里可用的热解程序：当前步骤优先，否则用其它步骤里找到的那一个 */
+  /* 取这一步要用的热解程序：
+     ① 本步显式填的（建方案时定下来的）
+     ② 本步说明里识别到的
+     ③ 这条实验的其它步骤里能找到的（程序常写在别处） */
   function pyroSeqForStep(s) {
+    if (s && s.pyro_seq && looksLikePyro(s.pyro_seq)) return String(s.pyro_seq).trim();
     const own = findPyroSeq(s.instruction || '');
     if (own && looksLikePyro(own)) return own;
     for (const x of (run.steps || [])) {
+      if (x.pyro_seq && looksLikePyro(x.pyro_seq)) return String(x.pyro_seq).trim();
       const q = findPyroSeq(x.instruction || '');
       if (q && looksLikePyro(q)) return q;
     }
@@ -1329,13 +1348,79 @@
     ].join('');
   }
 
+  /* 用现有程序当模板（保留各段保温时长与终止标记），把
+     「初始温度 / 最终温度 / 升温速率」套进去，生成新的程序串：
+       模板 C30-T60-C30-T184-C950-T60-C950--121
+       + 初始 25℃、终温 1000℃、速率 5 → C25-T60-C25-T195-C1000-T60-C1000--121
+     这样建方案时只要给定三个数，程序串就自动出来了。 */
+  function buildPyroSeq(template, roomTemp, rate, finalTemp) {
+    const parts = pyroParts(template);
+    if (!parts.length) return '';
+
+    const temps = parts.filter((p) => p.kind === 'temp').map((p) => p.value);
+    const oldRoom = temps[0];
+    const oldMax = Math.max.apply(null, temps);
+    const roomNum = Number(roomTemp);
+    const finalNum = Number(finalTemp);
+    const room = Number.isFinite(roomNum) && roomNum !== 0 ? roomNum : oldRoom;
+    const finalT = Number.isFinite(finalNum) && finalNum > 0 ? finalNum : oldMax;
+    const r = Number(rate) > 0 ? Number(rate) : 0;
+
+    // 第一趟：先算出每个温度点的新值（这一趟不碰时长）
+    const newTemps = parts.map((p) => {
+      if (p.kind !== 'temp') return null;
+      if (p.value === oldRoom) return room;
+      if (p.value === oldMax) return finalT;
+      return p.value;
+    });
+
+    // 第二趟：组装。
+    // 必须分两趟 —— 若在同一趟里边替换温度边算时长，「下一个温度点」会取到尚未替换的旧值，
+    // 于是本该是保温的段会被误判成升温（实测把 T60 算成了 T1）。
+    const out = [];
+    let last = null;
+
+    parts.forEach((p, i) => {
+      if (p.kind === 'temp') {
+        last = newTemps[i];
+        out.push('C' + last);
+        return;
+      }
+      if (p.kind === 'time') {
+        let next = null;
+        for (let j = i + 1; j < parts.length; j++) {
+          if (parts[j].kind === 'temp') { next = newTemps[j]; break; }
+        }
+        let t = p.value;
+        if (last != null && next != null && next !== last && r > 0) {
+          t = Math.round((Math.abs(next - last) / r) * 10) / 10;
+        }
+        out.push('T' + t);
+        return;
+      }
+      out.push('--' + (p.value || ''));
+    });
+
+    // 终止标记本身以 -- 开头，join 后会前后各有一个「-」，压回两个
+    return out.join('-').replace(/---+/g, '--');
+  }
+
   function bindPyro() {
     if (!$('pyro-seq')) return;
     drawPyro();
-    ['pyro-seq', 'pyro-room', 'pyro-rate', 'pyro-final'].forEach((id) => {
+
+    // 初始温度/速率/最终温度改了 → 连同程序串一起重算；程序串本身改了 → 只按它算
+    ['pyro-room', 'pyro-rate', 'pyro-final'].forEach((id) => {
       const node = $(id);
-      if (node) node.addEventListener('input', drawPyro);
+      if (node) {
+        node.addEventListener('input', () => {
+          const next = buildPyroSeq($('pyro-seq').value, $('pyro-room').value, $('pyro-rate').value, $('pyro-final').value);
+          if (next) $('pyro-seq').value = next;
+          drawPyro();
+        });
+      }
     });
+    $('pyro-seq').addEventListener('input', drawPyro);
   }
 
   /* ── 右上角「小工具」：不依赖具体实验的独立面板 ────────── */
@@ -1351,20 +1436,29 @@
       '<div id="tp-out" style="margin-top:12px"></div>',
     ].join(''), [{ label: '关闭', onClick: closeModal }]);
 
-    const draw = () => {
+    const draw = (rebuild) => {
       const out = $('tp-out');
       if (!out) return;
+
+      // 改了初始温度 / 速率 / 最终温度 → 先按模板把程序串重算出来（保留各段保温时长）
+      if (rebuild) {
+        const next = buildPyroSeq($('tp-seq').value, $('tp-room').value, $('tp-rate').value, $('tp-final').value);
+        if (next) $('tp-seq').value = next;
+      }
+
       const res = calcPyro($('tp-seq').value, $('tp-room').value, $('tp-rate').value, $('tp-final').value);
       out.innerHTML = (res && res.segs.length)
         ? renderPyroResult(res, $('tp-rate').value)
         : '<p class="hint small">没识别出程序。示例：C30-T60-C30-T184-C950-T60-C950--121</p>';
     };
 
-    ['tp-seq', 'tp-room', 'tp-rate', 'tp-final'].forEach((id) => {
+    // 温度/速率变了 → 连程序串一起重算；程序串本身改了 → 只按它算
+    ['tp-room', 'tp-rate', 'tp-final'].forEach((id) => {
       const node = $(id);
-      if (node) node.addEventListener('input', draw);
+      if (node) node.addEventListener('input', () => draw(true));
     });
-    draw();
+    $('tp-seq').addEventListener('input', () => draw(false));
+    draw(false);
   }
 
   /* 供 app.js 的「小工具」入口调用 */
