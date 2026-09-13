@@ -451,6 +451,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .lk-added-info em { font-style: normal; color: var(--brand); }
 .lk-added-info i { font-style: normal; color: var(--muted); margin-left: 4px; }
 .lk-del { flex-shrink: 0; min-width: 28px; }
+/* 「＋」旁边的提示：没有别的实验可加时变红字。
+   提示必须写在弹窗里 —— 页面顶部的状态栏会被弹窗盖住，用户根本看不见。 */
+.lk-more span.tip-warn { color: var(--danger); }
 
 /* 整卡可点（首页方案卡片 / 方案列表卡片）：操作都收在详情页，这里只负责点进去 */
 .home-card.clickable, .plan-card.clickable { cursor: pointer; }

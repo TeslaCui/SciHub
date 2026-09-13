@@ -3224,7 +3224,7 @@
       '<div class="lk-rows" id="lk-rows"></div>',
       '<div class="lk-more">',
       '  <button type="button" class="ghost tiny" id="lk-add-row" title="再加一个实验" aria-label="再加一个实验">＋</button>',
-      '  <span>点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。</span>',
+      '  <span id="lk-more-tip">点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。</span>',
       '</div>',
 
       '<label>关联说明',
@@ -3346,12 +3346,39 @@
           renderRows();
         });
       });
+
+      syncAddBtn();       // 删掉一行后可能空出一个实验，＋ 要跟着启用/置灰
+    };
+
+    // 没有可加的实验时，提示必须出现在弹窗里 —— 页面顶部的状态栏被弹窗盖住，
+    // 用户看不到，就会觉得「点了 ＋ 没反应」。
+    const freeRuns = () => {
+      const used = rows.map((r) => Number(r.runId));
+      return allRuns.filter((o) => used.indexOf(Number(o.id)) === -1);
+    };
+
+    const syncAddBtn = () => {
+      const btn = $('lk-add-row');
+      const tipEl = $('lk-more-tip');
+      if (!btn || !tipEl) return;
+
+      if (freeRuns().length) {
+        btn.disabled = false;
+        btn.title = '再加一个实验';
+        tipEl.className = '';
+        tipEl.textContent = '点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。';
+      } else {
+        btn.disabled = true;      // 所有实验都用上了，再点也没有可加的
+        btn.title = '没有别的实验可以加了';
+        tipEl.className = 'tip-warn';
+        tipEl.textContent = '没有别的实验可以加了 —— 现在一共 ' + allRuns.length
+          + ' 个实验，都已经在每一行里了。想并进更多实验，先去新建一个实验，再回来加。';
+      }
     };
 
     const addRow = async () => {
-      const used = rows.map((r) => Number(r.runId));
-      const free = allRuns.filter((o) => used.indexOf(Number(o.id)) === -1);
-      if (!free.length) { setStatus('没有别的实验可以加了。', 'warn'); return; }
+      const free = freeRuns();
+      if (!free.length) { syncAddBtn(); return; }
       rows.push({ runId: Number(free[0].id), stepIdx: 0 });
       await loadSteps(Number(free[0].id));
       invalidate();
