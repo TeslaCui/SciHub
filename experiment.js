@@ -1622,7 +1622,7 @@
       }
 
       return [
-        '<figure class="photo" data-path="' + esc(img.path) + '">',
+        '<figure class="photo" data-path="' + esc(img.path) + '" data-media="' + idx + '" draggable="true" title="可拖动调整顺序">',
         '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="' + (video ? '点击播放' : '点击放大查看') + '">',
         '    ' + inner,
         '  </button>',
@@ -1643,6 +1643,40 @@
     // 点缩略图放大
     host.querySelectorAll('[data-zoom]').forEach((b) => {
       b.addEventListener('click', () => openLightbox(s, Number(b.dataset.zoom)));
+    });
+
+    // 拖动缩略图调整顺序；顺序会被保存，导出的 Word 文档也按这个顺序排照片
+    let dragFrom = -1;
+    host.querySelectorAll('[data-media]').forEach((fig) => {
+      fig.addEventListener('dragstart', (e) => {
+        dragFrom = Number(fig.dataset.media);
+        fig.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          // Firefox 必须 setData 才会真正开始拖拽
+          try { e.dataTransfer.setData('text/plain', String(dragFrom)); } catch (_e) { /* 忽略 */ }
+        }
+      });
+      fig.addEventListener('dragend', () => { fig.classList.remove('dragging'); });
+      fig.addEventListener('dragover', (e) => { e.preventDefault(); fig.classList.add('over'); });
+      fig.addEventListener('dragleave', () => fig.classList.remove('over'));
+      fig.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        fig.classList.remove('over');
+
+        const to = Number(fig.dataset.media);
+        if (dragFrom < 0 || dragFrom === to) { dragFrom = -1; return; }
+
+        const list = (s.images || []).slice();
+        const moved = list.splice(dragFrom, 1)[0];
+        if (!moved) { dragFrom = -1; return; }
+        list.splice(to, 0, moved);
+        s.images = list;
+        dragFrom = -1;
+
+        await saveStep(s, true);
+        drawPhotos(s);
+      });
     });
 
     // 注解：停手 1 秒后随其它字段一起存库

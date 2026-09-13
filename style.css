@@ -456,6 +456,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 
 .photo { position: relative; margin: 0; min-width: 0; }
+/* 拖动排序时的视觉反馈 */
+.photo.dragging { opacity: .45; }
+.photo.over .photo-open { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(15, 118, 110, .2); }
 .photo-open {
   display: block; position: relative; width: 100%; aspect-ratio: 1 / 1; padding: 0;
   border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
