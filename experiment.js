@@ -1128,10 +1128,19 @@
       const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
       if (!plan || !steps || !steps.length) { setStatus('方案没有可用步骤。', 'error'); return; }
 
+      // 同一个方案常常要做很多次：已有实验时给标题加序号，
+      // 否则主页 / 待办里会出现一串同名实验，分不清是哪一次。
+      const { count } = await client
+        .from(RUN)
+        .select('id', { count: 'exact', head: true })
+        .eq('plan_id', plan.id);
+      const nth = (count || 0) + 1;
+      const runTitle = nth > 1 ? plan.title + '（第 ' + nth + ' 次）' : plan.title;
+
       const { data: run, error } = await client.from(RUN).insert({
         user_id: state.user.id,
         plan_id: plan.id,
-        title: plan.title,
+        title: runTitle,
         status: 'running',
         current_step: 0,
       }).select().single();
@@ -2674,7 +2683,159 @@
     }
   }
 
-  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData };
+  /* ── 关联其它实验 ────────────────────────────────────────
+     入口在主页「进行中的实验」卡片上（那个链接图标）。流程：
+       1. 挑本实验的哪一步（下面会显示这一步的内容，方便确认）
+       2. 挑对方实验 + 对方的哪一步
+       3. 比较两边「从这一步往后」的步骤是否一致 —— 不一致就不让合并
+     */
+  function tailKey(s) {
+    return String((s && s.title) || '')
+      .replace(/[\s　]+/g, '')
+      .replace(/[（(][^）)]*[）)]/g, '')      // 去掉括号里的补充说明，如「（3× 放大版）」
+      .replace(/[：:。，,、；;·]/g, '')
+      .toLowerCase();
+  }
+
+  // 从 fromA / fromB 开始逐条比后续步骤，返回第一处不同
+  function compareTail(a, b, fromA, fromB) {
+    const x = a.slice(fromA);
+    const y = b.slice(fromB);
+    const n = Math.min(x.length, y.length);
+    for (let i = 0; i < n; i++) {
+      if (tailKey(x[i]) !== tailKey(y[i])) {
+        return { same: false, at: i, x: x[i], y: y[i], nx: x.length, ny: y.length };
+      }
+    }
+    if (x.length !== y.length) {
+      return { same: false, at: n, x: x[n], y: y[n], nx: x.length, ny: y.length, tail: true };
+    }
+    return { same: true, nx: x.length, ny: y.length };
+  }
+
+  async function linkRun(runId) {
+    const { data: mySteps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
+    const { data: me } = await client.from(RUN).select('id,title').eq('id', runId).maybeSingle();
+    const { data: others } = await client
+      .from(RUN).select('id,title,status').neq('id', runId).order('started_at', { ascending: false });
+
+    if (!others || !others.length) {
+      setStatus('目前没有别的实验可以关联 —— 先开始第二个实验吧。', 'error');
+      return;
+    }
+
+    const myOpts = (mySteps || []).map((s, i) =>
+      '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('');
+    const otherOpts = others.map((o) =>
+      '<option value="' + o.id + '">' + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
+
+    openModal('关联其它实验', [
+      '<p class="hint small">两边都选「从哪一步开始合并」，系统会检查这一步之后的步骤是否一致。</p>',
+
+      '<div class="link-pick">',
+      '  <label>本实验：' + esc((me && me.title) || '') + '</label>',
+      '  <select id="lk-mine">' + myOpts + '</select>',
+      '  <div class="lk-preview" id="lk-mine-view"></div>',
+      '</div>',
+
+      '<div class="link-pick">',
+      '  <label>关联到哪个实验</label>',
+      '  <select id="lk-other">' + otherOpts + '</select>',
+      '  <label>对方的哪一步</label>',
+      '  <select id="lk-other-step"></select>',
+      '  <div class="lk-preview" id="lk-other-view"></div>',
+      '</div>',
+
+      '<label>关联说明',
+      '  <textarea id="lk-note" rows="3" placeholder="如：混合 v5.1 和 v5 的热解后材料，然后进行酸洗"></textarea>',
+      '</label>',
+      '<div id="lk-check" class="lk-check"></div>',
+    ].join(''), [
+      { label: '取消', onClick: closeModal },
+      { label: '确认关联', primary: true, onClick: doLink },
+    ]);
+
+    let otherSteps = [];
+    const myIdx = () => Number($('lk-mine').value);
+    const otherId = () => Number($('lk-other').value);
+    const otherIdx = () => Number($('lk-other-step').value);
+
+    const showPreview = (el, s) => {
+      if (!el) return;
+      el.innerHTML = s
+        ? '<b>' + esc(s.title) + '</b>'
+          + (s.instruction ? '<span>' + esc(String(s.instruction).slice(0, 160)) + '</span>' : '')
+          + (s.duration_hint ? '<em>时长提示：' + esc(s.duration_hint) + '</em>' : '')
+        : '';
+    };
+
+    const runCheck = () => {
+      const a = mySteps || [];
+      const ai = myIdx();
+      const oi = otherIdx();
+      const r = compareTail(a, otherSteps, ai, oi);
+      const box = $('lk-check');
+      const okBtn = document.querySelector('.modal-card .actions .primary');
+
+      showPreview($('lk-mine-view'), a[ai]);
+      showPreview($('lk-other-view'), otherSteps[oi]);
+
+      if (r.same) {
+        box.className = 'lk-check ok';
+        box.innerHTML = '✓ 从这一步起后续 ' + r.nx + ' 个步骤完全一致，可以合并。';
+        if (okBtn) okBtn.disabled = false;
+      } else {
+        box.className = 'lk-check bad';
+        const mineTxt = r.x ? '第 ' + (ai + r.at + 1) + ' 步「' + esc(r.x.title) + '」' : '（本实验已无后续步骤）';
+        const otherTxt = r.y ? '第 ' + (oi + r.at + 1) + ' 步「' + esc(r.y.title) + '」' : '（对方已无后续步骤）';
+        box.innerHTML = '<b>⚠ 后续步骤不一致，不能关联合并</b>'
+          + '<span>从所选步骤往后第 ' + (r.at + 1) + ' 步开始不同：</span>'
+          + '<span>· 本实验：' + mineTxt + '</span>'
+          + '<span>· 对方：' + otherTxt + '</span>'
+          + '<span>剩余步骤数 ' + r.nx + ' / ' + r.ny
+          + (r.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点。</span>';
+        if (okBtn) okBtn.disabled = true;
+      }
+      return r;
+    };
+
+    const loadOtherSteps = async () => {
+      const { data: st } = await client.from(RUN_STEP).select('*').eq('run_id', otherId()).order('position');
+      otherSteps = st || [];
+      const sel = $('lk-other-step');
+      sel.innerHTML = otherSteps.length
+        ? otherSteps.map((s, i) => '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('')
+        : '<option value="0">（对方没有步骤）</option>';
+      runCheck();
+    };
+
+    $('lk-mine').addEventListener('change', runCheck);
+    $('lk-other').addEventListener('change', loadOtherSteps);
+    $('lk-other-step').addEventListener('change', runCheck);
+    await loadOtherSteps();
+
+    async function doLink() {
+      const r = runCheck();
+      if (!r.same) return;                       // 不一致就不写库
+      const st = (mySteps || [])[myIdx()];
+      if (!st) return;
+      const note = ($('lk-note').value || '').trim();
+
+      const { error } = await client.from(RUN_STEP)
+        .update({ link_run_id: otherId(), link_note: note || null })
+        .eq('id', st.id);
+      if (error) {
+        console.error('[SciHub] 关联写入失败：', error);
+        setStatus('关联失败：请确认已给 run_steps 加上 link_run_id / link_note 两列。', 'error');
+        return;
+      }
+      closeModal();
+      setStatus('已关联，主页会把这两条实验合并成一条。', 'ok');
+      route('home');
+    }
+  }
+
+  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));

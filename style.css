@@ -877,3 +877,26 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   background: rgba(16, 185, 129, .14); color: var(--brand);
   font-size: 11px; font-weight: 500; vertical-align: middle; white-space: nowrap;
 }
+
+/* ── 关联弹窗：两边各选一步 + 一致性校验 ───────────── */
+.link-pick { margin-bottom: 10px; }
+.link-pick label { display: block; margin-bottom: 4px; }
+.lk-preview {
+  margin-top: 6px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(127, 127, 127, .08); border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.6;
+}
+.lk-preview b { display: block; }
+.lk-preview span { display: block; color: var(--muted); margin-top: 2px; word-break: break-word; }
+.lk-preview em { display: block; font-style: normal; color: var(--brand); margin-top: 2px; }
+
+.lk-check { margin-top: 10px; padding: 9px 11px; border-radius: 8px; font-size: 12px; line-height: 1.7; }
+.lk-check.ok { background: rgba(16, 185, 129, .10); border: 1px solid rgba(16, 185, 129, .35); color: var(--brand); }
+.lk-check.ok span { color: var(--brand); }
+.lk-check.bad { background: rgba(220, 38, 38, .08); border: 1px solid rgba(220, 38, 38, .35); color: var(--danger); }
+.lk-check b { display: block; margin-bottom: 3px; }
+.lk-check span { display: block; }
+.lk-check.bad span { color: var(--muted); }
+
+/* 校验不通过时把「确认关联」置灰，避免误点 */
+.modal-card .actions .primary:disabled { opacity: .45; cursor: not-allowed; }

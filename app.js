@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.41.0';
+const APP_VERSION = '0.42.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -752,9 +752,15 @@ window.addEventListener('scihub:ready', () => {
   if (state.user && home && !home.hidden) renderHome();
 });
 
-/* 进行中实验卡片上的「导出 / 重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
+/* 进行中实验卡片上的「关联 / 导出 / 重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
 document.addEventListener('click', (e) => {
   if (!window.Run) return;
+
+  const lnk = e.target.closest('[data-run-link]');
+  if (lnk) {
+    if (window.Run.link) window.Run.link(Number(lnk.dataset.runLink));
+    return;
+  }
 
   const exp = e.target.closest('[data-run-export]');
   if (exp) { window.Run.export(Number(exp.dataset.runExport)); return; }
@@ -780,6 +786,7 @@ async function renderHome() {
   const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
   const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
   const ICON_DOC = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>';
+  const ICON_LINK = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 5"/><path d="M14 11a5 5 0 0 0-7 0L4.5 13.5a5 5 0 0 0 7 7L13 19"/></svg>';
 
   let runs = [];
   try {
@@ -1112,6 +1119,8 @@ async function renderHome() {
             '  </div>',
             '  <div class="hc-actions">',
             '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
+            // 关联入口就在卡片上：选本实验的哪一步 + 对方实验的哪一步，再校验后续步骤是否一致
+            '    <button type="button" class="icon-btn" data-run-link="' + r.id + '" title="关联其它实验" aria-label="关联其它实验">' + ICON_LINK + '</button>',
             '    <button type="button" class="icon-btn" data-run-export="' + r.id + '" title="导出为 Word 文档" aria-label="导出">' + ICON_DOC + '</button>',
             '    <button type="button" class="icon-btn" data-run-rename="' + r.id + '" data-name="' + esc(r.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
             '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>',
