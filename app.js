@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.55.0';
+const APP_VERSION = '0.56.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -844,11 +844,14 @@ async function renderHome() {
 
   // 悬停要能看到具体步骤，所以把涉及到的实验的步骤一并取回来
   // （link_run_id / link_note 用于把「关联实验」合并成一条显示）
+  // values / images / note 也一起取：待办要靠它们判断「这一步到底有没有在做」。
+  // 只按 current_step（上次停在的位置）取步骤会取错 —— 见下面待办那段。
   const stepMap = {};
   if (monthRuns.length) {
     const { data: rs } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint,link_run_id,link_note')
+      .select('run_id,position,title,status,duration_hint,link_run_id,link_note,'
+        + 'values,images,note,started_at,updated_at')
       .in('run_id', monthRuns.map((r) => r.id))
       .order('position');
     (rs || []).forEach((x) => {
@@ -942,12 +945,24 @@ async function renderHome() {
     return 0;
   };
 
+  // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。
+  // 待办靠它算「实际进度」—— 只看 current_step（上次停在的位置）会取错步骤。
+  const stepTouched = (x) => {
+    if (!x) return false;
+    if (x.status === 'done') return true;
+    if ((x.images || []).length) return true;
+    if (String(x.note || '').trim()) return true;
+    const vals = x.values || {};
+    return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
+  };
+
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
     const { data: more } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint,link_run_id,link_note')
+      .select('run_id,position,title,status,duration_hint,link_run_id,link_note,'
+        + 'values,images,note,started_at,updated_at')
       .in('run_id', needSteps)
       .order('position');
     (more || []).forEach((x) => {
@@ -993,21 +1008,53 @@ async function renderHome() {
     // 一组只出一条待办，用组里第一个实验代表整组
     const r = g.runs[0];
     const steps = stepMap[r.id] || [];
-    const curPos = r.current_step || 0;
+    // 实际进度：最后一个「填过数据 / 传过照片 / 写过备注 / 标完成」的步骤。
+    // 不能只看 current_step（那只是上次停在的位置，平时不动）。
+    let reached = -1;
+    steps.forEach((x, k) => { if (stepTouched(x)) reached = k; });
+    const curPos = Math.max(Number(r.current_step) || 0, reached);
 
     const pendingTimed = steps.filter((x) => x.position >= curPos
       && x.status !== 'done'
       && parseDurationHours(x.duration_hint) > 0);
 
-    const cur = steps.find((x) => x.position === curPos) || pendingTimed[0] || steps[0];
+    const doing = reached >= 0 ? steps[reached] : null;     // 正在做的那一步
+    // 正在做的那步本身写了时长 → 报它；否则报后面第一个「有时长的等待步」；
+    // 都没有就退回到当前步 / 第一步，界面会显示「未设时长提示」
+    const cur = (doing && parseDurationHours(doing.duration_hint) > 0 ? doing : null)
+      || pendingTimed[0]
+      || doing
+      || steps.find((x) => x.position === curPos)
+      || steps[0];
     const hours = parseDurationHours(cur && cur.duration_hint);
+
+    // 结束时间 =「这一步开始的时刻」+ 它的时长。时间锚点按可靠性依次退化：
+    //   本步 started_at（点「完成并下一步」开始这步时会写）
+    //   → 本步最近一次改动时刻（正在做这一步，靠 updated_at 估价）
+    //   → 上一个有进展步骤的开始 / 改动时刻（「等待」是从那之后开始的）
+    //   → 实验开始时间（老数据兜底）
+    let anchor = null;
+    if (cur && cur.started_at) {
+      anchor = cur.started_at;
+    } else if (cur && stepTouched(cur) && cur.updated_at) {
+      anchor = cur.updated_at;
+    } else if (cur) {
+      const ci = steps.indexOf(cur);
+      for (let k = ci - 1; k >= 0; k--) {
+        if (steps[k].started_at) { anchor = steps[k].started_at; break; }
+        if (stepTouched(steps[k]) && steps[k].updated_at) { anchor = steps[k].updated_at; break; }
+      }
+    }
+
     todos.push({
       kind: 'run',
       run: r,
       group: g,
       step: cur,
       hours: hours,
-      due: hours > 0 ? new Date(new Date(r.started_at).getTime() + hours * 3600 * 1000) : null,
+      due: hours > 0
+        ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
+        : null,
     });
   });
 
