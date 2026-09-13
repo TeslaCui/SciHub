@@ -955,12 +955,18 @@
       const doneMsg = wasEdit ? '方案已更新。' : '方案已保存。';
       setStatus(doneMsg, 'ok');
 
-      // 方案改完后，把最新的步骤结构同步给正在做这个方案的实验（他们已填的数据会保留）
+      // 方案改完后，把最新结构同步给正在做这个方案的实验：
+      // 改过的更新、新增的补上、方案里删掉的也从实验里删掉
       try {
-        const n = await syncPlanToRunningRuns(planId);
-        if (n) setStatus(doneMsg + '已同步到 ' + n + ' 个进行中的步骤。', 'ok');
+        const r = await syncPlanToRunningRuns(planId);
+        const bits = [];
+        if (r.updated) bits.push('更新 ' + r.updated + ' 步');
+        if (r.added) bits.push('补上 ' + r.added + ' 步');
+        if (r.removed) bits.push('删除 ' + r.removed + ' 步');
+        if (bits.length) setStatus(doneMsg + '进行中的实验已同步：' + bits.join('、') + '。', 'ok');
       } catch (err) {
         console.warn('[SciHub] 同步到进行中的实验失败：', err);
+        setStatus(doneMsg + '但同步到进行中的实验失败，请稍后重试。', 'warn');
       }
 
       route('plans');
@@ -972,49 +978,107 @@
     }
   }
 
-  /* 方案改完后，把最新的步骤结构同步到「正在使用这个方案」的实验。
-     只更新结构（标题 / 说明 / 字段定义 / 注意事项 / 热解程序），
-     已填的 values、备注、照片全部保留 —— 正在做实验的人不会丢数据。
-     返回被更新的步骤数。 */
+  /* 方案改完后，把最新的步骤结构同步到「正在使用这个方案」的实验 —— 真同步：
+       · 方案里还存在的步骤：更新标题 / 说明 / 字段定义 / 注意事项 / 热解程序
+       · 方案里新增的步骤：补进实验
+       · 方案里已删的步骤：从实验里也删掉（会连带删掉那一步已填的数据，所以先弹窗确认）
+     已填的 values、备注、照片在「没被删掉」的步骤上原样保留。
+     返回 { updated, added, removed }。 */
   async function syncPlanToRunningRuns(planId) {
-    const { data: runs } = await client.from(RUN).select('id').eq('plan_id', planId).eq('status', 'running');
-    if (!runs || !runs.length) return 0;
+    const none = { updated: 0, added: 0, removed: 0 };
+    const { data: runs } = await client
+      .from(RUN).select('id,title,current_step').eq('plan_id', planId).eq('status', 'running');
+    if (!runs || !runs.length) return none;
 
     const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
-    if (!planSteps || !planSteps.length) return 0;
+    if (!planSteps || !planSteps.length) return none;   // 方案一步不剩时不动实验，避免把实验清空
 
     const { data: runSteps } = await client.from(RUN_STEP).select('*').in('run_id', runs.map((r) => r.id));
-    let changed = 0;
+    const rows = runSteps || [];
 
-    for (const rs of (runSteps || [])) {
-      const ps = planSteps.find((x) => x.position === rs.position);
-      // 方案里已经没有这一步（步骤数变少了）→ 保持实验原样，不动别人正在进行的数据
-      if (!ps) continue;
+    // ── 先处理「删」：方案里已经没有的 position，实验里也去掉 ──
+    const planPositions = new Set(planSteps.map((p) => p.position));
+    const doomed = rows.filter((rs) => !planPositions.has(rs.position));
 
-      const oldFields = rs.fields || [];
-      const newFields = ps.fields || [];
-      // 值是以字段名为键存的；字段改名/新增时用归一化匹配搬家，搬不走的旧值原样保留
-      const values = migrateStepValues(oldFields, newFields, rs.values, null);
+    if (doomed.length) {
+      const withData = doomed.filter((rs) => stepHasProgress(rs));
+      const list = doomed.map((rs) => '· 第 ' + (rs.position + 1) + ' 步：' + (rs.title || '')).join('\n');
+      const warn = withData.length
+        ? '\n\n⚠ 其中 ' + withData.length + ' 个步骤已经填过数据 / 传过照片，会一并丢失：\n'
+          + withData.map((rs) => '· 第 ' + (rs.position + 1) + ' 步：' + (rs.title || '')).join('\n')
+        : '';
+      const ok = window.confirm(
+        '方案里已经删掉了下面 ' + doomed.length + ' 个步骤，要从 ' + runs.length + ' 个进行中的实验里也删掉吗？\n\n'
+        + list + warn
+      );
+      if (!ok) return none;
 
-      const next = {
-        title: ps.title || rs.title,
-        instruction: ps.instruction || '',
-        notice: ps.notice || '',
-        pyro_seq: ps.pyro_seq || '',
-        fields: newFields,
-        values: values,
-      };
-
-      const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values]);
-      const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
-      if (before === after) continue;    // 没有实质变化就不写库
-
-      const { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
+      const { error } = await client.from(RUN_STEP).delete().in('id', doomed.map((rs) => rs.id));
       if (error) throw error;
-      changed += 1;
     }
 
-    return changed;
+    // ── 再处理「改」和「增」 ──
+    let updated = 0;
+    let added = 0;
+
+    for (const run of runs) {
+      const byPos = {};
+      rows.forEach((rs) => { if (rs.run_id === run.id && planPositions.has(rs.position)) byPos[rs.position] = rs; });
+
+      for (const ps of planSteps) {
+        const rs = byPos[ps.position];
+        const newFields = ps.fields || [];
+
+        // 方案新增的步骤 → 补进这次实验
+        if (!rs) {
+          const { error } = await client.from(RUN_STEP).insert({
+            user_id: state.user.id,
+            run_id: run.id,
+            position: ps.position,
+            title: ps.title,
+            instruction: ps.instruction || '',
+            notice: ps.notice || '',
+            pyro_seq: ps.pyro_seq || '',
+            fields: newFields,
+            values: {},
+            images: [],
+            status: 'pending',
+          });
+          if (error) throw error;
+          added += 1;
+          continue;
+        }
+
+        // 已存在的步骤：值以字段名为键，字段改名/新增时按含义搬家，搬不走的旧值原样保留
+        const oldFields = rs.fields || [];
+        const values = migrateStepValues(oldFields, newFields, rs.values, null);
+        const next = {
+          title: ps.title || rs.title,
+          instruction: ps.instruction || '',
+          notice: ps.notice || '',
+          pyro_seq: ps.pyro_seq || '',
+          fields: newFields,
+          values: values,
+        };
+
+        const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
+        if (before === after) continue;    // 没有实质变化就不写库
+
+        const { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
+        if (error) throw error;
+        updated += 1;
+      }
+
+      // 当前进行到的那一步可能正好被删掉了 → 指针挪回最后一步，避免指向不存在的步骤
+      const last = planSteps.length - 1;
+      const want = Math.min(Math.max(0, Number(run.current_step) || 0), last);
+      if (want !== run.current_step) {
+        await client.from(RUN).update({ current_step: want }).eq('id', run.id);
+      }
+    }
+
+    return { updated: updated, added: added, removed: doomed.length };
   }
 
   /* 重命名（方案列表与详情页共用） */
