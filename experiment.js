@@ -1667,8 +1667,9 @@
 
   /* ── 导出本次实验的数据（Word 文档）───────────────────── */
 
-  /* 生成 .docx：docx 本质就是个 zip，里面放几个固定名字的 XML。
-     这里只用最小结构：Content_Types + rels + word/document.xml。 */
+  /* 生成 .docx：docx 本质就是个 zip，里面放几个固定名字的 XML + 图片。
+     paragraphs 里可以混入 { image: { data: ArrayBuffer, mime, w, h } } 这样的段落 ——
+     图片会写进 word/media/ 并在 word/_rels/document.xml.rels 里登记关系。 */
   async function buildDocx(paragraphs) {
     const JSZip = await loadJSZip();
     const zip = new JSZip();
@@ -1677,21 +1678,45 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
-    zip.file('[Content_Types].xml',
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-      + '<Default Extension="xml" ContentType="application/xml"/>'
-      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-      + '</Types>');
+    const media = [];   // 待写入 word/media 的文件
+    const rels = [];    // 图片关系
+    let picId = 1;
 
-    zip.folder('_rels').file('.rels',
-      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-      + '</Relationships>');
+    // 正文可用宽度约 6.7 英寸；换算成 EMU（96dpi 下 1px = 9525 EMU）
+    const MAX_W = 480 * 9525;
 
     const body = paragraphs.map((item) => {
+      if (item && item.image) {
+        const img = item.image;
+        const idx = media.length + 1;
+        const ext = /png/i.test(img.mime || '') ? 'png' : 'jpeg';
+        const name = 'image' + idx + '.' + ext;
+        media.push({ name: name, data: img.data, mime: img.mime || 'image/jpeg' });
+
+        const rid = 'rIdImg' + idx;
+        rels.push({ id: rid, target: 'media/' + name });
+
+        // 等比缩放到最大宽度
+        let cx = (img.w || 480) * 9525;
+        let cy = (img.h || 320) * 9525;
+        if (cx > MAX_W) { cy = Math.round(cy * (MAX_W / cx)); cx = MAX_W; }
+
+        const id = picId++;
+        return '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>'
+          + '<wp:inline distT="0" distB="0" distL="0" distR="0">'
+          + '<wp:extent cx="' + cx + '" cy="' + cy + '"/>'
+          + '<wp:docPr id="' + id + '" name="Picture ' + id + '"/>'
+          + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+          + '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+          + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+          + '<pic:nvPicPr><pic:cNvPr id="' + id + '" name="' + name + '"/><pic:cNvPicPr/></pic:nvPicPr>'
+          + '<pic:blipFill><a:blip r:embed="' + rid + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+          + '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm>'
+          + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+          + '</pic:pic></a:graphicData></a:graphic>'
+          + '</wp:inline></w:drawing></w:r></w:p>';
+      }
+
       const text = typeof item === 'string' ? item : item.text;
       const o = typeof item === 'string' ? {} : item;
 
@@ -1706,9 +1731,44 @@
         + '<w:t xml:space="preserve">' + xml(text) + '</w:t></w:r></w:p>';
     }).join('');
 
+    // Content_Types 里必须声明图片扩展名，否则 Word 会报「文件已损坏」
+    const extTypes = {};
+    media.forEach((m) => { extTypes[m.name.split('.').pop()] = m.mime; });
+
+    zip.file('[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+      + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+      + '<Default Extension="xml" ContentType="application/xml"/>'
+      + Object.keys(extTypes).map((e) => '<Default Extension="' + e + '" ContentType="' + extTypes[e] + '"/>').join('')
+      + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+      + '</Types>');
+
+    zip.folder('_rels').file('.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+      + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+      + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+      + '</Relationships>');
+
+    if (rels.length) {
+      zip.folder('word').folder('_rels').file('document.xml.rels',
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + rels.map((r) => '<Relationship Id="' + r.id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="' + r.target + '"/>').join('')
+        + '</Relationships>');
+    }
+
+    if (media.length) {
+      const mf = zip.folder('word').folder('media');
+      media.forEach((m) => mf.file(m.name, m.data));
+    }
+
     zip.folder('word').file('document.xml',
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-      + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+      + '<w:document'
+      + ' xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+      + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+      + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
       + '<w:body>' + body
       + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
       + '<w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>'
@@ -1731,47 +1791,115 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 30000);
   }
 
-  /* 把本次实验的步骤与填写数据导成一个 Word 文档 */
-  async function exportRunData() {
-    if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
-
-    const title = run.data.title || '实验';
-    const paras = [
-      { text: title, bold: true, size: 16, align: 'center' },
-      { text: '开始于 ' + fmt(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中'), size: 9, align: 'center' },
-      '',
-    ];
-
-    run.steps.forEach((s) => {
-      paras.push({ text: '第 ' + (s.position + 1) + ' 步：' + (s.title || ''), bold: true, size: 12 });
-      if (s.pyro_seq) paras.push({ text: '热解程序：' + s.pyro_seq, size: 10 });
-      if (s.duration_hint) paras.push({ text: '时长提示：' + s.duration_hint, size: 10 });
-      // 注意事项用橙色标出，和界面里的警示条呼应
-      noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '⚠ ' + line, size: 10, color: 'C05621' }));
-      if (s.instruction) paras.push({ text: s.instruction, size: 10 });
-
-      const fields = s.fields || [];
-      const vals = s.values || {};
-      if (fields.length) {
-        paras.push({ text: '填写数据：', size: 10, bold: true });
-        fields.forEach((f) => {
-          const v = vals[f.label];
-          const shown = (v == null || v === '') ? '（未填）' : v;
-          paras.push({ text: '　' + f.label + '：' + shown + (f.unit ? ' ' + f.unit : ''), size: 10 });
-        });
-      }
-      if (s.note) paras.push({ text: '备注：' + s.note, size: 10 });
-      const imgs = (s.images || []).length;
-      if (imgs) paras.push({ text: '照片 / 视频：' + imgs + ' 个', size: 10 });
-      paras.push('');
-    });
-
+  /* 取图片的二进制与原始尺寸，供 docx 嵌入 */
+  async function fetchImageForDocx(path) {
+    const url = run.urls[path];
+    if (!url) return null;
     try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const buf = await res.arrayBuffer();
+
+      let w = 480;
+      let h = 320;
+      try {
+        const bmp = await createImageBitmap(new Blob([buf]));
+        w = bmp.width;
+        h = bmp.height;
+        if (bmp.close) bmp.close();
+      } catch (_e) { /* 取不到尺寸就用默认值，只影响显示大小 */ }
+
+      return { data: buf, mime: res.headers.get('content-type') || 'image/jpeg', w: w, h: h };
+    } catch (err) {
+      console.warn('[SciHub] 图片读取失败，导出时跳过：', path, err);
+      return null;
+    }
+  }
+
+  /* 把一次实验的步骤、填写数据与照片导成 Word 文档。
+     不传 runId 就导当前打开的那次；传了则按 id 读进来（主页的导出按钮用）。 */
+  async function exportRunData(runId) {
+    try {
+      if (runId && (run.id !== runId || !run.data)) {
+        setStatus('正在读取实验数据…');
+        const { data: r } = await client.from(RUN).select('*').eq('id', runId).maybeSingle();
+        const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
+        if (!r) { setStatus('找不到这次实验。', 'error'); return; }
+
+        run.id = runId;
+        run.data = r;
+        run.steps = steps || [];
+        run.urls = {};
+        run.urlErrors = {};
+
+        const paths = [];
+        run.steps.forEach((s) => (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); }));
+        if (paths.length) {
+          const { data: signedList } = await client.storage.from(BUCKET).createSignedUrls(paths, 60 * 60 * 24);
+          (signedList || []).forEach((it) => { if (it && it.path && it.signedUrl) run.urls[it.path] = it.signedUrl; });
+        }
+      }
+
+      if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
+
       setStatus('正在生成 Word 文档…');
+      const title = run.data.title || '实验';
+      const paras = [
+        { text: title, bold: true, size: 16, align: 'center' },
+        {
+          text: '开始于 ' + fmt(run.data.started_at)
+            + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中')
+            + ' · 共 ' + run.steps.length + ' 步',
+          size: 9, align: 'center',
+        },
+        '',
+      ];
+
+      let imgTotal = 0;
+
+      for (const s of run.steps) {
+        paras.push({ text: '第 ' + (s.position + 1) + ' 步　' + (s.title || ''), bold: true, size: 13, color: '0F766E' });
+        if (s.pyro_seq) paras.push({ text: '热解程序：' + s.pyro_seq, size: 10 });
+        if (s.duration_hint) paras.push({ text: '时长提示：' + s.duration_hint, size: 10 });
+        // 注意事项用橙色标出，和界面里的警示条呼应
+        noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '⚠ ' + line, size: 10, color: 'C05621' }));
+        if (s.instruction) paras.push({ text: s.instruction, size: 10 });
+
+        const fields = s.fields || [];
+        const vals = s.values || {};
+        if (fields.length) {
+          paras.push({ text: '填写数据', bold: true, size: 10 });
+          fields.forEach((f) => {
+            const v = vals[f.label];
+            const shown = (v == null || v === '') ? '（未填）' : v;
+            paras.push({ text: '　· ' + f.label + '：' + shown + (f.unit ? ' ' + f.unit : ''), size: 10 });
+          });
+        }
+        if (s.note) paras.push({ text: '备注：' + s.note, size: 10 });
+
+        // 照片按当前顺序嵌进文档（拖动排序后，这里也就是拖后的顺序）
+        const imgs = s.images || [];
+        let n = 0;
+        for (const img of imgs) {
+          if (isVideoFile(img)) continue;              // 视频无法嵌入文档
+          const bin = await fetchImageForDocx(img.path);
+          if (!bin) continue;
+          n += 1;
+          imgTotal += 1;
+          paras.push({ text: '照片 ' + n + (img.caption ? '：' + img.caption : ''), size: 9, color: '666666' });
+          paras.push({ image: bin });
+        }
+        const skipped = imgs.filter(isVideoFile).length;
+        if (skipped) paras.push({ text: '（另有 ' + skipped + ' 个视频未嵌入文档）', size: 9, color: '666666' });
+
+        paras.push('');
+      }
+
       const blob = await buildDocx(paras);
       const safe = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
       downloadBlob(blob, safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
-      setStatus('已导出 ' + run.steps.length + ' 个步骤到 Word 文档。', 'ok');
+      setStatus('已导出：' + run.steps.length + ' 个步骤'
+        + (imgTotal ? '、' + imgTotal + ' 张照片' : '') + '。', 'ok');
     } catch (err) {
       console.error('[SciHub] 导出失败：', err);
       setStatus('导出失败：' + errorText(err), 'error');
@@ -2154,7 +2282,7 @@
     }
   }
 
-  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun };
+  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));
