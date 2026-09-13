@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.68.0';
+const APP_VERSION = '0.69.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -989,7 +989,16 @@ async function renderHome() {
   // AI 不可用（函数没更新/没部署、断网、没额度）时一律回退到 current_step，界面不会空着。
   const aiPos = {};
   const aiWhy = {};                 // runId -> AI 给出的判断依据（显示在界面上，方便核对）
-  const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : (Number(r.current_step) || 0));
+  // 本地兜底口径：以「上次停在这里」为准；如果更靠后的步骤确实填过数据，就取那个。
+  // 注意**不看 done** —— 早先点到过后面、又退回前面继续做时，那些步骤会残留「已完成」标记
+  // （v5 的第 8/9 步圆圈是绿的、但其实没做，就是这么来的），按它算会把进度推错。
+  const localProgressPos = (r) => {
+    const steps = stepMap[r.id] || [];
+    let lastFilled = -1;
+    steps.forEach((x, k) => { if (filledCount(x) > 0) lastFilled = k; });
+    return Math.max(Number(r.current_step) || 0, lastFilled);
+  };
+  const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : localProgressPos(r));
 
   const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
     const v = (x.values || {})[k];
@@ -1090,7 +1099,7 @@ async function renderHome() {
         steps: steps.map((x) => ({
           position: x.position,
           title: x.title || '',
-          done: x.status === 'done',
+          // 不发送 done：早先点到过后面又退回时它会残留，AI 会据此把进度判到根本没做的步骤
           filled: filledCount(x),
           planDuration: planDurAt(head, x.position),
           stepStartedAt: x.started_at || '',
@@ -1101,7 +1110,7 @@ async function renderHome() {
     if (!runs.length) return;
 
     const sig = runs.map((x) => x.id + ':' + x.currentStep + ':' + x.steps.map((s) =>
-      s.position + (s.done ? 'd' : '') + s.filled + '|' + s.planDuration).join(',')).join('~');
+      s.position + s.filled + '|' + s.planDuration).join(',')).join('~');
     const cacheKey = 'scihub.todos.' + runs.map((x) => x.id).join('-');
 
     try {
@@ -1228,21 +1237,35 @@ async function renderHome() {
     // AI 给了时长就用它的（它在「过夜」「隔天」这类语义上更准）
     if (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) hours = aiHours[r.id];
 
-    // 结束时间 =「这一步开始的时刻」+ 它的时长。时间锚点按可靠性依次退化：
-    //   本步 started_at（点「完成并下一步」开始这步时会写）
-    //   → 本步最近一次改动时刻（正在做这一步，靠 updated_at 估价）
-    //   → 上一个有进展步骤的开始 / 改动时刻（「等待」是从那之后开始的）
-    //   → 实验开始时间（老数据兜底）
-    let anchor = null;
-    if (cur && cur.started_at) {
-      anchor = cur.started_at;
-    } else if (cur && stepTouched(cur) && cur.updated_at) {
-      anchor = cur.updated_at;
-    } else if (cur) {
+    // 结束时间 =「这一步开始的时刻」+ 时长。开始时刻按可靠性取：
+    //   ① 这一步里填过的「时间类字段」（如「反应开始时间」）—— 你亲手记的最准
+    //   ② 这一步的 started_at 与最近一次改动时刻里较晚的那个
+    //   ③ 往前找最近有痕迹的一步（「等待」是从那之后开始的）
+    //   ④ 实验开始时间（老数据兜底）
+    const anchorOf = (st) => {
+      if (!st) return null;
+      const vals = st.values || {};
+      let fromField = null;
+      Object.keys(vals).forEach((k) => {
+        if (!/时间|时刻|开始|日期/.test(k)) return;
+        const v = String(vals[k] == null ? '' : vals[k]).trim();
+        if (!v) return;
+        const d = new Date(v.replace(/-/g, '/'));
+        if (!isNaN(d.getTime()) && (!fromField || d > fromField)) fromField = d;
+      });
+      if (fromField) return fromField.toISOString();
+      const a = st.started_at ? new Date(st.started_at) : null;
+      const b = st.updated_at ? new Date(st.updated_at) : null;
+      const later = (a && b) ? (a > b ? a : b) : (a || b);
+      return later ? later.toISOString() : null;
+    };
+
+    let anchor = anchorOf(cur);
+    if (!anchor) {
       const ci = steps.indexOf(cur);
       for (let k = ci - 1; k >= 0; k--) {
-        if (steps[k].started_at) { anchor = steps[k].started_at; break; }
-        if (stepTouched(steps[k]) && steps[k].updated_at) { anchor = steps[k].updated_at; break; }
+        anchor = anchorOf(steps[k]);
+        if (anchor) break;
       }
     }
 
