@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.59.0';
+const APP_VERSION = '0.60.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1051,18 +1051,24 @@ async function renderHome() {
     };
     const hoursOf = (x) => parseDurationHours(durOf(x));
 
-    const pendingTimed = steps.filter((x) => x.position >= curPos
-      && x.status !== 'done'
-      && hoursOf(x) > 0);
+    // 指向哪一步：
+    //   ① 正在做的那一步本身写了时长（如「反应 24 h」）→ 报它，并按「这步开始的时刻」
+    //      算出结束时间（例：10:41 开始反应 24 h → 明天 10:41）；
+    //   ② 否则报「下一步该做的动作」（如热解完成后还没做的「酸洗」）—— 如果那一步
+    //      本身没写时间限定，就只提示等待，不硬算时间。
+    const doing = steps.find((x) => x.position === curPos) || null;
+    const nextStep = steps.find((x) => x.position > curPos && x.status !== 'done') || null;
 
-    const doing = reached >= 0 ? steps[reached] : null;     // 正在做的那一步
-    // 正在做的那步本身写了时长 → 报它；否则报后面第一个「有时长的等待步」；
-    // 都没有就退回到当前步 / 第一步，界面会显示「未设时长提示」
-    const cur = (doing && hoursOf(doing) > 0 ? doing : null)
-      || pendingTimed[0]
-      || doing
-      || steps.find((x) => x.position === curPos)
-      || steps[0];
+    let cur = null;
+    let isNext = false;
+    if (doing && doing.status !== 'done' && hoursOf(doing) > 0) {
+      cur = doing;
+    } else if (nextStep) {
+      cur = nextStep;
+      isNext = true;
+    } else {
+      cur = doing || steps[0];
+    }
     const hours = hoursOf(cur);
 
     // 结束时间 =「这一步开始的时刻」+ 它的时长。时间锚点按可靠性依次退化：
@@ -1090,6 +1096,7 @@ async function renderHome() {
       step: cur,
       hours: hours,
       dur: durOf(cur),
+      isNext: isNext,
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
         : null,
@@ -1149,7 +1156,9 @@ async function renderHome() {
 
           let whenTxt;
           if (!hasDue) {
-            whenTxt = isRun ? '进行中 · 这一步未设时长提示' : '随时';
+            whenTxt = isRun
+              ? (t.isNext ? '等待下一步 · 没有时间限制' : '进行中 · 还没有设时长提示')
+              : '随时';
           } else {
             const sameDay = t.due.toDateString() === today.toDateString();
             whenTxt = (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' · '
