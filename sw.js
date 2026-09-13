@@ -9,10 +9,10 @@
 const CACHE = 'scihub-research-v0.33.0';
 const ASSETS = [
   './index.html',
-  './style.css?v=0.32.0',
-  './app.js?v=0.32.0',
-  './experiment.js?v=0.32.0',
-  './manifest.json?v=0.32.0',
+  './style.css?v=0.33.0',
+  './app.js?v=0.33.0',
+  './experiment.js?v=0.33.0',
+  './manifest.json?v=0.33.0',
 ];
 
 self.addEventListener('install', (event) => {
