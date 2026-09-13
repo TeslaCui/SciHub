@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.62.0';
+const APP_VERSION = '0.63.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -982,13 +982,17 @@ async function renderHome() {
 
   // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。
   // 待办靠它算「实际进度」—— 只看 current_step（上次停在的位置）会取错步骤。
+  // 只认两件事：① 点过「完成并下一步」（status=done）；② 真正填了数据（values 里有非空值）。
+  // 不再把「只有照片」「只有备注」算作做过 —— 那会把还没开始的步骤当成在做，
+  // 待办和「进行中的实验」就会都跳到那个还没做的步骤上（v5 显示到第 9 步就是这个原因）。
   const stepTouched = (x) => {
     if (!x) return false;
     if (x.status === 'done') return true;
-    if ((x.images || []).length) return true;
-    if (String(x.note || '').trim()) return true;
     const vals = x.values || {};
-    return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
+    return Object.keys(vals).some((k) => {
+      const v = vals[k];
+      return String(v == null ? '' : v).trim() !== '';
+    });
   };
 
   // 一次实验「进行到第几步」= 「上次停在的位置」与「实际填过数据的最后一步」里更靠后的那个。
