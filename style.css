@@ -424,15 +424,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 #fields .data-field { margin-bottom: 14px; min-width: 0; }
 #fields .data-field:last-child { grid-column: 1 / -1; }
 
-/* ── 编辑方案里的子区块（注意事项 / 数据字段）──────────── */
+/* ── 编辑方案里的板块（数据字段 / 注意事项 / 热解程序）── */
 .sub-block { margin-top: 10px; }
 .sub-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   margin-bottom: 6px; color: var(--muted); font-size: 13px;
 }
+.sub-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ghost.tiny { font-size: 12px; padding: 4px 10px; }
 /* 注意事项的一行：输入框 + 删除按钮 */
 .line-row { display: grid; grid-template-columns: 1fr 34px; gap: 8px; margin-bottom: 6px; }
+
+/* 「＋ 添加板块」：收成一个入口，点开再选类型 */
+.add-block { margin-top: 10px; }
+.add-block > summary {
+  display: inline-block; cursor: pointer; list-style: none;
+  color: var(--brand); font-size: 13px; padding: 5px 10px;
+  border: 1px dashed var(--line); border-radius: 8px;
+}
+.add-block > summary::-webkit-details-marker { display: none; }
+.add-block > summary:hover { border-color: var(--brand); }
+.add-block-menu { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 /* ── 执行界面 ─────────────────────────────────────────── */
 .run-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }

@@ -121,9 +121,17 @@
           fields: detectFields(text),
           duration_hint: guessDuration(text),
           notice: extractNotice(text),
+          // 只有真的写了热解程序的步骤才会带上「热解板块」（马弗炉/管式炉的升温曲线）
+          pyro_seq: detectPyroSeq(text),
         };
       }),
     };
+  }
+
+  /* 从一段文字里挑出可用的热解程序；没有或格式不像就返回空串 */
+  function detectPyroSeq(text) {
+    const seq = findPyroSeq(text);
+    return (seq && looksLikePyro(seq)) ? seq : '';
   }
 
   /* 挑出步骤里的「注意事项」：方案中「注意：… ⚠ … 切记…」这类句子。
@@ -225,6 +233,8 @@
         duration_hint: String((s && s.duration_hint) || '').trim(),
         // AI 没单独给 notice 时，就从 instruction 里按关键词兜底提取
         notice: String((s && s.notice) || '').trim() || extractNotice(s && s.instruction),
+        // 热解程序：AI 给了就用，否则从说明里识别；都没有就留空（不显示热解板块）
+        pyro_seq: String((s && s.pyro_seq) || '').trim() || detectPyroSeq(s && s.instruction),
         fields: fields,
       };
     });
@@ -608,6 +618,12 @@
     return lines.length ? lines : [''];
   }
 
+  /* 这一步的文字里是否提到热解相关工序 —— 用来决定要不要显示「热解程序」板块 */
+  function isPyroText(s) {
+    const hay = String((s && s.title) || '') + '\n' + String((s && s.instruction) || '');
+    return /热解|碳化|煅烧|管式炉|程序升温|pyrolysis/i.test(hay);
+  }
+
   function renderDraft() {
     const host = $('view-plan');
     const editing = !!draft.id;
@@ -628,40 +644,68 @@
         '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
         '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
 
-        // 热解程序：建方案时就定下来，执行界面据此显示计算器（留空则自动从说明里找）
-        '  <div class="sub-block">',
-        '    <div class="sub-head"><span>🔥 热解程序</span><span class="hint small">留空则在执行界面自动从步骤说明里识别</span></div>',
-        '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="如 C30-T60-C30-T184-C950-T60-C950--121">',
-        '  </div>',
+        // ── 板块：只渲染这一步实际拥有的。
+        //    新增板块统一走底部的「＋ 添加板块」，每个板块也能单独移除。 ──
 
-        // 注意事项：一行一条，可增可删（存库时仍合并成一个字符串）
-        '  <div class="sub-block">',
-        '    <div class="sub-head"><span>⚠ 注意事项</span>',
-        '      <button type="button" class="ghost tiny" data-add-notice="' + si + '">＋ 添加一条</button>',
-        '    </div>',
-        noticeLines(s).map((line, ni) => [
-        '    <div class="line-row">',
-        '      <input data-notice="' + si + '-' + ni + '" value="' + esc(line) + '" placeholder="如：出现沉淀即为异常">',
-        '      <button type="button" class="icon-btn del" data-drop-notice="' + si + '-' + ni + '" title="删除这条" aria-label="删除这条">×</button>',
-        '    </div>',
-        ].join('\n')).join(''),
-        '  </div>',
+        s.fields.length ? [
+          '  <div class="sub-block">',
+          '    <div class="sub-head"><span>数据字段</span><span class="sub-tools">',
+          '      <button type="button" class="ghost tiny" data-add-field="' + si + '">＋ 加字段</button>',
+          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-fields">移除板块</button>',
+          '    </span></div>',
+          s.fields.map((f, fi) => [
+            '    <div class="field-row">',
+            '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
+            '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit || '') + '" placeholder="单位，可空">',
+            '      <select data-field-type="' + si + '-' + fi + '" title="填写方式">',
+            FIELD_TYPES.map((x) => '        <option value="' + x.value + '"' + (fieldTypeOf(f) === x.value ? ' selected' : '') + '>' + x.label + '</option>').join('\n'),
+            '      </select>',
+            '      <button type="button" class="icon-btn del" data-drop-field="' + si + '-' + fi + '" title="删除这个字段" aria-label="删除这个字段">×</button>',
+            '    </div>',
+          ].join('\n')).join(''),
+          '  </div>',
+        ].join('\n') : '',
 
-        '  <div class="sub-block">',
-        '    <div class="sub-head"><span>数据字段</span>',
-        '      <button type="button" class="ghost tiny" data-add-field="' + si + '">＋ 添加字段</button>',
-        '    </div>',
-        (s.fields.length ? s.fields.map((f, fi) => [
-          '    <div class="field-row">',
-          '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
-          '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit || '') + '" placeholder="单位，可空">',
-          '      <select data-field-type="' + si + '-' + fi + '" title="填写方式">',
-          FIELD_TYPES.map((x) => '        <option value="' + x.value + '"' + (fieldTypeOf(f) === x.value ? ' selected' : '') + '>' + x.label + '</option>').join('\n'),
-          '      </select>',
-          '      <button type="button" class="icon-btn del" data-drop-field="' + si + '-' + fi + '" title="删除这个字段" aria-label="删除这个字段">×</button>',
+        s.notice ? [
+          '  <div class="sub-block">',
+          '    <div class="sub-head"><span>⚠ 注意事项</span><span class="sub-tools">',
+          '      <button type="button" class="ghost tiny" data-add-notice="' + si + '">＋ 加一条</button>',
+          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-notice">移除板块</button>',
+          '    </span></div>',
+          noticeLines(s).map((line, ni) => [
+            '    <div class="line-row">',
+            '      <input data-notice="' + si + '-' + ni + '" value="' + esc(line) + '" placeholder="如：出现沉淀即为异常">',
+            '      <button type="button" class="icon-btn del" data-drop-notice="' + si + '-' + ni + '" title="删除这条" aria-label="删除这条">×</button>',
+            '    </div>',
+          ].join('\n')).join(''),
+          '  </div>',
+        ].join('\n') : '',
+
+        (s.pyro_seq || isPyroText(s)) ? [
+          '  <div class="sub-block">',
+          '    <div class="sub-head"><span>🔥 热解程序</span><span class="sub-tools">',
+          '      <button type="button" class="ghost tiny" data-gen-pyro="' + si + '">按温度/速率生成</button>',
+          s.pyro_seq ? '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-pyro">移除板块</button>' : '',
+          '    </span></div>',
+          '    <div class="pyro-grid">',
+          '      <label>初始温度（℃）<input type="number" step="any" inputmode="decimal" data-pyro-room="' + si + '" placeholder="如 30"></label>',
+          '      <label>升温速率（℃/min）<input type="number" step="any" inputmode="decimal" data-pyro-rate="' + si + '" value="5"></label>',
+          '      <label>最终温度（℃）<input type="number" step="any" inputmode="decimal" data-pyro-final="' + si + '" placeholder="如 950"></label>',
           '    </div>',
-        ].join('\n')).join('') : '<p class="hint small">这一节还没有数据字段，可点上方添加。</p>'),
-        '  </div>',
+          '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="生成结果会填在这里，也可直接粘贴">',
+          '  </div>',
+        ].join('\n') : '',
+
+        // 统一入口：加板块（已有的类型不再重复列出）
+        '  <details class="add-block">',
+        '    <summary>＋ 添加板块</summary>',
+        '    <div class="add-block-menu">',
+        s.fields.length ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-fields">数据字段</button>',
+        s.notice ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-notice">注意事项</button>',
+        s.pyro_seq ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-pyro">热解程序</button>',
+        '    </div>',
+        '  </details>',
+
         '</div>',
       ].join('\n')).join(''),
       '<button type="button" class="ghost" id="draft-add-step" style="margin-bottom:10px">＋ 添加步骤</button>',
@@ -684,17 +728,15 @@
       if (d) s.duration_hint = d.value.trim();
       if (ins) s.instruction = ins.value;
 
-      // 注意事项：把多行输入合并回一个「；」分隔的字符串，空行忽略
+      // 注意事项：多行合并回一个「；」分隔的字符串；板块被移除时这里自然清空
       const rows = host.querySelectorAll('[data-notice^="' + si + '-"]');
-      if (rows.length) {
-        const lines = [];
-        rows.forEach((inp) => { const v = inp.value.trim(); if (v) lines.push(v); });
-        s.notice = lines.join('；');
-      }
+      const lines = [];
+      rows.forEach((inp) => { const v = inp.value.trim(); if (v) lines.push(v); });
+      s.notice = lines.join('；');
 
-      // 热解程序（方案里显式填的那一串）
+      // 热解程序（方案里显式填的那一串；板块被移除时为 ''）
       const pyro = document.querySelector('[data-pyro="' + si + '"]');
-      if (pyro) s.pyro_seq = pyro.value.trim();
+      s.pyro_seq = pyro ? pyro.value.trim() : '';
 
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
@@ -722,6 +764,50 @@
       collectDraft();
       draft.steps[Number(b.dataset.addField)].fields.push({ label: '', unit: '', type: 'text' });
       renderDraft();
+    }));
+
+    // ── 板块：添加 / 移除 / 按温度生成热解程序 ──
+    host.querySelectorAll('[data-add-block]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const parts = String(b.dataset.addBlock).split('-');
+      const s = draft.steps[Number(parts[0])];
+      const kind = parts[1];
+
+      if (kind === 'fields' && !s.fields.length) s.fields = [{ label: '', unit: '', type: 'text' }];
+      if (kind === 'notice' && !s.notice) s.notice = '；';   // 占位，渲染出来就是一行空输入
+      if (kind === 'pyro' && !s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
+      renderDraft();
+    }));
+
+    host.querySelectorAll('[data-drop-block]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const parts = String(b.dataset.dropBlock).split('-');
+      const s = draft.steps[Number(parts[0])];
+      const kind = parts[1];
+
+      if (kind === 'fields') s.fields = [];
+      if (kind === 'notice') s.notice = '';
+      if (kind === 'pyro') s.pyro_seq = '';
+      renderDraft();
+    }));
+
+    // 按「初始温度 / 升温速率 / 最终温度」生成热解程序
+    host.querySelectorAll('[data-gen-pyro]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const si = Number(b.dataset.genPyro);
+      const s = draft.steps[si];
+      const val = (sel) => { const n = document.querySelector(sel); return n ? n.value : ''; };
+
+      const next = buildPyroSeq(
+        s.pyro_seq || 'C30-T60-C30-T184-C950-T60-C950--121',
+        val('[data-pyro-room="' + si + '"]'),
+        val('[data-pyro-rate="' + si + '"]'),
+        val('[data-pyro-final="' + si + '"]')
+      );
+      if (!next) { setStatus('先粘贴一个作为模板的热解程序。', 'warn'); return; }
+      s.pyro_seq = next;
+      renderDraft();
+      setStatus('已按温度与速率生成热解程序。', 'ok');
     }));
 
     // 数据字段：删除一行
@@ -803,7 +889,17 @@
       if (stepErr) throw stepErr;
 
       draft = null;
-      setStatus(wasEdit ? '方案已更新。' : '方案已保存。', 'ok');
+      const doneMsg = wasEdit ? '方案已更新。' : '方案已保存。';
+      setStatus(doneMsg, 'ok');
+
+      // 方案改完后，把最新的步骤结构同步给正在做这个方案的实验（他们已填的数据会保留）
+      try {
+        const n = await syncPlanToRunningRuns(planId);
+        if (n) setStatus(doneMsg + '已同步到 ' + n + ' 个进行中的步骤。', 'ok');
+      } catch (err) {
+        console.warn('[SciHub] 同步到进行中的实验失败：', err);
+      }
+
       route('plans');
     } catch (err) {
       console.error('[SciHub] 保存方案失败：', err);
@@ -811,6 +907,51 @@
     } finally {
       btn.disabled = false;
     }
+  }
+
+  /* 方案改完后，把最新的步骤结构同步到「正在使用这个方案」的实验。
+     只更新结构（标题 / 说明 / 字段定义 / 注意事项 / 热解程序），
+     已填的 values、备注、照片全部保留 —— 正在做实验的人不会丢数据。
+     返回被更新的步骤数。 */
+  async function syncPlanToRunningRuns(planId) {
+    const { data: runs } = await client.from(RUN).select('id').eq('plan_id', planId).eq('status', 'running');
+    if (!runs || !runs.length) return 0;
+
+    const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (!planSteps || !planSteps.length) return 0;
+
+    const { data: runSteps } = await client.from(RUN_STEP).select('*').in('run_id', runs.map((r) => r.id));
+    let changed = 0;
+
+    for (const rs of (runSteps || [])) {
+      const ps = planSteps.find((x) => x.position === rs.position);
+      // 方案里已经没有这一步（步骤数变少了）→ 保持实验原样，不动别人正在进行的数据
+      if (!ps) continue;
+
+      const oldFields = rs.fields || [];
+      const newFields = ps.fields || [];
+      // 值是以字段名为键存的；字段改名/新增时用归一化匹配搬家，搬不走的旧值原样保留
+      const values = migrateStepValues(oldFields, newFields, rs.values, null);
+
+      const next = {
+        title: ps.title || rs.title,
+        instruction: ps.instruction || '',
+        notice: ps.notice || '',
+        pyro_seq: ps.pyro_seq || '',
+        fields: newFields,
+        values: values,
+      };
+
+      const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values]);
+      const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
+      if (before === after) continue;    // 没有实质变化就不写库
+
+      const { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
+      if (error) throw error;
+      changed += 1;
+    }
+
+    return changed;
   }
 
   /* 重命名（方案列表与详情页共用） */
