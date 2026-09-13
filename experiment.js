@@ -3322,7 +3322,39 @@
     if (moreBtn) moreBtn.addEventListener('click', () => doLink(true));
   }
 
-  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun };
+  /* 取消关联：把这一组里所有实验之间的 link 全部清掉，
+     主页就从「一条合并实验」拆回多个独立实验。
+     各实验的步骤、填写的数据、进度全都不动（合并点之后的步骤也保留）。 */
+  async function unlinkRun(runId) {
+    try {
+      const info = await collectMergeInfo(runId);
+      if (!info) { setStatus('这次实验没有关联别的实验。', 'warn'); return; }
+
+      const names = info.runs.map((x) => '· ' + x.title).join('\n');
+      const ok = window.confirm(
+        '要把这 ' + info.runs.length + ' 个实验的关联全部取消吗？\n\n' + names
+        + '\n\n取消后它们各自回到「进行中的实验」里独立显示。\n'
+        + '各实验已填的数据和进度都不会动。'
+      );
+      if (!ok) return;
+
+      // 清掉组内所有 link：一条 update 覆盖所有相关的 run_steps
+      const ids = info.runs.map((x) => x.id);
+      const { error } = await client.from(RUN_STEP)
+        .update({ link_run_id: null, link_note: null })
+        .in('run_id', ids)
+        .not('link_run_id', 'is', null);
+      if (error) throw error;
+
+      setStatus('已取消关联，' + info.runs.length + ' 个实验各自独立了。', 'ok');
+      route('home');
+    } catch (err) {
+      console.error('[SciHub] 取消关联失败：', err);
+      setStatus('取消关联失败：' + errorText(err), 'error');
+    }
+  }
+
+  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));

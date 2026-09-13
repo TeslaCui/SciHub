@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.49.0';
+const APP_VERSION = '0.50.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -752,9 +752,15 @@ window.addEventListener('scihub:ready', () => {
   if (state.user && home && !home.hidden) renderHome();
 });
 
-/* 进行中实验卡片上的「关联 / 导出 / 重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
+/* 进行中实验卡片上的「取消关联 / 关联 / 导出 / 重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */
 document.addEventListener('click', (e) => {
   if (!window.Run) return;
+
+  const un = e.target.closest('[data-run-unlink]');
+  if (un) {
+    if (window.Run.unlink) window.Run.unlink(Number(un.dataset.runUnlink));
+    return;
+  }
 
   const lnk = e.target.closest('[data-run-link]');
   if (lnk) {
@@ -1178,6 +1184,8 @@ async function renderHome() {
             '  </div>',
             '  <div class="hc-actions">',
             '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
+            // 合并后的卡片多一个「取消关联」：点一下整组撤回成多个独立实验
+            multi ? '    <button type="button" class="ghost" data-run-unlink="' + r.id + '" title="取消关联，拆回多个独立实验">取消关联</button>' : '',
             // 关联入口就在卡片上：选本实验的哪一步 + 对方实验的哪一步，再校验后续步骤是否一致
             '    <button type="button" class="icon-btn" data-run-link="' + r.id + '" title="关联其它实验" aria-label="关联其它实验">' + ICON_LINK + '</button>',
             '    <button type="button" class="icon-btn" data-run-export="' + r.id + '" title="导出为 Word 文档" aria-label="导出">' + ICON_DOC + '</button>',
