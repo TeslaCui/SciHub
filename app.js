@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.66.0';
+const APP_VERSION = '0.67.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -998,10 +998,10 @@ async function renderHome() {
 
   const aiProgressKey = (id) => 'scihub.aiProgress.' + id;
 
-  // 步骤状态签名：任一步的完成/填写/照片/备注或 current_step 变了，就重新问一次 AI
+  // 步骤状态签名：任一步的「标完成 / 填了数据」情况或 current_step 变了，就重新问一次 AI。
+  // 照片与备注不参与 —— 它们不算「做过」（见下面发给 AI 的字段）。
   const progressSignature = (r, steps) => steps.map((x) => [
-    x.position, x.status || '', filledCount(x), (x.images || []).length,
-    String(x.note || '').trim() ? 1 : 0,
+    x.position, x.status || '', filledCount(x),
   ].join(':')).join('|') + '#' + (Number(r.current_step) || 0);
 
   const judgeProgress = async (r) => {
@@ -1026,13 +1026,14 @@ async function renderHome() {
         body: {
           mode: 'progress',
           currentStep: base,
+          // 只发「是否标完成」和「填了几项数据」——
+          // 实测把照片/备注一起发过去，AI 会把「传了张照片」「写了句备注」也当成做完了这一步，
+          // 于是进度被推到很后面（v5 被判到第 9 步就是这个原因）。这里干脆不给它这两个字段。
           steps: steps.map((x) => ({
             position: x.position,
             title: x.title || '',
             done: x.status === 'done',
             filled: filledCount(x),
-            photos: (x.images || []).length,
-            note: String(x.note || '').trim().slice(0, 60),
           })),
         },
       });
