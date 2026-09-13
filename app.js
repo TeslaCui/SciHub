@@ -37,6 +37,7 @@ const state = {
   category: '',
   editingId: null,
   tableMissing: false,
+  calOffset: 0,     // 实验日历的月份偏移：0 本月，-1 上月，+1 下月
 };
 
 const $ = (id) => document.getElementById(id);
@@ -807,8 +808,11 @@ async function renderHome() {
     return x.getFullYear() + '-' + p2(x.getMonth() + 1) + '-' + p2(x.getDate());
   };
 
-  const y0 = today.getFullYear();
-  const m0 = today.getMonth();
+  // 支持翻月：calOffset 为 0 表示本月，-1 上月，+1 下月
+  const calOffset = Number(state.calOffset) || 0;
+  const base = new Date(today.getFullYear(), today.getMonth() + calOffset, 1);
+  const y0 = base.getFullYear();
+  const m0 = base.getMonth();
   const monthStart = new Date(y0, m0, 1);
   const monthEnd = new Date(y0, m0 + 1, 1);
 
@@ -897,7 +901,12 @@ async function renderHome() {
   const calendar = [
     '<div class="card cal-card">',
     '  <div class="cal-top">',
-    '    <div class="cal-title">' + y0 + ' 年 ' + (m0 + 1) + ' 月 · 实验日历</div>',
+    '    <div class="cal-title">',
+    '      <button type="button" class="cal-nav" data-cal="prev" title="上一月" aria-label="上一月">‹</button>',
+    '      <span>' + y0 + ' 年 ' + (m0 + 1) + ' 月 · 实验日历</span>',
+    '      <button type="button" class="cal-nav" data-cal="next" title="下一月" aria-label="下一月">›</button>',
+    calOffset === 0 ? '' : '      <button type="button" class="ghost tiny" data-cal="today">回到本月</button>',
+    '    </div>',
     '    <div class="cal-legend">少<i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i>多</div>',
     '  </div>',
     '  <div class="cal-grid cal-week">' + ['一', '二', '三', '四', '五', '六', '日'].map((w) => '<span>' + w + '</span>').join('') + '</div>',
@@ -970,34 +979,64 @@ async function renderHome() {
     });
   });
 
-  // 实验日历：悬停显示当天做了哪些实验、具体到步骤（原生 title 撑不下这么多内容，自绘一个浮层）
+  // 实验日历：桌面悬停、手机点按都能看当天详情 —— 触摸设备不会触发 mouseenter，
+  // 所以两种事件都绑上。浮层用自绘 HTML（原生 title 撑不下多行步骤）。
+  const hideTip = () => {
+    const tip = $('cal-tip');
+    if (tip) { tip.hidden = true; tip.removeAttribute('data-for'); }
+  };
+
+  const showTip = (cell) => {
+    const html = tipMap[cell.dataset.tipId];
+    if (!html) return;
+
+    let tip = $('cal-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'cal-tip';
+      tip.className = 'cal-tip';
+      document.body.appendChild(tip);
+    }
+    tip.innerHTML = html;
+    tip.hidden = false;
+    tip.dataset.for = cell.dataset.tipId;
+
+    const rect = cell.getBoundingClientRect();
+    const w = Math.min(320, window.innerWidth - 24);
+    tip.style.width = w + 'px';
+    tip.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, rect.left + rect.width / 2 - w / 2)) + 'px';
+    tip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+  };
+
   host.querySelectorAll('[data-tip-id]').forEach((cell) => {
-    cell.addEventListener('mouseenter', () => {
-      const html = tipMap[cell.dataset.tipId];
-      if (!html) return;
+    cell.addEventListener('mouseenter', () => showTip(cell));
+    cell.addEventListener('mouseleave', hideTip);
 
-      let tip = $('cal-tip');
-      if (!tip) {
-        tip = document.createElement('div');
-        tip.id = 'cal-tip';
-        tip.className = 'cal-tip';
-        document.body.appendChild(tip);
-      }
-      tip.innerHTML = html;
-      tip.hidden = false;
-
-      const rect = cell.getBoundingClientRect();
-      const w = Math.min(320, window.innerWidth - 24);
-      tip.style.width = w + 'px';
-      tip.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, rect.left + rect.width / 2 - w / 2)) + 'px';
-      tip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
-    });
-
-    cell.addEventListener('mouseleave', () => {
+    // 手机：点一下弹出，再点同一格收起
+    cell.addEventListener('click', (e) => {
+      e.stopPropagation();
       const tip = $('cal-tip');
-      if (tip) tip.hidden = true;
+      if (tip && !tip.hidden && tip.dataset.for === cell.dataset.tipId) { hideTip(); return; }
+      showTip(cell);
     });
   });
+
+  // 点别处收起浮层
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-tip-id]') && !e.target.closest('#cal-tip')) hideTip();
+  });
+
+  // 翻月：上月 / 下月 / 回到本月
+  host.querySelectorAll('[data-cal]').forEach((btn) => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const act = btn.dataset.cal;
+    const cur = Number(state.calOffset) || 0;
+    if (act === 'prev') state.calOffset = cur - 1;
+    else if (act === 'next') state.calOffset = cur + 1;
+    else state.calOffset = 0;
+    hideTip();
+    renderHome();
+  }));
 
   host.querySelectorAll('[data-go]').forEach((btn) => {
     btn.addEventListener('click', () => route(btn.dataset.go));

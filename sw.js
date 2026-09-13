@@ -6,7 +6,7 @@
  *
  * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
  */
-const CACHE = 'scihub-research-v0.32.0';
+const CACHE = 'scihub-research-v0.33.0';
 const ASSETS = [
   './index.html',
   './style.css?v=0.32.0',
