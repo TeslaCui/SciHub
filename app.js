@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.58.0';
+const APP_VERSION = '0.59.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -846,14 +846,23 @@ async function renderHome() {
   // （link_run_id / link_note 用于把「关联实验」合并成一条显示）
   // values / images / note 也一起取：待办要靠它们判断「这一步到底有没有在做」。
   // 只按 current_step（上次停在的位置）取步骤会取错 —— 见下面待办那段。
+  // 一次取回若干实验的步骤。run_steps.duration_hint 是后加的列（见 supabase_schema.sql），
+  // 还没在 Supabase 执行那段 SQL 时查它会整条查询 400 —— 所以先带上，失败就去掉重查。
+  const STEP_COLS = 'run_id,position,title,status,link_run_id,link_note,'
+    + 'values,images,note,started_at,updated_at';
+  const loadRunSteps = async (ids) => {
+    const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint')
+      .in('run_id', ids).order('position');
+    if (!withDur.error) return withDur.data || [];
+    console.warn('[SciHub] run_steps 还没有 duration_hint 列，改从方案取时长：', withDur.error.message);
+    const plain = await client.from('run_steps').select(STEP_COLS)
+      .in('run_id', ids).order('position');
+    return plain.data || [];
+  };
+
   const stepMap = {};
   if (monthRuns.length) {
-    const { data: rs } = await client
-      .from('run_steps')
-      .select('run_id,position,title,status,link_run_id,link_note,'
-        + 'values,images,note,started_at,updated_at')
-      .in('run_id', monthRuns.map((r) => r.id))
-      .order('position');
+    const rs = await loadRunSteps(monthRuns.map((r) => r.id));
     (rs || []).forEach((x) => {
       if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
       stepMap[x.run_id].push(x);
@@ -945,6 +954,13 @@ async function renderHome() {
     return 0;
   };
 
+  // 从一段说明里挑出写着的时长（「静置 12 h」→「12 h」），挑不到返回空串。
+  // 方案里没填「时长提示」时，靠它兜底算结束时间。
+  const pickDurationText = (text) => {
+    const m = String(text || '').match(/(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z])|天|days?|分钟|min(?:ute)?s?)/i);
+    return m ? m[0] : '';
+  };
+
   // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。
   // 待办靠它算「实际进度」—— 只看 current_step（上次停在的位置）会取错步骤。
   const stepTouched = (x) => {
@@ -959,12 +975,7 @@ async function renderHome() {
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
-    const { data: more } = await client
-      .from('run_steps')
-      .select('run_id,position,title,status,link_run_id,link_note,'
-        + 'values,images,note,started_at,updated_at')
-      .in('run_id', needSteps)
-      .order('position');
+    const more = await loadRunSteps(needSteps);
     (more || []).forEach((x) => {
       if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
       stepMap[x.run_id].push(x);
@@ -978,11 +989,13 @@ async function renderHome() {
   if (planIds.length) {
     const { data: ps } = await client
       .from('plan_steps')
-      .select('plan_id,position,duration_hint')
+      .select('plan_id,position,duration_hint,instruction')
       .in('plan_id', planIds);
     (ps || []).forEach((x) => {
       if (!planDur[x.plan_id]) planDur[x.plan_id] = {};
-      if (x.duration_hint) planDur[x.plan_id][x.position] = x.duration_hint;
+      // 方案里填了「时长提示」就用它；没填就从这一步的说明里抓一段
+      const dur = String(x.duration_hint || '').trim() || pickDurationText(x.instruction);
+      if (dur) planDur[x.plan_id][x.position] = dur;
     });
   }
 

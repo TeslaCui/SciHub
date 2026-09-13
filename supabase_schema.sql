@@ -431,6 +431,14 @@ select
 alter table public.run_steps add column if not exists link_run_id bigint;
 alter table public.run_steps add column if not exists link_note   text;
 
+-- ─────────────────────────────────────────────────────────────
+-- run_steps.duration_hint：起跑时把方案里那一步的「时长提示」也快照过来。
+-- 之前只有 plan_steps 有这一列，实验步骤没有 —— 结果待办算结束时间时永远说
+-- 「这一步未设时长提示」，执行界面也看不到时长提示。这里补上；幂等，
+-- 老数据留空，待办会回方案里同一步骤取（见 app.js 的 planDur）。
+-- ─────────────────────────────────────────────────────────────
+alter table public.run_steps add column if not exists duration_hint text not null default '';
+
 -- 自检 9：应看到 link_columns=2
 select
   (select count(*) from information_schema.columns

@@ -1218,12 +1218,23 @@
         instruction: s.instruction,
         notice: s.notice || '',
         pyro_seq: s.pyro_seq || '',
+        duration_hint: s.duration_hint || '',   // 一并快照方案里的「时长提示」（列见 supabase_schema.sql）
         fields: s.fields,
         values: {},
         images: [],
         status: 'pending',
       }));
-      const { error: stepErr } = await client.from(RUN_STEP).insert(rows);
+      let stepErr = (await client.from(RUN_STEP).insert(rows)).error;
+      if (stepErr && /duration_hint/.test(String(stepErr.message || ''))) {
+        // Supabase 里还没执行那段加列的 SQL → 去掉该字段重试，别让实验开不出来
+        console.warn('[SciHub] run_steps 还没有 duration_hint 列，本次不带它写入：', stepErr.message);
+        const slim = rows.map((x) => {
+          const o = Object.assign({}, x);
+          delete o.duration_hint;
+          return o;
+        });
+        stepErr = (await client.from(RUN_STEP).insert(slim)).error;
+      }
       if (stepErr) throw stepErr;
 
       setStatus('实验已开始，随时可以继续。', 'ok');
