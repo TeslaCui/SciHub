@@ -1764,6 +1764,13 @@
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
 
+      // 进度与「正在浏览」不一致时，给一个一键改正的入口：
+      // current_step 只在点「完成并下一步」时前进，点快了就会落在没真正做的步骤上，
+      // 待办跟着显示错（v5 显示到第 9 步就是这么来的）。
+      run.pos !== (run.data.current_step || 0)
+        ? '<div class="run-status"><button type="button" class="ghost tiny" id="set-progress"'
+            + ' title="把「进行到这里」改成你现在浏览的这一步">记为我做到这里（第 ' + (run.pos + 1) + ' 步）</button></div>'
+        : '',
       // 关联子实验：说清楚为什么只看到这里
       cut != null
         ? [
@@ -1935,6 +1942,24 @@
     if (syncBtn) syncBtn.addEventListener('click', syncRunNow);
     const dropExtraBtn = $('run-drop-extra');
     if (dropExtraBtn) dropExtraBtn.addEventListener('click', dropExtraSteps);
+
+    // 「记为我做到这里」：把云端的 current_step 改成当前浏览的这一步
+    const setProgBtn = $('set-progress');
+    if (setProgBtn) setProgBtn.addEventListener('click', async () => {
+      setProgBtn.disabled = true;
+      const { error } = await client.from(RUN)
+        .update({ current_step: run.pos, updated_at: new Date().toISOString() })
+        .eq('id', run.id);
+      if (error) {
+        setProgBtn.disabled = false;
+        setStatus('设置进度失败：' + errorText(error), 'error');
+        return;
+      }
+      run.data.current_step = run.pos;
+      run.data.updated_at = new Date().toISOString();
+      setStatus('已把「进行到这里」记为第 ' + (run.pos + 1) + ' 步。', 'ok');
+      drawRun();
+    });
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
@@ -2970,6 +2995,28 @@
       started_at: s.started_at,
       finished_at: s.finished_at,
     }).eq('id', s.id);
+
+    // ── 从源头保证「进行到第几步」是对的 ──────────────────
+    // 在这一步填了任何东西，就把进度推进到这里。
+    // 以前只有点「完成并下一步」才推进；点快了或跳着填数据时，进度会停在
+    // 没真正做过的步骤上（v5 的进度停在「第 9 步」、其实只做到第 7 步，就是这么来的）。
+    // 顺手把「进度之后、却没有任何填写痕迹」的完成标记清掉 —— 那是点快留下的绿圈。
+    if (!error) {
+      const pos = Number(s.position);
+      if (Number.isFinite(pos) && pos > (Number(run.data.current_step) || 0)) {
+        run.data.current_step = pos;
+        await client.from(RUN).update({
+          current_step: pos,
+          updated_at: new Date().toISOString(),
+        }).eq('id', run.id);
+      }
+      const from = Number.isFinite(pos) ? pos : 0;
+      const stale = run.steps.filter((x) => x.position > from && x.status === 'done' && !stepHasProgress(x));
+      for (let i = 0; i < stale.length; i++) {
+        stale[i].status = 'pending';
+        await client.from(RUN_STEP).update({ status: 'pending' }).eq('id', stale[i].id);
+      }
+    }
     if (error) {
       console.error('[SciHub] 保存步骤失败：', error);
       $('autosave').textContent = '保存失败，请检查网络';

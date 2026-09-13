@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.70.0';
+const APP_VERSION = '0.71.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1296,13 +1296,18 @@ async function renderHome() {
       if (!st) return null;
       const vals = st.values || {};
       let fromField = null;
-      Object.keys(vals).forEach((k) => {
-        if (!/时间|时刻|开始|日期/.test(k)) return;
+      // 优先「开始」类字段（如「反应开始时间」），其次其它时间字段（但不含「结束」），
+      // 而且**不取最晚的** —— 像「出现浑浊时间 10:48」不是这一步的开始时刻。
+      const timeKeys = Object.keys(vals).filter((k) => {
+        if (!/时间|时刻|日期/.test(k)) return false;
         const v = String(vals[k] == null ? '' : vals[k]).trim();
-        if (!v) return;
-        const d = new Date(v.replace(/-/g, '/'));
-        if (!isNaN(d.getTime()) && (!fromField || d > fromField)) fromField = d;
+        return v !== '' && !isNaN(new Date(v.replace(/-/g, '/')).getTime());
       });
+      const useKey = timeKeys.find((k) => /开始/.test(k)) || timeKeys.find((k) => !/结束|完成/.test(k));
+      if (useKey) {
+        const d = new Date(String(vals[useKey]).trim().replace(/-/g, '/'));
+        if (!isNaN(d.getTime())) fromField = d;
+      }
       if (fromField) return fromField.toISOString();
       const a = st.started_at ? new Date(st.started_at) : null;
       const b = st.updated_at ? new Date(st.updated_at) : null;
