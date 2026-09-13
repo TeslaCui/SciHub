@@ -810,25 +810,33 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 @media (max-width: 560px) {
   .pyro-grid { grid-template-columns: 1fr; }
+}
 
-  /* 手机端：日历与待办各占满一行。
-     上面 .home-top > .cal-card 用的是 flex:0 0 auto（basis:auto），宽度按内容算，
-     日历 7 列的最小内容宽度会把卡片顶出屏幕 —— 这里改回按行宽分配并允许收缩。 */
+/* ── 主页：实验日历（热力图）+ 待办计时 ───────────────── */
+/* 两块并排且等高；放不下时自动上下堆叠（日历在上、待办在下）。 */
+.home-top { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 6px; }
+/* flex-basis 用 440px 而不是 auto：auto 会按内容算宽，日历 7 列的内容宽度
+   会把它顶出容器；配合 min-width:0 才能在窄屏真正收缩。 */
+.home-top > .cal-card { flex: 0 1 440px; min-width: 0; max-width: 440px; margin-bottom: 0; }
+.home-top > .todo-card { flex: 1 1 280px; min-width: 0; margin-bottom: 0; display: flex; flex-direction: column; }
+
+/* 并排放不下时（780px 以下）两块都占满整行 —— 这样日历的左右边缘
+   和下面的卡片、以及「进行中的实验」卡片完全对齐。
+   注意：这段必须放在上面基础规则之后，否则会被 flex 简写覆盖掉。 */
+@media (max-width: 780px) {
   .home-top > .cal-card,
   .home-top > .todo-card { flex: 1 1 100%; min-width: 0; }
-
-  .cal-card { max-width: none; padding: 12px 10px; }
+  /* 必须用 .home-top > .cal-card（优先级 0,2,0）来覆盖后面那条
+     .cal-card{max-width:440px}（0,1,0）—— 同优先级下靠顺序会输。 */
+  .home-top > .cal-card { max-width: none; }
+}
+@media (max-width: 560px) {
+  .cal-card { padding: 12px 10px; }
   .cal-grid { gap: 3px; }
   .cal-cell { border-radius: 4px; font-size: 10px; }
   .cal-week span { font-size: 10px; }
   .cal-legend { font-size: 10px; }
 }
-
-/* ── 主页：实验日历（热力图）+ 待办计时 ───────────────── */
-/* 两块并排且等高；窄屏自动上下堆叠（日历在上、待办在下） */
-.home-top { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 6px; }
-.home-top > .cal-card { flex: 0 0 auto; margin-bottom: 0; }
-.home-top > .todo-card { flex: 1 1 280px; min-width: 240px; margin-bottom: 0; display: flex; flex-direction: column; }
 
 /* 待办 · 计时提醒 */
 .todo-card { padding: 14px 16px; }

@@ -1261,7 +1261,7 @@
       .map((p) => ({ position: p.position, title: p.title }));
     // 实验有、方案没有 → 方案里删掉了
     const removed = (run.steps || []).filter((s) => !planByPos[s.position])
-      .map((s) => ({ position: s.position, title: s.title }));
+      .map((s) => ({ id: s.id, position: s.position, title: s.title }));
 
     const changed = [];
     const fieldAdded = [];
@@ -1374,6 +1374,76 @@
     } catch (err) {
       console.error('[SciHub] 同步失败：', err);
       setStatus('同步失败：' + errorText(err), 'error');
+    }
+  }
+
+  /* 实验里还留着「方案里已经删掉的步骤」时，从这里清掉。
+     这种残留是这么来的：同步只按 position 配对，方案里少掉的步骤不会被实验自动删掉 ——
+     保存方案时的确认框一旦被点「取消」，或者用的是早期「只增改、不删」的同步逻辑，
+     实验里就会多出末尾一步，内容和上一步一样，而方案里已经没有它。
+     表现：执行界面一直显示「方案已删 N 步（实验里还有）」，点「立即同步」怎么都不消失。 */
+  async function dropExtraSteps() {
+    const r = run.data;
+    if (!r || !r.plan_id) return;
+
+    // 动手前把差异重新算一遍：别的设备刚改过方案时，界面上那份旧差异可能已经过时，
+    // 拿它去删就可能删掉方案里其实还在的步骤。核对失败就直接不动手。
+    let fresh = null;
+    try {
+      fresh = await planDiff(r);
+    } catch (err) {
+      console.error('[SciHub] 重新核对方案失败，已取消删除：', err);
+      setStatus('无法重新核对方案（' + errorText(err) + '），已取消删除。', 'error');
+      return;
+    }
+    run.drift = fresh;
+    const list = (fresh && fresh.removed) || [];
+    if (!list.length) { setStatus('没有方案里已删掉的步骤，不用清理。', 'ok'); drawRun(); return; }
+
+    const withData = list.filter((x) => stepHasProgress(x));
+    const lines = list.map((x) => '· 第 ' + (x.position + 1) + ' 步：' + (x.title || '')).join('\n');
+    const warn = withData.length
+      ? '\n\n⚠ 其中 ' + withData.length + ' 步已经填过数据 / 传过照片，会一起永久删除，无法恢复：\n'
+        + withData.map((x) => '· 第 ' + (x.position + 1) + ' 步：' + (x.title || '')).join('\n')
+      : '';
+    const ok = window.confirm(
+      '这次实验里还留着下面 ' + list.length + ' 个「方案里已经删掉的步骤」，要从实验里删掉吗？\n\n'
+      + lines + warn
+    );
+    if (!ok) return;
+
+    setStatus('正在删除多余的步骤…');
+    try {
+      const ids = list.map((x) => x.id).filter((v) => v != null);
+      // position 在 run_steps 里是唯一的，所以按 id 删、按 position 删结果一样
+      const del = (ids.length === list.length)
+        ? client.from(RUN_STEP).delete().in('id', ids)
+        : client.from(RUN_STEP).delete().eq('run_id', r.id).in('position', list.map((x) => x.position));
+      const { error } = await del;
+      if (error) throw error;
+
+      const { data: steps, error: loadErr } = await client
+        .from(RUN_STEP).select('*').eq('run_id', r.id).order('position');
+      if (loadErr) throw loadErr;
+      run.steps = steps || [];
+
+      // 删掉的正好是「上次停在这里」那一步时，把指针夹回最后一步，避免指向不存在的步骤
+      const last = Math.max(0, run.steps.length - 1);
+      const want = Math.min(Math.max(0, Number(r.current_step) || 0), last);
+      if (want !== r.current_step) {
+        const { error: ptrErr } = await client.from(RUN).update({ current_step: want }).eq('id', r.id);
+        if (ptrErr) throw ptrErr;
+        r.current_step = want;
+      }
+
+      if (run.pos > last) run.pos = last;          // 浏览位置夹回可见范围（drawRun 里还会再夹一次）
+      run.drift = await planDiff(r);
+      drawRun();
+      setStatus('已删掉 ' + list.length + ' 个多余的步骤。', 'ok');
+    } catch (err) {
+      console.error('[SciHub] 删除多余步骤失败：', err);
+      setStatus('删除失败：' + errorText(err), 'error');
+      drawRun();
     }
   }
 
@@ -1653,9 +1723,17 @@
             '  <div class="sync-body">',
             '    <b>⚠ 与方案不一致</b>',
             diffRows.map((t) => '    <span>' + t + '</span>').join('\n'),
-            '    <em>点「立即同步」把方案的新增步骤 / 新字段补进本次实验，已填的数据不会动。</em>',
+            '    <em>点「立即同步」把方案的新增步骤 / 新字段补进本次实验，已填的数据不会动。'
+              + (d.removed.length ? '「立即同步」只增改、不删步骤 —— 多余的步骤请点右边的按钮清掉。' : '')
+              + '</em>',
             '  </div>',
             '  <button type="button" class="ghost" id="run-sync-now">立即同步</button>',
+            // 实验里还留着「方案里已经删掉的步骤」：早期同步只增不删、或保存方案时在确认框里
+            // 点了「取消」，都会留下这种残留（表现为末尾多出一步、内容和上一步一样）。
+            // 这里给一个明确出口，否则它会一直挂着 —— 怎么点「立即同步」都消不掉。
+            d.removed.length
+              ? '  <button type="button" class="ghost" id="run-drop-extra">删掉多余的 ' + d.removed.length + ' 步</button>'
+              : '',
             '</div>',
           ].join('\n'),
       '<div class="run-step-card">',
@@ -1797,6 +1875,8 @@
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
     const syncBtn = $('run-sync-now');
     if (syncBtn) syncBtn.addEventListener('click', syncRunNow);
+    const dropExtraBtn = $('run-drop-extra');
+    if (dropExtraBtn) dropExtraBtn.addEventListener('click', dropExtraSteps);
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
