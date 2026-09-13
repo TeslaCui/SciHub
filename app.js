@@ -661,7 +661,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.31.0';
+const APP_VERSION = '0.32.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -799,7 +799,114 @@ async function renderHome() {
     .order('created_at', { ascending: false })
     .limit(3);
 
+  // ── 实验月历：把本月的实验按「开始那天」聚合，用于热力着色与悬停详情 ──
+  const today = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const dayKey = (d) => {
+    const x = new Date(d);
+    return x.getFullYear() + '-' + p2(x.getMonth() + 1) + '-' + p2(x.getDate());
+  };
+
+  const y0 = today.getFullYear();
+  const m0 = today.getMonth();
+  const monthStart = new Date(y0, m0, 1);
+  const monthEnd = new Date(y0, m0 + 1, 1);
+
+  let monthRuns = [];
+  try {
+    const { data } = await client
+      .from('experiment_runs')
+      .select('id,title,started_at,finished_at,status,current_step')
+      .gte('started_at', monthStart.toISOString())
+      .lt('started_at', monthEnd.toISOString())
+      .order('started_at', { ascending: true });
+    monthRuns = data || [];
+  } catch (error) {
+    console.warn('[SciHub] 实验日历数据读取失败：', error);
+  }
+
+  // 悬停要能看到具体步骤，所以把涉及到的实验的步骤一并取回来
+  const stepMap = {};
+  if (monthRuns.length) {
+    const { data: rs } = await client
+      .from('run_steps')
+      .select('run_id,position,title,status')
+      .in('run_id', monthRuns.map((r) => r.id))
+      .order('position');
+    (rs || []).forEach((x) => {
+      if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
+      stepMap[x.run_id].push(x);
+    });
+  }
+
+  const byDay = {};
+  monthRuns.forEach((r) => {
+    const end = r.finished_at ? new Date(r.finished_at) : new Date();
+    const mins = Math.max(0, Math.round((end - new Date(r.started_at)) / 60000));
+    const k = dayKey(r.started_at);
+    if (!byDay[k]) byDay[k] = { runs: [], minutes: 0 };
+    byDay[k].runs.push(Object.assign({}, r, { minutes: mins }));
+    byDay[k].minutes += mins;
+  });
+
+  // 颜色深浅：看当天总时长，并把次数也算进去（一次实验至少按 30 分钟计）
+  const dayLevel = (info) => {
+    if (!info) return 0;
+    const score = info.minutes + info.runs.length * 30;
+    if (score < 60) return 1;
+    if (score < 240) return 2;
+    if (score < 600) return 3;
+    return 4;
+  };
+
+  const tipMap = {};   // 悬停详情（含换行/加粗，用自绘浮层而不是原生 title）
+  const calCells = [];
+  const firstWeekday = (new Date(y0, m0, 1).getDay() + 6) % 7;   // 周一作为一周之始
+  for (let i = 0; i < firstWeekday; i++) calCells.push('<div class="cal-cell blank"></div>');
+
+  const daysInMonth = new Date(y0, m0 + 1, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const k = dayKey(new Date(y0, m0, d));
+    const info = byDay[k];
+    const lv = dayLevel(info);
+    const isToday = k === dayKey(today);
+    const tipId = k + '#' + d;
+
+    if (info) {
+      tipMap[tipId] = '<div class="cal-tip-head">' + k + ' · ' + info.runs.length + ' 次 · ' + Math.round(info.minutes) + ' 分钟</div>'
+        + info.runs.map((r) => {
+          const all = stepMap[r.id] || [];
+          const steps = all.slice(0, 8)
+            .map((x) => '<div class="cal-tip-step">' + (x.position + 1) + '. ' + esc(x.title || '')
+              + (x.status === 'done' ? '<i>✓</i>' : '') + '</div>')
+            .join('');
+          return '<div class="cal-tip-run"><b>' + esc(r.title) + '</b>'
+            + '<em>' + (r.finished_at ? '已完成' : '进行中') + ' · ' + Math.round(r.minutes) + ' 分钟</em>'
+            + (steps ? '<div class="cal-tip-steps">' + steps + (all.length > 8 ? '<div class="cal-tip-step">…</div>' : '') + '</div>' : '')
+            + '</div>';
+        }).join('');
+    } else {
+      tipMap[tipId] = '<div class="cal-tip-head">' + k + '</div><div class="cal-tip-none">这天没有实验</div>';
+    }
+
+    calCells.push('<div class="cal-cell lv' + lv + (isToday ? ' today' : '')
+      + '" data-tip-id="' + tipId + '"' + (info ? ' title="' + esc(k + '：' + info.runs.length + ' 次实验') + '"' : '')
+      + '><span>' + d + '</span></div>');
+  }
+
+  const calendar = [
+    '<div class="card cal-card">',
+    '  <div class="cal-top">',
+    '    <div class="cal-title">' + y0 + ' 年 ' + (m0 + 1) + ' 月 · 实验日历</div>',
+    '    <div class="cal-legend">少<i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i>多</div>',
+    '  </div>',
+    '  <div class="cal-grid cal-week">' + ['一', '二', '三', '四', '五', '六', '日'].map((w) => '<span>' + w + '</span>').join('') + '</div>',
+    '  <div class="cal-grid">' + calCells.join('') + '</div>',
+    '</div>',
+  ].join('\n');
+
   host.innerHTML = [
+    calendar,
     '<div class="section-title">进行中的实验</div>',
     runs.length
       ? runs.map((r) => [
@@ -860,6 +967,35 @@ async function renderHome() {
     el.addEventListener('click', open);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  });
+
+  // 实验日历：悬停显示当天做了哪些实验、具体到步骤（原生 title 撑不下这么多内容，自绘一个浮层）
+  host.querySelectorAll('[data-tip-id]').forEach((cell) => {
+    cell.addEventListener('mouseenter', () => {
+      const html = tipMap[cell.dataset.tipId];
+      if (!html) return;
+
+      let tip = $('cal-tip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.id = 'cal-tip';
+        tip.className = 'cal-tip';
+        document.body.appendChild(tip);
+      }
+      tip.innerHTML = html;
+      tip.hidden = false;
+
+      const rect = cell.getBoundingClientRect();
+      const w = Math.min(320, window.innerWidth - 24);
+      tip.style.width = w + 'px';
+      tip.style.left = Math.max(12, Math.min(window.innerWidth - w - 12, rect.left + rect.width / 2 - w / 2)) + 'px';
+      tip.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+    });
+
+    cell.addEventListener('mouseleave', () => {
+      const tip = $('cal-tip');
+      if (tip) tip.hidden = true;
     });
   });
 
