@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.76.0';
+const APP_VERSION = '0.77.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -998,7 +998,9 @@ async function renderHome() {
     steps.forEach((x, k) => { if (filledCount(x) > 0) lastFilled = k; });
     return Math.max(Number(r.current_step) || 0, lastFilled);
   };
-  const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : localProgressPos(r));
+  // 「进行到第几步」是事实，用本地确定性规则（填过数据的最后一步 与 上次停在的位置 取靠后者）。
+  // AI 有时会把「第 N 步」当 position 返回、差一位就把界面带偏 —— 这里不再让它覆盖定位。
+  const runProgressPos = (r) => localProgressPos(r);
 
   // 「这一步填了几项数据」：只数真正的记录项，**时间类字段（日期/时间/时刻）不算** ——
   // 「顺手记了个开始时间」不等于这一步做过了。v5 的第 8/9 步就是这样被当成"做过"的：
@@ -1302,9 +1304,11 @@ async function renderHome() {
 
     let cur = null;
     let isNext = false;
+    let lastDoneStep = at(lastFilled) || null;      // 已完成的那一步（用于文案）
+    let nextOfDone = null;                          // 它的下一步
     if (progressed) {
-      const next = steps.find((x) => x.position > lastFilled) || null;
-      if (next) { cur = next; isNext = true; } else { cur = at(lastFilled) || steps[steps.length - 1]; }
+      nextOfDone = steps.find((x) => x.position > lastFilled) || null;
+      if (nextOfDone) { cur = nextOfDone; isNext = true; } else { cur = at(lastFilled) || steps[steps.length - 1]; }
     } else {
       const doing = at(Math.max(curStepPos, lastFilled)) || at(curStepPos) || steps[0];
       if (doing && hoursOf(doing) > 0) {
@@ -1368,7 +1372,10 @@ async function renderHome() {
       dur: durOf(cur),
       isNext: isNext,
       why: aiWhy[r.id] || '',
-      aiTxt: aiLabel[r.id] || '',
+      aiTxt: aiLabel[r.id] || (progressed && lastDoneStep && nextOfDone
+        ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
+          + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
+        : ''),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
