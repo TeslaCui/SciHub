@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.75.0';
+const APP_VERSION = '0.76.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1073,6 +1073,7 @@ async function renderHome() {
   // 结果按「步骤事实签名」缓存；函数没部署 / 断网 / 没额度时，全部走下面已有的本地规则兜底。
   const aiLabel = {};      // runId -> AI 给的待办文案（如「等待下一步：酸洗」）
   const aiHours = {};      // runId -> AI 给的时长（小时）
+  const aiKind = {};       // runId -> AI 给的 kind（doing＝正在等这一步；wait＝只提醒下一步）
 
   const planDurAt = (r, pos) => {
     const byPlan = planDur[r.plan_id] || {};
@@ -1097,6 +1098,7 @@ async function renderHome() {
       aiWhy[id] = String((t && t.reason) || '');
       aiLabel[id] = String((t && t.label) || '');
       aiHours[id] = Number((t && t.dueInHours) || 0) || 0;
+      aiKind[id] = String((t && t.kind) || '');
     });
   };
 
@@ -1131,7 +1133,7 @@ async function renderHome() {
     }).filter((x) => x.steps.length);
     if (!runs.length) return;
 
-    const sig = runs.map((x) => x.id + ':' + x.currentStep + ':' + x.steps.map((s) =>
+    const sig = 'v3|' + runs.map((x) => x.id + ':' + x.currentStep + ':' + x.steps.map((s) =>
       s.position + s.filled + '|' + s.planDuration).join(',')).join('~');
     const cacheKey = 'scihub.todos.' + runs.map((x) => x.id).join('-');
 
@@ -1312,9 +1314,13 @@ async function renderHome() {
         if (next) { cur = next; isNext = true; } else { cur = doing; }
       }
     }
-    let hours = hoursOf(cur);
-    // AI 给了时长就用它的（它在「过夜」「隔天」这类语义上更准）
-    if (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) hours = aiHours[r.id];
+    // 只有「正停在这一步、且这一步本身是等待/持续过程」才显示时间；
+    // 「等下一步动手操作」（如热解做完该酸洗了）只提醒，不显示时间 —— 也就不会出现「已超时」。
+    let hours = 0;
+    const waitingHere = (aiKind[r.id] === 'doing') || (!aiKind[r.id] && !isNext && hoursOf(cur) > 0);
+    if (waitingHere) {
+      hours = (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) ? aiHours[r.id] : hoursOf(cur);
+    }
 
     // 结束时间 =「这一步开始的时刻」+ 时长。开始时刻按可靠性取：
     //   ① 这一步里填过的「时间类字段」（如「反应开始时间」）—— 你亲手记的最准
@@ -1363,6 +1369,7 @@ async function renderHome() {
       isNext: isNext,
       why: aiWhy[r.id] || '',
       aiTxt: aiLabel[r.id] || '',
+      anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
         : null,
@@ -1422,16 +1429,18 @@ async function renderHome() {
 
           let whenTxt;
           if (!hasDue) {
+            // 没有时间限制：只提醒该做/在等哪一步，绝不显示超时
             whenTxt = isRun
-              ? (t.aiTxt || (t.isNext ? '等待下一步 · 没有时间限制' : '进行中 · 还没有设时长提示'))
+              ? (t.aiTxt || ('等待下一步：' + ((t.step && t.step.title) || '')))
               : '随时';
           } else {
-            const sameDay = t.due.toDateString() === today.toDateString();
-            // fmtText 返回的是「日期 时间」，非今天时不要再拼一次 hhmm（否则会显示成 2026-09-14 10:26 10:26）
-            whenTxt = (sameDay ? '今天 ' + hhmm(t.due) : fmtText(t.due.toISOString())) + ' · '
-              + (overdue
-                ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
-                : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟'));
+            // 有时间限制：开始时间 · 持续时间 · 结束时间 · 距结束的倒计时（过期则显示超时多久）
+            const leftTxt = overdue
+              ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
+              : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟');
+            whenTxt = (t.anchorText ? '开始 ' + t.anchorText + ' · ' : '')
+              + (t.dur ? '持续 ' + t.dur + ' · ' : '')
+              + '结束 ' + fmtText(t.due.toISOString()) + ' · ' + leftTxt;
           }
 
           return '<div class="todo-item' + (overdue ? ' overdue' : '') + '">'
@@ -1447,8 +1456,7 @@ async function renderHome() {
                 }).join('；') + '</span>'
               : '')
             + '<em>' + whenTxt + '</em>'
-            // AI 为什么这么判（方便对照：如果判错了，一眼能看出它依据的是哪一步的什么痕迹）
-            + (t.why ? '<span class="hc-meta" title="AI 判断依据">AI：' + esc(t.why) + '</span>' : '')
+            // AI 判据不在卡片上显示（要看时把鼠标停在卡片上，见 title）
             + '</div>'
             // 自动项（来自进行中的实验）不能在这里删 —— 它跟着实验走；
             // 手动项才有删除按钮。
