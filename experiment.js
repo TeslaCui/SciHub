@@ -1240,51 +1240,174 @@
 
   const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {}, urlErrors: {}, drift: { fields: [] } };
 
-  /* 对比「本次实验的快照」与「方案当前内容」，找出方案里新增的字段。
-     用途：方案更新后提醒用户 —— 这些参数是实验开始之后才加进方案的，快照里没有。 */
-  async function planDrift(r) {
-    if (!r || !r.plan_id) return { fields: [] };
-    const { data: planSteps } = await client.from(STEP).select('position,fields').eq('plan_id', r.plan_id).order('position');
-    if (!planSteps || !planSteps.length) return { fields: [] };
+  /* 对比「本次实验」与「方案当前内容」，给出步骤级差异 —— 用来实时提示「是否与方案同步」。
+     覆盖五种情况：方案新增的步骤、方案已删的步骤、内容改过的步骤、
+     新增的数据字段，以及「方案删掉了某个字段、但实验里已经填了值」。
+     返回 { same, added:[], removed:[], changed:[], fieldAdded:[], fieldRemoved:[] } */
+  async function planDiff(r) {
+    const empty = { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
+    if (!r || !r.plan_id) return empty;
 
-    const runKeys = new Set();
-    run.steps.forEach((s) => (s.fields || []).forEach((f) => runKeys.add(s.position + '::' + fieldKey(f.label))));
+    const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+    if (!planSteps || !planSteps.length) return empty;   // 方案一步不剩时不当成「不同步」
 
-    const added = [];
-    planSteps.forEach((ps) => {
-      (ps.fields || []).forEach((f) => {
-        if (runKeys.has(ps.position + '::' + fieldKey(f.label))) return;
-        added.push({ position: ps.position, label: f.label, unit: f.unit || '' });
+    const byPos = {};
+    (run.steps || []).forEach((s) => { byPos[s.position] = s; });
+    const planByPos = {};
+    planSteps.forEach((p) => { planByPos[p.position] = p; });
+
+    // 方案有、实验没有 → 需要补
+    const added = planSteps.filter((p) => !byPos[p.position])
+      .map((p) => ({ position: p.position, title: p.title }));
+    // 实验有、方案没有 → 方案里删掉了
+    const removed = (run.steps || []).filter((s) => !planByPos[s.position])
+      .map((s) => ({ position: s.position, title: s.title }));
+
+    const changed = [];
+    const fieldAdded = [];
+    planSteps.forEach((p) => {
+      const s = byPos[p.position];
+      if (!s) return;
+
+      const what = [];
+      if (String(s.title || '') !== String(p.title || '')) what.push('标题');
+      if (String(s.instruction || '') !== String(p.instruction || '')) what.push('说明');
+      if (String(s.notice || '') !== String(p.notice || '')) what.push('注意事项');
+      if (String(s.pyro_seq || '') !== String(p.pyro_seq || '')) what.push('热解程序');
+      if (what.length) changed.push({ position: p.position, title: p.title, what: what.join('、') });
+
+      const keys = new Set((s.fields || []).map((f) => fieldKey(f.label)));
+      (p.fields || []).forEach((f) => {
+        if (keys.has(fieldKey(f.label))) return;
+        fieldAdded.push({ position: p.position, label: f.label, unit: f.unit || '' });
       });
     });
-    return { fields: added };
+
+    // 方案里删掉了某个字段、但实验里已经填过值 → 值还在，只是方案不再有这个字段。
+    // 必须提醒用户：否则他会以为数据丢了，或者继续照旧字段填。
+    const fieldRemoved = [];
+    (run.steps || []).forEach((s) => {
+      const ps = planByPos[s.position];
+      if (!ps) return;                                    // 整步被删的情况另有提示，这里不重复
+      const planKeys = new Set((ps.fields || []).map((f) => fieldKey(f.label)));
+      const vals = s.values || {};
+      (s.fields || []).forEach((f) => {
+        if (planKeys.has(fieldKey(f.label))) return;
+        const v = vals[f.label];
+        if (v == null || String(v).trim() === '') return;  // 没填过值的静默去掉，不必打扰
+        fieldRemoved.push({ position: s.position, label: f.label, value: String(v) });
+      });
+    });
+
+    return {
+      same: !added.length && !removed.length && !changed.length
+        && !fieldAdded.length && !fieldRemoved.length,
+      added: added, removed: removed, changed: changed,
+      fieldAdded: fieldAdded, fieldRemoved: fieldRemoved,
+    };
   }
 
-  /* 把方案里新增的字段补进本次实验 —— 只追加，已有填写数据一律不动 */
-  async function syncRunFields() {
-    const drift = (run.drift && run.drift.fields) || [];
-    if (!drift.length) return;
+  /* 立即把本次实验与方案对齐：补上方案新增的步骤与字段、更新改过的内容。
+     （方案里已删的步骤不在这里删 —— 那要丢数据，得在保存方案时确认，避免这里误删正在填的内容。） */
+  async function syncRunNow() {
+    const r = run.data;
+    if (!r || !r.plan_id) return;
 
+    setStatus('正在与方案同步…');
     try {
-      for (const item of drift) {
-        const s = run.steps.find((x) => x.position === item.position);
-        if (!s) continue;
+      const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+      if (!planSteps || !planSteps.length) { setStatus('这个方案没有步骤，无法同步。', 'warn'); return; }
 
-        const have = new Set((s.fields || []).map((f) => fieldKey(f.label)));
-        if (have.has(fieldKey(item.label))) continue;
+      const byPos = {};
+      run.steps.forEach((s) => { byPos[s.position] = s; });
+      let n = 0;
 
-        s.fields = (s.fields || []).concat([{ label: item.label, unit: item.unit }]);
-        const { error } = await client.from(RUN_STEP).update({ fields: s.fields }).eq('id', s.id);
+      for (const ps of planSteps) {
+        const s = byPos[ps.position];
+
+        // 方案新增的步骤 → 补进本次实验
+        if (!s) {
+          const { data: made, error } = await client.from(RUN_STEP).insert({
+            user_id: state.user.id,
+            run_id: run.id,
+            position: ps.position,
+            title: ps.title,
+            instruction: ps.instruction || '',
+            notice: ps.notice || '',
+            pyro_seq: ps.pyro_seq || '',
+            fields: ps.fields || [],
+            values: {},
+            images: [],
+            status: 'pending',
+          }).select().single();
+          if (error) throw error;
+          run.steps.push(made);
+          n += 1;
+          continue;
+        }
+
+        const newFields = ps.fields || [];
+        const values = migrateStepValues(s.fields || [], newFields, s.values, null);
+        const next = {
+          title: ps.title || s.title,
+          instruction: ps.instruction || '',
+          notice: ps.notice || '',
+          pyro_seq: ps.pyro_seq || '',
+          fields: newFields,
+          values: values,
+        };
+
+        const before = JSON.stringify([s.title, s.instruction, s.notice, s.pyro_seq || '', s.fields || [], s.values]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
+        if (before === after) continue;
+
+        const { error } = await client.from(RUN_STEP).update(next).eq('id', s.id);
         if (error) throw error;
+        Object.assign(s, next);
+        n += 1;
       }
 
-      run.drift = { fields: [] };
-      setStatus('已按最新方案补齐参数，原有数据未改动。', 'ok');
+      run.steps.sort((a, b) => a.position - b.position);
+      run.drift = { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
+      setStatus(n ? ('已与方案同步，更新了 ' + n + ' 处。') : '已经和方案一致，无需改动。', 'ok');
       drawRun();
     } catch (err) {
-      console.error('[SciHub] 补齐参数失败：', err);
-      setStatus('补齐失败：' + errorText(err), 'error');
+      console.error('[SciHub] 同步失败：', err);
+      setStatus('同步失败：' + errorText(err), 'error');
     }
+  }
+
+  /* 方案里删掉的字段、而实验里已经填过值 → 弹一次提醒，点「知道了」后记住，不再重复弹。
+     数据本身还在（导出时照样写进 Word），只是方案里已经没有这个字段了。 */
+  function maybeWarnRemovedFields() {
+    const list = (run.drift && run.drift.fieldRemoved) || [];
+    if (!list.length) return;
+
+    const sig = list.map((x) => x.position + ':' + x.label).sort().join('|');
+    const key = 'scihub.removedFields.' + run.id;
+    let seen = '';
+    try { seen = window.localStorage.getItem(key) || ''; } catch (_e) { /* 隐私模式下忽略 */ }
+    if (seen === sig) return;      // 同一批字段已经提醒过，不再打扰
+
+    openModal('方案里删掉了这些数据字段', [
+      '<p class="hint small">下面这些字段在方案里已经被删除，但本次实验里还留着当时填的值。</p>',
+      '<div class="lost-list">',
+      list.map((x) => '<div class="lost-row">'
+        + '<b>第 ' + (x.position + 1) + ' 步 · ' + esc(x.label) + '</b>'
+        + '<span>已填：' + esc(x.value) + '</span>'
+        + '</div>').join(''),
+      '</div>',
+      '<p class="hint small">数据不会丢 —— 导出实验记录时这些字段仍会照常写进 Word。只是方案里没有它们了，以后新建的实验也不会再有这几项。</p>',
+    ].join(''), [
+      {
+        label: '知道了',
+        primary: true,
+        onClick: () => {
+          try { window.localStorage.setItem(key, sig); } catch (_e) { /* 忽略 */ }
+          closeModal();
+        },
+      },
+    ]);
   }
 
   async function renderRun(runId) {
@@ -1302,7 +1425,7 @@
     run.pos = Math.min(r.current_step || 0, Math.max(0, run.steps.length - 1));
     run.urls = {};
     run.urlErrors = {};
-    run.drift = { fields: [] };
+    run.drift = { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
 
     // 步骤上关联到的其它实验：把标题一次性查出来，界面上直接显示名字
     run.linked = {};
@@ -1329,11 +1452,14 @@
       }
     }
 
-    // 方案后续被更新过？记录差异，供界面提醒用户手动补参数
-    try { run.drift = await planDrift(r); } catch (err) { console.warn('[SciHub] 差异检查失败：', err); }
+    // 与方案对齐检查：方案后来增/删/改过步骤就会记下差异，界面顶部实时提示
+    try { run.drift = await planDiff(r); } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
 
-    subscribeRun(runId);   // 多端实时同步
+    subscribeRun(runId);          // 多端实时同步（本实验的填写内容）
+    subscribePlan(r.plan_id);     // 方案被改动时，立刻重新做一次对齐检查
     drawRun();
+    // 方案里删掉的字段、而实验里已经填过值 → 弹一次提醒（点过「知道了」就不再弹）
+    maybeWarnRemovedFields();
   }
 
   /* ── 多端实时同步：订阅这条实验的 run_steps 变化 ───────── */
@@ -1371,6 +1497,46 @@
     runChannel = null;
   }
 
+  /* 订阅「方案步骤」的变化：方案（别的端或本端保存）改了步骤时，
+     立刻重做一次对齐检查 —— 界面上的「是否同步」提示就能实时更新。 */
+  let planChannel = null;
+
+  function subscribePlan(planId) {
+    unsubscribePlan();
+    if (!planId) return;
+    try {
+      planChannel = client
+        .channel('plan-steps-' + planId)
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'plan_steps', filter: 'plan_id=eq.' + planId,
+        }, async () => {
+          if (!run.data || run.data.plan_id !== planId) return;
+          if (run.saveTimer) return;          // 本机正在输入时先不打扰
+          try {
+            const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', run.id).order('position');
+            if (steps) run.steps = steps;
+            run.drift = await planDiff(run.data);
+            drawRun();
+            setStatus(
+              run.drift.same ? '已与方案同步。' : '方案有改动，与本次实验不一致 —— 点上方「立即同步」即可对齐。',
+              run.drift.same ? 'ok' : 'warn'
+            );
+          } catch (err) {
+            console.warn('[SciHub] 方案变化后重新检查失败：', err);
+          }
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn('[SciHub] 方案订阅失败：', err);
+    }
+  }
+
+  function unsubscribePlan() {
+    if (!planChannel) return;
+    try { client.removeChannel(planChannel); } catch (_error) { /* 忽略 */ }
+    planChannel = null;
+  }
+
   /* 这一步是否已经「有进展」：填了数据、附了照片、写了备注，或标记完成。
      用来算「实验进行位置」—— 它和「当前浏览位置」是两回事。 */
   function stepHasProgress(x) {
@@ -1400,7 +1566,21 @@
 
     const isLast = run.pos === total - 1;
     const resumed = (run.data.current_step || 0) === run.pos && run.pos > 0;
-    const drift = (run.drift && run.drift.fields) || [];
+    const d = run.drift || { same: true, added: [], removed: [], changed: [], fieldAdded: [] };
+
+    // 与方案的同步状态：不一致时把差异逐条列出来，配一个「立即同步」
+    const diffRows = [];
+    if (d.added.length) diffRows.push('方案新增 ' + d.added.length + ' 步：' + d.added.map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.title) + '」').join('、'));
+    if (d.removed.length) diffRows.push('方案已删 ' + d.removed.length + ' 步（实验里还有）：' + d.removed.map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.title) + '」').join('、'));
+    if (d.changed.length) diffRows.push('内容有改动 ' + d.changed.length + ' 步：' + d.changed.map((x) => '第 ' + (x.position + 1) + ' 步（' + esc(x.what) + '）').join('、'));
+    if (d.fieldAdded.length) {
+      const show = d.fieldAdded.slice(0, 6).map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.label) + '」').join('、');
+      diffRows.push('方案新增 ' + d.fieldAdded.length + ' 个数据字段：' + show + (d.fieldAdded.length > 6 ? ' 等' : ''));
+    }
+    if (d.fieldRemoved.length) {
+      const show = d.fieldRemoved.slice(0, 6).map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.label) + '」').join('、');
+      diffRows.push('方案已删 ' + d.fieldRemoved.length + ' 个字段（已填的值仍保留）：' + show + (d.fieldRemoved.length > 6 ? ' 等' : ''));
+    }
 
     host.innerHTML = [
       '<div class="run-head">',
@@ -1435,16 +1615,19 @@
       '<div class="hc-meta run-status">已进行到 <b>第 ' + (reached + 1) + ' 步</b> · 正在浏览 第 ' + (run.pos + 1) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
-      drift.length ? [
-        '<div class="drift">',
-        '  <div class="drift-body">',
-        '    <b>方案已更新：' + drift.length + ' 个参数不在本次实验里</b>',
-        '    <span>' + drift.map((d) => '第 ' + (d.position + 1) + ' 步「' + esc(d.label) + (d.unit ? '（' + esc(d.unit) + '）' : '') + '」').join('、') + '</span>',
-        '    <em>本次实验沿用开始时的版本，已填数据不受影响。可点右侧「补齐参数」把它们加进来，再手动填写数值。</em>',
-        '  </div>',
-        '  <button type="button" class="ghost" id="run-sync-fields">补齐参数</button>',
-        '</div>',
-      ].join('\n') : '',
+      // 实时同步状态：一致 → 一行淡字；不一致 → 提示条 + 逐条差异 + 「立即同步」
+      d.same
+        ? '<div class="sync-ok">✓ 与方案一致</div>'
+        : [
+            '<div class="sync-diff">',
+            '  <div class="sync-body">',
+            '    <b>⚠ 与方案不一致</b>',
+            diffRows.map((t) => '    <span>' + t + '</span>').join('\n'),
+            '    <em>点「立即同步」把方案的新增步骤 / 新字段补进本次实验，已填的数据不会动。</em>',
+            '  </div>',
+            '  <button type="button" class="ghost" id="run-sync-now">立即同步</button>',
+            '</div>',
+          ].join('\n'),
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
@@ -1581,8 +1764,8 @@
 
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
-    const syncBtn = $('run-sync-fields');
-    if (syncBtn) syncBtn.addEventListener('click', syncRunFields);
+    const syncBtn = $('run-sync-now');
+    if (syncBtn) syncBtn.addEventListener('click', syncRunNow);
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];

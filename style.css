@@ -387,18 +387,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .notice-mini .notice-item { color: #9a3412; font-size: 13px; padding-left: 12px; }
 .notice-mini .notice-item::before { top: .58em; width: 4px; height: 4px; }
 
-/* ── 「方案已更新」提醒（蓝色，与橙色的注意事项区分开）──── */
-.drift {
+/* ── 与方案的同步状态（执行界面顶部）──────────────────── */
+/* 一致：一行淡字；不一致：橙色提示条 + 逐条差异 + 「立即同步」按钮 */
+.sync-ok { color: var(--muted); font-size: 12px; margin: 8px 0 2px; }
+.sync-diff {
   display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap;
-  margin-bottom: 12px; padding: 12px 14px;
-  background: #eff6ff; border: 1px solid #93c5fd; border-left: 4px solid #2563eb;
-  border-radius: 10px;
+  margin: 10px 0 4px; padding: 12px 14px;
+  background: rgba(245, 158, 11, .10); border: 1px solid rgba(245, 158, 11, .40);
+  border-left: 4px solid #f59e0b; border-radius: 10px;
 }
-.drift-body { flex: 1; min-width: 200px; }
-.drift-body b { display: block; color: #1e40af; font-size: 13px; margin-bottom: 4px; }
-.drift-body span { display: block; color: #1e3a8a; font-size: 13px; line-height: 1.6; word-break: break-word; }
-.drift-body em { display: block; margin-top: 5px; font-style: normal; color: #3730a3; font-size: 12px; line-height: 1.5; }
-.drift .ghost { flex-shrink: 0; align-self: center; }
+.sync-body { flex: 1; min-width: 200px; }
+.sync-body b { display: block; color: #b45309; font-size: 13px; margin-bottom: 4px; }
+.sync-body span { display: block; color: #92400e; font-size: 12px; line-height: 1.6; word-break: break-word; }
+.sync-body em { display: block; margin-top: 5px; font-style: normal; color: #a16207; font-size: 12px; line-height: 1.5; }
+.sync-diff .ghost { flex-shrink: 0; align-self: center; }
+
+/* 「方案里删掉了这些数据字段」提醒弹窗里的清单 */
+.lost-list { margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.lost-row { padding: 8px 10px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.6; }
+.lost-row:first-child { border-top: none; }
+.lost-row b { display: block; }
+.lost-row span { display: block; color: var(--muted); margin-top: 2px; word-break: break-word; }
 
 /* 整卡可点（首页方案卡片 / 方案列表卡片）：操作都收在详情页，这里只负责点进去 */
 .home-card.clickable, .plan-card.clickable { cursor: pointer; }
