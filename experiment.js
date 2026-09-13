@@ -870,6 +870,16 @@
     host.innerHTML = [
       '<div class="section-title">' + esc(plan.title) + '</div>',
       '  <p class="hint small" style="margin-bottom:12px">' + (plan.source ? '来源：' + esc(plan.source) + ' · ' : '') + '共 ' + (steps || []).length + ' 个步骤</p>',
+
+      // 操作按钮放在标题下方（原来在页面最底部，要滚到底才点得到）
+      '<div class="run-actions" style="margin-top:0;margin-bottom:16px;flex-wrap:wrap">',
+      '  <button type="button" class="primary" id="plan-start">开始实验</button>',
+      '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
+      canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
+      '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
+      '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
+      '</div>',
+
       (steps || []).map((s) => [
         '<div class="step-card">',
         '  <div class="step-head"><span class="step-no">' + (s.position + 1) + '</span>',
@@ -883,13 +893,6 @@
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
         '</div>',
       ].join('\n')).join(''),
-      '<div class="run-actions">',
-      '  <button type="button" class="primary" id="plan-start">开始实验</button>',
-      '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
-      canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
-      '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
-      '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
-      '</div>',
     ].join('\n');
 
     $('plan-back').addEventListener('click', () => route('plans'));
