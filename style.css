@@ -780,10 +780,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 
 /* ── 主页：实验日历（热力图）+ 待办计时 ───────────────── */
-/* 顶部两块并排；窄屏自动上下堆叠 */
-.home-top { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 6px; }
+/* 两块并排且等高；窄屏自动上下堆叠（日历在上、待办在下） */
+.home-top { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 6px; }
 .home-top > .cal-card { flex: 0 0 auto; margin-bottom: 0; }
-.home-top > .todo-card { flex: 1 1 280px; min-width: 240px; margin-bottom: 0; }
+.home-top > .todo-card { flex: 1 1 280px; min-width: 240px; margin-bottom: 0; display: flex; flex-direction: column; }
 
 /* 待办 · 计时提醒 */
 .todo-card { padding: 14px 16px; }

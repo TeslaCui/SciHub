@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.35.0';
+const APP_VERSION = '0.36.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -942,20 +942,29 @@ async function renderHome() {
     });
   }
 
+  // 待办（自动）：所有「进行中」的实验都会进来，取当前步骤作为一条待办。
+  // 步骤里写了时长提示（如「反应 24 小时」）才推算结束时间；没写就只标「进行中」。
   const todos = [];
   (runs || []).forEach((r) => {
     const steps = stepMap[r.id] || [];
     const cur = steps.find((x) => x.position === (r.current_step || 0)) || steps[0];
     const hours = parseDurationHours(cur && cur.duration_hint);
-    if (hours > 0) {
-      todos.push({
-        run: r,
-        step: cur,
-        due: new Date(new Date(r.started_at).getTime() + hours * 3600 * 1000),
-      });
-    }
+    todos.push({
+      kind: 'run',
+      run: r,
+      step: cur,
+      hours: hours,
+      due: hours > 0 ? new Date(new Date(r.started_at).getTime() + hours * 3600 * 1000) : null,
+    });
   });
-  todos.sort((a, b) => a.due - b.due);   // 快到期的排前面
+
+  // 有结束时间的排前面（超时的最前），没设时长的排最后
+  todos.sort((a, b) => {
+    if (a.due && b.due) return a.due - b.due;
+    if (a.due) return -1;
+    if (b.due) return 1;
+    return 0;
+  });
 
   const hhmm = (d) => p2(d.getHours()) + ':' + p2(d.getMinutes());
   const todoCard = [
@@ -963,23 +972,32 @@ async function renderHome() {
     '  <div class="todo-title">待办 · 计时提醒</div>',
     todos.length
       ? todos.map((t) => {
-          const leftMin = Math.round((t.due - Date.now()) / 60000);
-          const overdue = leftMin < 0;
+          const hasDue = !!t.due;
+          const leftMin = hasDue ? Math.round((t.due - Date.now()) / 60000) : 0;
+          const overdue = hasDue && leftMin < 0;
           const absMin = Math.abs(leftMin);
-          const leftTxt = overdue
-            ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
-            : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟');
-          const sameDay = t.due.toDateString() === today.toDateString();
+
+          let whenTxt;
+          if (!hasDue) {
+            whenTxt = '进行中 · 这一步未设时长提示';
+          } else {
+            const sameDay = t.due.toDateString() === today.toDateString();
+            whenTxt = (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' 结束 · '
+              + (overdue
+                ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
+                : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟'));
+          }
+
           return '<div class="todo-item' + (overdue ? ' overdue' : '') + '">'
             + '<div class="todo-main">'
             + '<b>' + esc(t.run.title) + '</b>'
             + '<span>' + esc((t.step && t.step.title) || '') + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '') + '</span>'
-            + '<em>' + (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' 结束 · ' + leftTxt + '</em>'
+            + '<em>' + whenTxt + '</em>'
             + '</div>'
             + '<button type="button" class="ghost tiny" data-run="' + t.run.id + '">去处理</button>'
             + '</div>';
         }).join('')
-      : '<div class="todo-empty">暂无需要计时的步骤。<br><span>步骤里写了「约 24 小时」这类时长提示，就会在这里提醒结束时间。</span></div>',
+      : '<div class="todo-empty">当前没有进行中的实验。<br><span>开始一个实验后，它的当前步骤会自动出现在这里。</span></div>',
     '</div>',
   ].join('\n');
 

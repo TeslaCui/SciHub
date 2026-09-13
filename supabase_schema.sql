@@ -386,3 +386,36 @@ select
      where table_schema = 'public'
        and table_name in ('plan_steps', 'run_steps')
        and column_name = 'pyro_seq')                                as pyro_seq_columns;
+
+-- ─────────────────────────────────────────────────────────────
+-- 手动待办（新增）
+-- 主页待办区里，「进行中的实验」是自动算出来的（不入库）；
+-- 用户还可以自己加与实验无关的事：「明天 10:00 取样品」「周五送测 XRD」。
+-- 这张表只存手动添加的那些。幂等：表已存在则跳过。
+-- ─────────────────────────────────────────────────────────────
+create table if not exists public.research_todos (
+  id          bigserial primary key,
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  title       text not null,
+  due_at      timestamptz,
+  done        boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+
+-- 与其它表一致：只允许读写自己那一行
+alter table public.research_todos enable row level security;
+
+drop policy if exists "research_todos own rows" on public.research_todos;
+create policy "research_todos own rows" on public.research_todos
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create index if not exists research_todos_user_idx on public.research_todos (user_id, created_at desc);
+
+-- 自检 8：应看到 todos_table=1 且 todos_rls=1
+select
+  (select count(*) from information_schema.tables
+     where table_schema = 'public' and table_name = 'research_todos')             as todos_table,
+  (select count(*) from pg_tables
+     where schemaname = 'public' and tablename = 'research_todos' and rowsecurity) as todos_rls;
