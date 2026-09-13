@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.80.0';
+const APP_VERSION = '0.81.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1335,12 +1335,10 @@ async function renderHome() {
       }
     }
     // 只有「正停在这一步、且这一步本身是等待/持续过程」才显示时间；
-    // 「已经完成、正在等下一步」一律不显示时间（即使 AI 说 doing 也不信）—— v5 的「已超时」就是这么来的。
+    // 「已经完成、正在等下一步」一律不显示时间；时间完全由本地规则定 ——
+    // 不再采信 AI 的 kind / hours（浏览器里残留的旧 AI 缓存会把步骤和时长带到错误的地方）。
     let hours = 0;
-    const waitingHere = !progressed && ((aiKind[r.id] === 'doing') || (!aiKind[r.id] && hoursOf(cur) > 0));
-    if (waitingHere) {
-      hours = (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) ? aiHours[r.id] : hoursOf(cur);
-    }
+    if (!progressed && hoursOf(cur) > 0) hours = hoursOf(cur);
 
     // 结束时间 =「这一步开始的时刻」+ 时长。开始时刻按可靠性取：
     //   ① 这一步里填过的「时间类字段」（如「反应开始时间」）—— 你亲手记的最准
@@ -1388,7 +1386,7 @@ async function renderHome() {
       dur: durOf(cur),
       isNext: isNext,
       why: aiWhy[r.id] || '',
-      aiTxt: aiLabel[r.id] || (progressed && lastDoneStep && nextOfDone
+      aiTxt: (progressed && lastDoneStep && nextOfDone
         ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
           + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
         : ''),
