@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.78.0';
+const APP_VERSION = '0.80.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -995,22 +995,38 @@ async function renderHome() {
   const localProgressPos = (r) => {
     const steps = stepMap[r.id] || [];
     let lastFilled = -1;
-    steps.forEach((x, k) => { if (filledCount(x) > 0) lastFilled = k; });
+    steps.forEach((x, k) => { if (stepTouchedAny(x)) lastFilled = k; });
     return Math.max(Number(r.current_step) || 0, lastFilled);
   };
   // 「进行到第几步」是事实，用本地确定性规则（填过数据的最后一步 与 上次停在的位置 取靠后者）。
   // AI 有时会把「第 N 步」当 position 返回、差一位就把界面带偏 —— 这里不再让它覆盖定位。
   const runProgressPos = (r) => localProgressPos(r);
 
-  // 「这一步填了几项数据」：只数真正的记录项，**时间类字段（日期/时间/时刻）不算** ——
-  // 「顺手记了个开始时间」不等于这一步做过了。v5 的第 8/9 步就是这样被当成"做过"的：
-  // 它们的 values 里只有时间被写过，实际粉末、体积、pH 这些一个都没填。
+  // 「这一步填了几项数据」：只数真正的记录项 ——
+  // ① 时间类字段（日期/时间/时刻）不算（顺手记个开始时间不等于做过这一步）；
+  // ② **旧字段的残留值不算**：方案改版后旧键会留在 values 里（如 v5 第 9 步存着
+  //    「样品编号」「热解后样品质量」，但当前字段是分取 ICP/XRD…），不把这类旧键过滤掉，
+  //    进度就会被旧数据推到根本没做的步骤。
   const isTimeKey = (k) => /日期|时间|时刻/.test(String(k || ''));
+  const fieldLabelSet = (x) => new Set(((x && x.fields) || []).map((f) => f.label));
   const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
+    if (!fieldLabelSet(x).has(k)) return false;
     if (isTimeKey(k)) return false;
     const v = (x.values || {})[k];
     return String(v == null ? '' : v).trim() !== '';
   }).length;
+
+  // 「这一步有没有任何填写」（时间字段也算，但只认这一步当前字段里的键）—— 用于定位进度。
+  // v5.1 的反应步只填了「反应开始时间」这类时间字段，如果不算时间，进度会退到上一步。
+  const stepTouchedAny = (x) => {
+    const labels = fieldLabelSet(x);
+    const vals = (x && x.values) || {};
+    return Object.keys(vals).some((k) => {
+      if (!labels.has(k)) return false;
+      const v = vals[k];
+      return String(v == null ? '' : v).trim() !== '';
+    });
+  };
 
   const aiProgressKey = (id) => 'scihub.aiProgress.' + id;
 
@@ -1298,7 +1314,7 @@ async function renderHome() {
     //      （v5.1：正在第 3 步反应 24 h → 显示「第 3 步 · 快速加入与室温反应 · 约 24 小时」+ 结束时间）
     const curStepPos = Number(r.current_step) || 0;
     let lastFilled = -1;
-    steps.forEach((x, k) => { if (filledCount(x) > 0) lastFilled = k; });
+    steps.forEach((x, k) => { if (stepTouchedAny(x)) lastFilled = k; });
     const progressed = lastFilled >= 0 && curStepPos > lastFilled;
     const at = (pos) => steps.find((x) => x.position === pos) || null;
 
@@ -1501,8 +1517,7 @@ async function renderHome() {
             let reached = 0;
             st.forEach((s, i) => {
               if (i > cut) return;
-              const hasData = Object.keys(s.values || {}).some((k) => String((s.values || {})[k] || '').trim());
-              if (s.status === 'done' || (s.images || []).length || String(s.note || '').trim() || hasData) reached = i;
+              if (s.status === 'done' || (s.images || []).length || String(s.note || '').trim() || stepTouchedAny(s)) reached = i;
             });
             const total = linkAt == null ? Math.max(1, st.length) : linkAt;   // 合并点之前的步数
             return {
