@@ -421,6 +421,22 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 /* 关联弹窗里的「＋ 再加一条」 */
 .lk-more { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .lk-more span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+/* 加关联的按钮收成一个「＋」：小方按钮，点它是再加一条 */
+.lk-more button { min-width: 34px; padding: 4px 8px; font-size: 15px; line-height: 1; }
+
+/* 关联弹窗里的「已建立的关联」清单：列到哪一步关联了哪个实验，每条一个 ✕ 可单独删除 */
+.lk-added { margin-top: 10px; }
+.lk-added-head { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+.lk-added-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 9px; margin-bottom: 4px;
+  border: 1px solid var(--line); border-radius: 8px;
+  font-size: 12px; line-height: 1.6;
+}
+.lk-added-info { flex: 1; min-width: 0; word-break: break-word; }
+.lk-added-info em { font-style: normal; color: var(--brand); }
+.lk-added-info i { font-style: normal; color: var(--muted); margin-left: 4px; }
+.lk-del { flex-shrink: 0; min-width: 28px; }
 
 /* 整卡可点（首页方案卡片 / 方案列表卡片）：操作都收在详情页，这里只负责点进去 */
 .home-card.clickable, .plan-card.clickable { cursor: pointer; }

@@ -3245,16 +3245,22 @@
       '</label>',
       '<div id="lk-check" class="lk-check"></div>',
 
+      // 已经建立的关联：列出来，每条后面一个 ✕，可以单独删掉
+      '<div class="lk-added" id="lk-added"></div>',
+
       // 一个实验常要和好几个实验合并（第 5 步→v6、第 7 步→v7…）：
       // 这条存完不关窗，直接接着加下一条。
       '<div class="lk-more">',
-      '  <button type="button" class="ghost tiny" id="lk-more-btn">＋ 再加一条关联（到另一个实验）</button>',
-      '  <span>可以连续加多条：换个步骤再选另一个实验，就能把 3 个以上的实验并成一组。</span>',
+      '  <button type="button" class="ghost tiny" id="lk-more-btn" title="再加一条关联（到另一个实验）" aria-label="再加一条关联">＋</button>',
+      '  <span>点「＋」再加一条：换个步骤、再选另一个实验，就能把 3 个以上的实验并成一组。</span>',
       '</div>',
     ].join(''), [
       { label: '取消', onClick: closeModal },
-      // 初始是「检测关联」：点它才调 AI；通过后按钮才变成「确认关联」
-      { label: '检测关联', primary: true, onClick: () => doCheck() },
+      // 一个按钮两种身份：还没检测通过时点它＝调 AI 检测；通过之后点它＝真的写库关联。
+      // 注意：openModal 给按钮绑的 onClick 只绑一次，改文案不会换函数，
+      // 所以这里必须用分发器判断「现在该做哪件事」—— 之前写死成 doCheck()，
+      // 导致检测通过后点「确认关联」又跑一遍检测，关联永远建不上。
+      { label: '检测关联', primary: true, onClick: () => (verified ? doLink(false) : doCheck()) },
     ]);
 
     let otherSteps = [];
@@ -3444,6 +3450,96 @@
 
     const moreBtn = $('lk-more-btn');
     if (moreBtn) moreBtn.addEventListener('click', () => doLink(true));
+
+    // ── 已经建立的关联：列出来，逐条可删 ─────────────────────
+    // 一个实验可能关联了好几个（第 5 步→v6、第 7 步→v7…），加错了要能一条一条撤。
+    let myLinks = [];
+
+    const linkLabel = (id) => {
+      const o = (others || []).find((x) => Number(x.id) === Number(id));
+      return (o && o.title) || ('实验 #' + id);
+    };
+
+    const renderMyLinks = () => {
+      const host = $('lk-added');
+      if (!host) return;
+      if (!myLinks.length) { host.innerHTML = ''; return; }
+
+      host.innerHTML = [
+        '<div class="lk-added-head">已建立的关联（' + myLinks.length + ' 条）</div>',
+        myLinks.map((x) => [
+          '<div class="lk-added-row">',
+          '  <span class="lk-added-info">',
+          '    <b>第 ' + (x.position + 1) + ' 步</b>：' + esc(x.title || ''),
+          '    <em>→ ' + esc(linkLabel(x.link_run_id)) + '</em>',
+          (x.link_note ? '<i>' + esc(x.link_note) + '</i>' : ''),
+          '  </span>',
+          '  <button type="button" class="ghost tiny lk-del" data-unlink="' + x.id + '" title="删除这条关联" aria-label="删除这条关联">✕</button>',
+          '</div>',
+        ].join('')),
+      ].join('');
+
+      host.querySelectorAll('[data-unlink]').forEach((b) => {
+        b.addEventListener('click', () => unlinkOne(Number(b.dataset.unlink)));
+      });
+    };
+
+    // 删掉一条关联：只清这一步的 link_run_id / link_note ——
+    // 步骤本身、已填数据、进度都不动（和「取消关联」整组撤回不同，这里只撤一条）
+    const unlinkOne = async (stepId) => {
+      const st = myLinks.find((x) => x.id === stepId);
+      if (!st) return;
+
+      const ok = window.confirm(
+        '删除这条关联吗？\n\n'
+        + '第 ' + (st.position + 1) + ' 步「' + (st.title || '') + '」→「' + linkLabel(st.link_run_id) + '」\n\n'
+        + '只解除这一条关联：两边实验的步骤、已填数据和进度都不会动。'
+      );
+      if (!ok) return;
+
+      const { error } = await client.from(RUN_STEP)
+        .update({ link_run_id: null, link_note: null })
+        .eq('id', stepId);
+      if (error) {
+        console.error('[SciHub] 删除关联失败：', error);
+        setStatus('删除关联失败：' + errorText(error), 'error');
+        return;
+      }
+
+      // 本端缓存同步，免得「再加一条」时还拿着旧状态
+      const local = (mySteps || []).find((s) => s.id === stepId);
+      if (local) { local.link_run_id = null; local.link_note = null; }
+
+      setStatus('已删除第 ' + (st.position + 1) + ' 步的关联。', 'ok');
+      await loadMyLinks();
+    };
+
+    const loadMyLinks = async () => {
+      const { data, error } = await client.from(RUN_STEP)
+        .select('id,position,title,link_run_id,link_note')
+        .eq('run_id', runId)
+        .not('link_run_id', 'is', null)
+        .order('position');
+      if (error) {
+        console.warn('[SciHub] 读取已建立的关联失败：', error);
+        myLinks = [];
+      } else {
+        myLinks = data || [];
+      }
+
+      // 已关联的实验可能不在「可关联列表」里（比如已完成或被过滤），补查一下标题
+      const missing = [...new Set(myLinks.map((x) => x.link_run_id))]
+        .filter((id) => !(others || []).some((o) => Number(o.id) === Number(id)));
+      if (missing.length) {
+        const { data: extra } = await client.from(RUN).select('id,title').in('id', missing);
+        // others 是 const，只能 push 不能重新赋值；走到这里时它一定是非空数组
+        (extra || []).forEach((r) => others.push(r));
+      }
+
+      renderMyLinks();
+    };
+
+    await loadMyLinks();
   }
 
   /* 取消关联：把这一组里所有实验之间的 link 全部清掉，
