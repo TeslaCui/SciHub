@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.67.0';
+const APP_VERSION = '0.68.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1053,6 +1053,80 @@ async function renderHome() {
     }
   };
 
+  // ── 待办改由独立的 Edge Function「todo-plan」制订 ─────────────
+  // 把每个进行中实验的「事实」发过去（是否标完成、填了几项、方案里这一步的时长、各步时间戳），
+  // 由它返回：进行到第几步 + 待办文案 + 还要等多久。规则集中在服务端 —— 以后调提示词不用动前端。
+  // 结果按「步骤事实签名」缓存；函数没部署 / 断网 / 没额度时，全部走下面已有的本地规则兜底。
+  const aiLabel = {};      // runId -> AI 给的待办文案（如「等待下一步：酸洗」）
+  const aiHours = {};      // runId -> AI 给的时长（小时）
+
+  const planDurAt = (r, pos) => {
+    const byPlan = planDur[r.plan_id] || {};
+    if (byPlan[pos]) return byPlan[pos];
+    const st = (stepMap[r.id] || []).find((x) => x.position === pos);
+    return st ? String(st.duration_hint || '').trim() : '';
+  };
+
+  const applyAiTodos = (list) => {
+    (list || []).forEach((t) => {
+      const id = Number(t && t.runId);
+      if (!Number.isFinite(id)) return;
+      if (Number.isFinite(Number(t.step))) aiPos[id] = Number(t.step);
+      aiWhy[id] = String((t && t.reason) || '');
+      aiLabel[id] = String((t && t.label) || '');
+      aiHours[id] = Number((t && t.dueInHours) || 0) || 0;
+    });
+  };
+
+  const fetchAiTodos = async (groupList) => {
+    const runs = groupList.map((g) => {
+      const head = g.runs[0];
+      const steps = stepMap[head.id] || [];
+      return {
+        id: head.id,
+        title: head.title,
+        startedAt: head.started_at,
+        currentStep: Number(head.current_step) || 0,
+        steps: steps.map((x) => ({
+          position: x.position,
+          title: x.title || '',
+          done: x.status === 'done',
+          filled: filledCount(x),
+          planDuration: planDurAt(head, x.position),
+          stepStartedAt: x.started_at || '',
+          stepUpdatedAt: x.updated_at || '',
+        })),
+      };
+    }).filter((x) => x.steps.length);
+    if (!runs.length) return;
+
+    const sig = runs.map((x) => x.id + ':' + x.currentStep + ':' + x.steps.map((s) =>
+      s.position + (s.done ? 'd' : '') + s.filled + '|' + s.planDuration).join(',')).join('~');
+    const cacheKey = 'scihub.todos.' + runs.map((x) => x.id).join('-');
+
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (raw) {
+        const c = JSON.parse(raw);
+        if (c && c.sig === sig && Array.isArray(c.todos)) { applyAiTodos(c.todos); return; }
+      }
+    } catch (_e) { /* 隐私模式下忽略缓存 */ }
+
+    try {
+      const { data, error } = await client.functions.invoke('todo-plan', {
+        body: { now: new Date().toISOString(), runs: runs },
+      });
+      if (error || !data || !Array.isArray(data.todos)) {
+        console.warn('[SciHub] todo-plan 不可用（未部署 / 报错），待办改用本地规则：', error);
+        return;
+      }
+      applyAiTodos(data.todos);
+      try { window.localStorage.setItem(cacheKey, JSON.stringify({ sig: sig, todos: data.todos })); } catch (_e) { /* 忽略 */ }
+    } catch (err) {
+      console.warn('[SciHub] todo-plan 调用失败，待办改用本地规则：', err);
+    }
+  };
+
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
@@ -1112,11 +1186,8 @@ async function renderHome() {
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
   // 「写了时长且还没完成」的步骤 —— 因为「反应 24 小时」这类等待常常写在后面的步骤里
   // （例：现在第 2 步，流程要求从开始算 24h 后必须结束）。
-  // 让 AI 判断每个进行中的实验「现在做哪一步」（结果带缓存，状态没变不会重复调用）
-  await Promise.all(groups.map(async (g) => {
-    const head = g.runs[0];
-    if (head) aiPos[head.id] = await judgeProgress(head);
-  }));
+  // 让 todo-plan 制订待办（进行到第几步 + 文案 + 等多久），失败则下面用本地规则兜底
+  await fetchAiTodos(groups);
 
   const todos = [];
   groups.forEach((g) => {
@@ -1153,7 +1224,9 @@ async function renderHome() {
     } else {
       cur = doing || steps[0];
     }
-    const hours = hoursOf(cur);
+    let hours = hoursOf(cur);
+    // AI 给了时长就用它的（它在「过夜」「隔天」这类语义上更准）
+    if (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) hours = aiHours[r.id];
 
     // 结束时间 =「这一步开始的时刻」+ 它的时长。时间锚点按可靠性依次退化：
     //   本步 started_at（点「完成并下一步」开始这步时会写）
@@ -1182,6 +1255,7 @@ async function renderHome() {
       dur: durOf(cur),
       isNext: isNext,
       why: aiWhy[r.id] || '',
+      aiTxt: aiLabel[r.id] || '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
         : null,
@@ -1242,7 +1316,7 @@ async function renderHome() {
           let whenTxt;
           if (!hasDue) {
             whenTxt = isRun
-              ? (t.isNext ? '等待下一步 · 没有时间限制' : '进行中 · 还没有设时长提示')
+              ? (t.aiTxt || (t.isNext ? '等待下一步 · 没有时间限制' : '进行中 · 还没有设时长提示'))
               : '随时';
           } else {
             const sameDay = t.due.toDateString() === today.toDateString();
