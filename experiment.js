@@ -2762,41 +2762,76 @@
 
     const showPreview = (el, s) => {
       if (!el) return;
+      const ins = s ? String(s.instruction || '') : '';
       el.innerHTML = s
         ? '<b>' + esc(s.title) + '</b>'
-          + (s.instruction ? '<span>' + esc(String(s.instruction).slice(0, 160)) + '</span>' : '')
+          + (ins ? '<span>' + esc(ins.slice(0, 100)) + (ins.length > 100 ? '…' : '') + '</span>' : '')
           + (s.duration_hint ? '<em>时长提示：' + esc(s.duration_hint) + '</em>' : '')
         : '';
     };
 
-    const runCheck = () => {
+    // 用 AI 判断两边「从所选步骤往后」是不是同一套操作。
+    // AI 不可用（函数没部署 / 断网 / 没配额）时退回本地逐条比对，功能不至于不可用。
+    const runCheck = async () => {
       const a = mySteps || [];
       const ai = myIdx();
       const oi = otherIdx();
-      const r = compareTail(a, otherSteps, ai, oi);
       const box = $('lk-check');
       const okBtn = document.querySelector('.modal-card .actions .primary');
 
       showPreview($('lk-mine-view'), a[ai]);
       showPreview($('lk-other-view'), otherSteps[oi]);
 
-      if (r.same) {
-        box.className = 'lk-check ok';
-        box.innerHTML = '✓ 从这一步起后续 ' + r.nx + ' 个步骤完全一致，可以合并。';
-        if (okBtn) okBtn.disabled = false;
-      } else {
-        box.className = 'lk-check bad';
-        const mineTxt = r.x ? '第 ' + (ai + r.at + 1) + ' 步「' + esc(r.x.title) + '」' : '（本实验已无后续步骤）';
-        const otherTxt = r.y ? '第 ' + (oi + r.at + 1) + ' 步「' + esc(r.y.title) + '」' : '（对方已无后续步骤）';
-        box.innerHTML = '<b>⚠ 后续步骤不一致，不能关联合并</b>'
-          + '<span>从所选步骤往后第 ' + (r.at + 1) + ' 步开始不同：</span>'
-          + '<span>· 本实验：' + mineTxt + '</span>'
-          + '<span>· 对方：' + otherTxt + '</span>'
-          + '<span>剩余步骤数 ' + r.nx + ' / ' + r.ny
-          + (r.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点。</span>';
-        if (okBtn) okBtn.disabled = true;
+      const local = compareTail(a, otherSteps, ai, oi);
+
+      box.className = 'lk-check';
+      box.innerHTML = '正在用 AI 比对后续步骤…';
+      if (okBtn) okBtn.disabled = true;
+
+      let verdict = null;
+      try {
+        const { data, error } = await client.functions.invoke('check-link', {
+          body: {
+            mine: a.slice(ai).map((s) => s.title),
+            other: otherSteps.slice(oi).map((s) => s.title),
+          },
+        });
+        if (!error && data && typeof data.same === 'boolean') verdict = data;
+      } catch (err) {
+        console.warn('[SciHub] check-link 调用失败，退回本地比对：', err);
       }
-      return r;
+
+      const aiUsed = !!verdict;
+      const same = aiUsed ? verdict.same : local.same;
+
+      if (same) {
+        box.className = 'lk-check ok';
+        box.innerHTML = '✓ 后续步骤一致，可以合并。'
+          + '<span>' + esc(aiUsed
+            ? (verdict.reason || ('AI 判定两边从这一步起是同一套操作（共 ' + local.nx + ' 步）。'))
+            : ('本地比对：从这一步起后续 ' + local.nx + ' 个步骤完全一致。')) + '</span>';
+        if (okBtn) okBtn.disabled = false;
+        return same;
+      }
+
+      // 不一致：优先用 AI 给的理由，没有就退回本地差异
+      box.className = 'lk-check bad';
+      const mineTxt = aiUsed && verdict.mine
+        ? esc(verdict.mine)
+        : (local.x ? '第 ' + (ai + local.at + 1) + ' 步「' + esc(local.x.title) + '」' : '（本实验已无后续步骤）');
+      const otherTxt = aiUsed && verdict.other
+        ? esc(verdict.other)
+        : (local.y ? '第 ' + (oi + local.at + 1) + ' 步「' + esc(local.y.title) + '」' : '（对方已无后续步骤）');
+
+      box.innerHTML = '<b>⚠ 后续步骤不一致，不能关联合并</b>'
+        + (aiUsed && verdict.reason ? '<span>' + esc(verdict.reason) + '</span>' : '')
+        + '<span>· 本实验：' + mineTxt + '</span>'
+        + '<span>· 对方：' + otherTxt + '</span>'
+        + '<span>剩余步骤数 ' + local.nx + ' / ' + local.ny
+        + (local.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点。</span>'
+        + (aiUsed ? '' : '<span>（AI 校验暂时不可用，以上是本地比对结果）</span>');
+      if (okBtn) okBtn.disabled = true;
+      return same;
     };
 
     const loadOtherSteps = async () => {
@@ -2806,7 +2841,7 @@
       sel.innerHTML = otherSteps.length
         ? otherSteps.map((s, i) => '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('')
         : '<option value="0">（对方没有步骤）</option>';
-      runCheck();
+      await runCheck();
     };
 
     $('lk-mine').addEventListener('change', runCheck);
@@ -2815,8 +2850,8 @@
     await loadOtherSteps();
 
     async function doLink() {
-      const r = runCheck();
-      if (!r.same) return;                       // 不一致就不写库
+      const same = await runCheck();
+      if (!same) return;                         // 不一致就不写库
       const st = (mySteps || [])[myIdx()];
       if (!st) return;
       const note = ($('lk-note').value || '').trim();
