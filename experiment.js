@@ -339,17 +339,24 @@
       return;
     }
 
-    const cards = (data || []).map((p) => [
-      '<article class="plan-card clickable" data-open="' + p.id + '" role="button" tabindex="0" title="查看方案详情">',
-      '  <div class="hc-main">',
-      '    <div class="hc-title">' + esc(p.title) + '</div>',
-      '    <div class="hc-meta">' + (p.source ? esc(p.source) + ' · ' : '') + fmt(p.created_at) + '</div>',
-      '  </div>',
-      planNeedsUpgrade(p)
-        ? '  <span class="ver-stale" title="这个方案还没用上最新的解析功能，可在详情页重新解析">可重新解析</span>'
-        : '',
-      '</article>',
-    ].join('\n')).join('');
+    const cards = (data || []).map((p) => {
+      const stale = planNeedsUpgrade(p);
+      return [
+        '<article class="plan-card clickable" data-open="' + p.id + '" role="button" tabindex="0" title="查看方案详情">',
+        '  <div class="hc-main">',
+        '    <div class="hc-title">' + esc(p.title) + '</div>',
+        '    <div class="hc-meta">' + (p.source ? esc(p.source) + ' · ' : '') + fmt(p.created_at) + '</div>',
+        '  </div>',
+        // 有新版本时，像页脚那个版本号提示一样标出来，更新按钮就放在提示旁边
+        stale ? [
+          '  <div class="plan-stale">',
+          '    <span class="ver-stale" title="这个方案是用旧版解析规则导入的">有新版本</span>',
+          '    <button type="button" class="ver-update" data-upgrade="' + p.id + '" title="按最新规则重新解析（不影响已开始的实验）">更新</button>',
+          '  </div>',
+        ].join('\n') : '',
+        '</article>',
+      ].join('\n');
+    }).join('');
 
     host.innerHTML = [
       '<div class="section-title">实验方案</div>',
@@ -367,11 +374,28 @@
       if (f) startImport(f);
     });
 
-    // 整卡进详情。操作按钮一律不放在这里 —— 开始实验 / 编辑 / 重命名 / 删除 / 重新解析
-    // 全部收在方案详情页，保证每个功能只有一个入口。
+    // 「更新」按钮：就地按最新规则重建，然后刷新列表（补齐后提示与按钮会一起消失）
+    host.querySelectorAll('[data-upgrade]').forEach((b) => b.addEventListener('click', async (e) => {
+      e.stopPropagation();   // 别让这次点击冒泡成「进详情」
+      b.disabled = true;
+      try {
+        await upgradePlan(Number(b.dataset.upgrade));
+        listPlans();
+      } catch (err) {
+        console.error('[SciHub] 更新方案失败：', err);
+        setStatus('更新失败：' + errorText(err), 'error');
+        b.disabled = false;
+      }
+    }));
+
+    // 卡片其余区域（以及键盘 Enter / 空格）进详情。
+    // 开始实验 / 编辑 / 重命名 / 删除 仍只放在方案详情页。
     host.querySelectorAll('[data-open]').forEach((card) => {
       const open = () => route('plan', Number(card.dataset.open));
-      card.addEventListener('click', open);
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;   // 点按钮时不跳转
+        open();
+      });
       card.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
       });

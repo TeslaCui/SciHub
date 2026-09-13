@@ -295,6 +295,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .plan-card .hc-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .plan-card .hc-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
+/* 方案卡片上的「有新版本 + 更新」：与页脚版本号同一套视觉语言 */
+.plan-stale { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.plan-stale .ver-stale { margin-left: 0; }
+
 .plan-start {
   font-size: 13px; padding: 7px 13px; border-radius: 8px; border: none;
   background: var(--brand); color: var(--brand-ink); font-weight: 600; white-space: nowrap;
