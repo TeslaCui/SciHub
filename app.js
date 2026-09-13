@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.57.0';
+const APP_VERSION = '0.58.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -850,7 +850,7 @@ async function renderHome() {
   if (monthRuns.length) {
     const { data: rs } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint,link_run_id,link_note,'
+      .select('run_id,position,title,status,link_run_id,link_note,'
         + 'values,images,note,started_at,updated_at')
       .in('run_id', monthRuns.map((r) => r.id))
       .order('position');
@@ -961,7 +961,7 @@ async function renderHome() {
   if (needSteps.length) {
     const { data: more } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint,link_run_id,link_note,'
+      .select('run_id,position,title,status,link_run_id,link_note,'
         + 'values,images,note,started_at,updated_at')
       .in('run_id', needSteps)
       .order('position');

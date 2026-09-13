@@ -1218,7 +1218,6 @@
         instruction: s.instruction,
         notice: s.notice || '',
         pyro_seq: s.pyro_seq || '',
-        duration_hint: s.duration_hint || '',
         fields: s.fields,
         values: {},
         images: [],
