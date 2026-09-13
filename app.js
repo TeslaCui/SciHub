@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.61.0';
+const APP_VERSION = '0.62.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -991,6 +991,15 @@ async function renderHome() {
     return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
   };
 
+  // 一次实验「进行到第几步」= 「上次停在的位置」与「实际填过数据的最后一步」里更靠后的那个。
+  // 待办和「进行中的实验」卡片都用它 —— 以前两处各算各的，才会出现一个说第 9 步、一个说第 7 步。
+  const runProgressPos = (r) => {
+    const steps = stepMap[r.id] || [];
+    let reached = -1;
+    steps.forEach((x, k) => { if (stepTouched(x)) reached = k; });
+    return Math.max(Number(r.current_step) || 0, reached);
+  };
+
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
@@ -1055,11 +1064,8 @@ async function renderHome() {
     // 一组只出一条待办，用组里第一个实验代表整组
     const r = g.runs[0];
     const steps = stepMap[r.id] || [];
-    // 实际进度：最后一个「填过数据 / 传过照片 / 写过备注 / 标完成」的步骤。
-    // 不能只看 current_step（那只是上次停在的位置，平时不动）。
-    let reached = -1;
-    steps.forEach((x, k) => { if (stepTouched(x)) reached = k; });
-    const curPos = Math.max(Number(r.current_step) || 0, reached);
+    // 当前进行到第几步：与主页卡片共用同一套判断
+    const curPos = runProgressPos(r);
 
     // 这一步的「时长」：优先用实验步骤自己的；实验里没有就回方案里同一步骤取
     const durOf = (x) => {
@@ -1180,7 +1186,8 @@ async function renderHome() {
               : '随时';
           } else {
             const sameDay = t.due.toDateString() === today.toDateString();
-            whenTxt = (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' · '
+            // fmtText 返回的是「日期 时间」，非今天时不要再拼一次 hhmm（否则会显示成 2026-09-14 10:26 10:26）
+            whenTxt = (sameDay ? '今天 ' + hhmm(t.due) : fmtText(t.due.toISOString())) + ' · '
               + (overdue
                 ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
                 : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟'));
@@ -1256,7 +1263,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join(' ⇄ ') + ' <span class="link-tag">关联实验</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中'
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             // 合并后只保留这一栏；子实验收在下拉里，提示直接挂在下拉标题上
