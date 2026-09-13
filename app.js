@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.77.0';
+const APP_VERSION = '0.78.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1319,9 +1319,9 @@ async function renderHome() {
       }
     }
     // 只有「正停在这一步、且这一步本身是等待/持续过程」才显示时间；
-    // 「等下一步动手操作」（如热解做完该酸洗了）只提醒，不显示时间 —— 也就不会出现「已超时」。
+    // 「已经完成、正在等下一步」一律不显示时间（即使 AI 说 doing 也不信）—— v5 的「已超时」就是这么来的。
     let hours = 0;
-    const waitingHere = (aiKind[r.id] === 'doing') || (!aiKind[r.id] && !isNext && hoursOf(cur) > 0);
+    const waitingHere = !progressed && ((aiKind[r.id] === 'doing') || (!aiKind[r.id] && hoursOf(cur) > 0));
     if (waitingHere) {
       hours = (Number.isFinite(aiHours[r.id]) && aiHours[r.id] > 0) ? aiHours[r.id] : hoursOf(cur);
     }
