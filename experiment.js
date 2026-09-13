@@ -2489,6 +2489,52 @@
     }
   }
 
+  /* 收集这条实验所属的「合并组」信息：参与哪些实验、合并点在哪、各实验合并点之前的步骤。
+     导出时用它把整组的记录写进同一份文档，保证导出内容和关联信息对得上。 */
+  async function collectMergeInfo(runId) {
+    try {
+      if (!runId) return null;
+
+      const { data: outLinks } = await client.from(RUN_STEP)
+        .select('run_id,position,title,link_run_id,link_note')
+        .eq('run_id', runId).not('link_run_id', 'is', null);
+      const { data: inLinks } = await client.from(RUN_STEP)
+        .select('run_id,position,title,link_run_id,link_note')
+        .eq('link_run_id', runId);
+
+      const links = [];
+      (outLinks || []).forEach((x) => links.push({ from: runId, to: x.link_run_id, position: x.position, note: x.link_note }));
+      (inLinks || []).forEach((x) => links.push({ from: x.run_id, to: runId, position: x.position, note: x.link_note }));
+      if (!links.length) return null;               // 没有任何关联就是普通实验
+
+      const ids = [...new Set(links.reduce((acc, l) => acc.concat([l.from, l.to]), [runId]))];
+
+      const { data: runs } = await client.from(RUN).select('id,title,started_at,current_step,status').in('id', ids);
+      const runById = {};
+      (runs || []).forEach((r) => { runById[r.id] = r; });
+
+      // 合并点 = 组里最早被关联的那一步
+      const linkAt = Math.min.apply(null, links.map((l) => l.position));
+
+      // 各实验在合并点之前的步骤（连同填写的数据与照片信息）
+      const stepsById = {};
+      for (const id of ids) {
+        const { data: st } = await client.from(RUN_STEP).select('*').eq('run_id', id).order('position');
+        stepsById[id] = (st || []).filter((x) => x.position <= linkAt);
+      }
+
+      return {
+        links: links,
+        runs: ids.map((id) => runById[id]).filter(Boolean),
+        linkAt: linkAt,
+        stepsById: stepsById,
+      };
+    } catch (err) {
+      console.warn('[SciHub] 合并信息收集失败：', err);
+      return null;
+    }
+  }
+
   /* 把一次实验的步骤、填写数据与照片导成 Word 文档。
      不传 runId 就导当前打开的那次；传了则按 id 读进来（主页的导出按钮用）。 */
   async function exportRunData(runId) {
@@ -2518,20 +2564,94 @@
       // 只导出到「当前进行到的步骤」为止 —— 还没做到的那几步不写进文档。
       // 实验做完时 current_step 已是最后一步，所以等于全量导出。
       const cur = Math.min(Math.max(0, Number(run.data.current_step) || 0), run.steps.length - 1);
-      const upto = run.steps.filter((s) => s.position <= cur);
 
       setStatus('正在生成 Word 文档…');
       const title = run.data.title || '实验';
+
+      // 这条实验属于某个合并组吗？属于的话，文档要保留整组的完整信息：
+      // 参与哪些实验、在哪些步骤合并、各实验合并前的记录、以及合并后的数据。
+      const merge = await collectMergeInfo(runId || run.id);
+
+      // 合并组里这份文档是「主实验」：合并点之前的记录归到第一部分，这里只写合并点之后
+      const from = merge ? merge.linkAt : 0;
+      const upto = run.steps.filter((s) => s.position <= cur && s.position >= from);
+
       const paras = [
-        { text: title, bold: true, size: 16, align: 'center' },
+        { text: (merge ? '实验记录（合并） · ' : '实验记录 · ') + title, bold: true, size: 16, align: 'center' },
         {
           text: '开始于 ' + fmt(run.data.started_at)
             + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中')
-            + ' · 已做到第 ' + (cur + 1) + ' 步（共 ' + run.steps.length + ' 步）',
+            + ' · 已做到第 ' + (cur + 1) + ' 步（共 ' + run.steps.length + ' 步）'
+            + (merge ? ' · 合并组共 ' + merge.runs.length + ' 个实验' : ''),
           size: 9, align: 'center',
         },
         '',
       ];
+
+      // ── 一、合并信息 ──
+      if (merge) {
+        paras.push({ text: '合并信息', bold: true, size: 13, color: '0F766E' });
+        paras.push({ text: '参与合并的实验（共 ' + merge.runs.length + ' 个）：', size: 10 });
+        merge.runs.forEach((x) => {
+          paras.push({ text: '　· ' + x.title + (x.id === run.data.id ? '　（本次导出的主实验）' : ''), size: 10 });
+        });
+        paras.push({
+          text: '合并点：第 ' + (merge.linkAt + 1) + ' 步 —— 到这一步为止各实验分开做，之后合在一起做。',
+          size: 10,
+        });
+        merge.links.forEach((l) => {
+          const a = (merge.runs.find((x) => x.id === l.from) || {}).title || '';
+          const b = (merge.runs.find((x) => x.id === l.to) || {}).title || '';
+          paras.push({
+            text: '　⇄ 第 ' + (l.position + 1) + ' 步：「' + a + '」→「' + b + '」' + (l.note ? '　' + l.note : ''),
+            size: 10,
+          });
+        });
+        paras.push('');
+
+        // ── 二、各实验在合并点之前的记录 ──
+        paras.push({ text: '一、合并前的各实验记录（截至合并点）', bold: true, size: 13, color: '0F766E' });
+        paras.push('');
+        for (const x of merge.runs) {
+          const st = merge.stepsById[x.id] || [];
+          paras.push({
+            text: '【' + x.title + '】开始于 ' + fmt(x.started_at) + ' · 合并点前共 ' + st.length + ' 个步骤',
+            bold: true, size: 11,
+          });
+          if (!st.length) paras.push({ text: '　（合并点之前还没有记录）', size: 9, color: '666666' });
+
+          st.forEach((s) => {
+            paras.push({ text: '　第 ' + (s.position + 1) + ' 步　' + (s.title || ''), bold: true, size: 10, color: '333333' });
+            if (s.pyro_seq) paras.push({ text: '　　热解程序：' + s.pyro_seq, size: 9 });
+            if (s.duration_hint) paras.push({ text: '　　时长提示：' + s.duration_hint, size: 9 });
+            noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '　　⚠ ' + line, size: 9, color: 'C05621' }));
+            if (s.instruction) paras.push({ text: '　　' + s.instruction, size: 9 });
+
+            const f = s.fields || [];
+            const v = s.values || {};
+            if (f.length) {
+              f.forEach((fd) => {
+                const val = v[fd.label];
+                paras.push({
+                  text: '　　· ' + fd.label + '：' + ((val == null || val === '') ? '（未填）' : val)
+                    + (fd.unit ? ' ' + fd.unit : ''),
+                  size: 9,
+                });
+              });
+            }
+            if (String(s.note || '').trim()) paras.push({ text: '　　备注：' + s.note, size: 9 });
+            const nImg = (s.images || []).filter((i) => !isVideoFile(i)).length;
+            if (nImg) paras.push({ text: '　　（照片 ' + nImg + ' 张，见下方主实验部分）', size: 9, color: '666666' });
+          });
+          paras.push('');
+        }
+
+        // ── 三、合并后的数据记录（当前这次实验） ──
+        paras.push({ text: '二、合并后的数据记录（' + title + '）', bold: true, size: 13, color: '0F766E' });
+        paras.push({ text: '从第 ' + (merge.linkAt + 1) + ' 步开始的共同操作与数据：', size: 9, color: '666666' });
+        if (!upto.length) paras.push({ text: '　（还没做到合并点，暂无合并后的记录）', size: 9, color: '666666' });
+        paras.push('');
+      }
 
       let imgTotal = 0;
 
