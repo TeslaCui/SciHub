@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.40.0';
+const APP_VERSION = '0.41.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -830,11 +830,12 @@ async function renderHome() {
   }
 
   // 悬停要能看到具体步骤，所以把涉及到的实验的步骤一并取回来
+  // （link_run_id / link_note 用于把「关联实验」合并成一条显示）
   const stepMap = {};
   if (monthRuns.length) {
     const { data: rs } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint')
+      .select('run_id,position,title,status,duration_hint,link_run_id,link_note')
       .in('run_id', monthRuns.map((r) => r.id))
       .order('position');
     (rs || []).forEach((x) => {
@@ -933,7 +934,7 @@ async function renderHome() {
   if (needSteps.length) {
     const { data: more } = await client
       .from('run_steps')
-      .select('run_id,position,title,status,duration_hint')
+      .select('run_id,position,title,status,duration_hint,link_run_id,link_note')
       .in('run_id', needSteps)
       .order('position');
     (more || []).forEach((x) => {
@@ -942,12 +943,42 @@ async function renderHome() {
     });
   }
 
+  // ── 把有关联的实验合并成一组 ──────────────────────────
+  // 某实验的某个步骤 link_run_id 指向另一个实验时（如 v5.1 第 7 步酸洗 → v5），
+  // 这两个实验算一组：主页只显示一条「关联实验」，同一件事不重复出现。
+  const groups = [];
+  const groupOf = {};   // runId -> 组下标
+
+  (runs || []).forEach((r) => {
+    if (groupOf[r.id] != null) return;
+    const gi = groups.length;
+    groups.push({ runs: [r], links: [] });
+    groupOf[r.id] = gi;
+
+    // 顺着 link_run_id 把能连上的实验都并进来
+    const queue = [r.id];
+    while (queue.length) {
+      const id = queue.shift();
+      (stepMap[id] || []).forEach((s) => {
+        if (!s.link_run_id || groupOf[s.link_run_id] != null) return;
+        const other = (runs || []).find((x) => x.id === s.link_run_id);
+        if (!other) return;
+        groupOf[other.id] = gi;
+        groups[gi].runs.push(other);
+        groups[gi].links.push({ from: id, to: other.id, note: s.link_note, position: s.position });
+        queue.push(other.id);
+      });
+    }
+  });
+
   // 待办（自动）：所有「进行中」的实验都会进来，每个实验一条。
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
   // 「写了时长且还没完成」的步骤 —— 因为「反应 24 小时」这类等待常常写在后面的步骤里
   // （例：现在第 2 步，流程要求从开始算 24h 后必须结束）。
   const todos = [];
-  (runs || []).forEach((r) => {
+  groups.forEach((g) => {
+    // 一组只出一条待办，用组里第一个实验代表整组
+    const r = g.runs[0];
     const steps = stepMap[r.id] || [];
     const curPos = r.current_step || 0;
 
@@ -960,6 +991,7 @@ async function renderHome() {
     todos.push({
       kind: 'run',
       run: r,
+      group: g,
       step: cur,
       hours: hours,
       due: hours > 0 ? new Date(new Date(r.started_at).getTime() + hours * 3600 * 1000) : null,
@@ -1001,7 +1033,11 @@ async function renderHome() {
     todos.length
       ? todos.map((t) => {
           const isRun = t.kind === 'run';
-          const title = isRun ? t.run.title : t.title;
+          const multi = isRun && t.group && t.group.runs.length > 1;
+          // 关联实验合并成一条：标题用「A ⇄ B」
+          const title = isRun
+            ? (multi ? t.group.runs.map((x) => x.title).join(' ⇄ ') : t.run.title)
+            : t.title;
           const sub = isRun
             ? '第 ' + (((t.step && t.step.position) != null ? t.step.position : 0) + 1) + ' 步'
               + (t.step && t.step.title ? ' · ' + esc(t.step.title) : '')
@@ -1028,6 +1064,14 @@ async function renderHome() {
             + '<div class="todo-main">'
             + '<b>' + esc(title) + '</b>'
             + '<span>' + sub + '</span>'
+            + (multi && t.group.links.length
+              ? '<span class="link-summary">⇄ ' + t.group.links.map((l) => {
+                  const a = (t.group.runs.find((x) => x.id === l.from) || {}).title || '';
+                  const b = (t.group.runs.find((x) => x.id === l.to) || {}).title || '';
+                  return '第 ' + (l.position + 1) + ' 步「' + esc(a) + ' → ' + esc(b) + '」'
+                    + (l.note ? '：' + esc(l.note) : '');
+                }).join('；') + '</span>'
+              : '')
             + '<em>' + whenTxt + '</em>'
             + '</div>'
             // 自动项（来自进行中的实验）不能在这里删 —— 它跟着实验走；
@@ -1045,21 +1089,36 @@ async function renderHome() {
   host.innerHTML = [
     '<div class="home-top">' + calendar + todoCard + '</div>',
     '<div class="section-title">进行中的实验</div>',
-    runs.length
-      ? runs.map((r) => [
-          '<article class="home-card">',
-          '  <div class="hc-main">',
-          '    <div class="hc-title">' + esc(r.title) + '</div>',
-          '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中</div>',
-          '  </div>',
-          '  <div class="hc-actions">',
-          '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
-          '    <button type="button" class="icon-btn" data-run-export="' + r.id + '" title="导出为 Word 文档" aria-label="导出">' + ICON_DOC + '</button>',
-          '    <button type="button" class="icon-btn" data-run-rename="' + r.id + '" data-name="' + esc(r.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
-          '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>',
-          '  </div>',
-          '</article>',
-        ].join('\n')).join('\n')
+    groups.length
+      ? groups.map((g) => {
+          const r = g.runs[0];
+          const multi = g.runs.length > 1;
+          return [
+            '<article class="home-card' + (multi ? ' linked' : '') + '">',
+            '  <div class="hc-main">',
+            '    <div class="hc-title">' + (multi
+              ? g.runs.map((x) => esc(x.title)).join(' ⇄ ') + ' <span class="link-tag">关联实验</span>'
+              : esc(r.title)) + '</div>',
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中'
+              + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
+            multi && g.links.length
+              ? '    <div class="link-summary">⇄ ' + g.links.map((l) => {
+                  const a = (g.runs.find((x) => x.id === l.from) || {}).title || '';
+                  const b = (g.runs.find((x) => x.id === l.to) || {}).title || '';
+                  return '第 ' + (l.position + 1) + ' 步「' + esc(a) + ' → ' + esc(b) + '」'
+                    + (l.note ? '：' + esc(l.note) : '');
+                }).join('；') + '</div>'
+              : '',
+            '  </div>',
+            '  <div class="hc-actions">',
+            '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
+            '    <button type="button" class="icon-btn" data-run-export="' + r.id + '" title="导出为 Word 文档" aria-label="导出">' + ICON_DOC + '</button>',
+            '    <button type="button" class="icon-btn" data-run-rename="' + r.id + '" data-name="' + esc(r.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
+            '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>',
+            '  </div>',
+            '</article>',
+          ].join('\n');
+        }).join('\n')
       : '<div class="empty">当前没有进行中的实验。上轮没做完的实验会一直留在这里，点「继续」就能接着做。</div>',
 
     '<div class="section-title">开始新的实验</div>',
