@@ -3218,26 +3218,13 @@
       return;
     }
 
-    const myOpts = (mySteps || []).map((s, i) =>
-      '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('');
-    const otherOpts = others.map((o) =>
-      '<option value="' + o.id + '">' + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
-
     openModal('关联其它实验', [
-      '<p class="hint small">两边都选「从哪一步开始合并」，系统会检查这一步之后的步骤是否一致。</p>',
+      '<p class="hint small">至少选两个实验，各自选「从哪一步开始合并」—— 这一步之后大家一起做。已选过的实验不会再出现在别的行里。</p>',
 
-      '<div class="link-pick">',
-      '  <label>本实验：' + esc((me && me.title) || '') + '</label>',
-      '  <select id="lk-mine">' + myOpts + '</select>',
-      '  <div class="lk-preview" id="lk-mine-view"></div>',
-      '</div>',
-
-      '<div class="link-pick">',
-      '  <label>关联到哪个实验</label>',
-      '  <select id="lk-other">' + otherOpts + '</select>',
-      '  <label>对方的哪一步</label>',
-      '  <select id="lk-other-step"></select>',
-      '  <div class="lk-preview" id="lk-other-view"></div>',
+      '<div class="lk-rows" id="lk-rows"></div>',
+      '<div class="lk-more">',
+      '  <button type="button" class="ghost tiny" id="lk-add-row" title="再加一个实验" aria-label="再加一个实验">＋</button>',
+      '  <span>点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。</span>',
       '</div>',
 
       '<label>关联说明',
@@ -3245,47 +3232,22 @@
       '</label>',
       '<div id="lk-check" class="lk-check"></div>',
 
-      // 已经建立的关联：列出来，每条后面一个 ✕，可以单独删掉
+      // 已经建立的关联：可以逐条删（删一条只解除这一条，不动数据和进度）
       '<div class="lk-added" id="lk-added"></div>',
-
-      // 一个实验常要和好几个实验合并（第 5 步→v6、第 7 步→v7…）：
-      // 这条存完不关窗，直接接着加下一条。
-      '<div class="lk-more">',
-      '  <button type="button" class="ghost tiny" id="lk-more-btn" title="再加一条关联（到另一个实验）" aria-label="再加一条关联">＋</button>',
-      '  <span>点「＋」再加一条：换个步骤、再选另一个实验，就能把 3 个以上的实验并成一组。</span>',
-      '</div>',
     ].join(''), [
       { label: '取消', onClick: closeModal },
-      // 一个按钮两种身份：还没检测通过时点它＝调 AI 检测；通过之后点它＝真的写库关联。
-      // 注意：openModal 给按钮绑的 onClick 只绑一次，改文案不会换函数，
-      // 所以这里必须用分发器判断「现在该做哪件事」—— 之前写死成 doCheck()，
-      // 导致检测通过后点「确认关联」又跑一遍检测，关联永远建不上。
-      { label: '检测关联', primary: true, onClick: () => (verified ? doLink(false) : doCheck()) },
+      // 一个按钮两种身份：没通过检测时点它＝调 AI 检测；通过之后点它＝真的写库关联。
+      // （openModal 给按钮绑的 onClick 只绑一次，改文案不会换函数，所以这里用分发器。）
+      { label: '检测关联', primary: true, onClick: () => (verified ? writeLinks() : doCheckAll()) },
     ]);
 
-    let otherSteps = [];
-    const myIdx = () => Number($('lk-mine').value);
-    const otherId = () => Number($('lk-other').value);
-    const otherIdx = () => Number($('lk-other-step').value);
-
-    const showPreview = (el, s) => {
-      if (!el) return;
-      const ins = s ? String(s.instruction || '') : '';
-      el.innerHTML = s
-        ? '<b>' + esc(s.title) + '</b>'
-          + (ins ? '<span>' + esc(ins.slice(0, 100)) + (ins.length > 100 ? '…' : '') + '</span>' : '')
-          + (s.duration_hint ? '<em>时长提示：' + esc(s.duration_hint) + '</em>' : '')
-        : '';
-    };
-
-    // 用 AI 判断两边「从所选步骤往后」是不是同一套操作。
-    // AI 不可用（函数没部署 / 断网 / 没配额）时退回本地逐条比对，功能不至于不可用。
-    // ── 两步走：先「检测关联」（调 AI），通过后按钮才变成「确认关联」 ──
-    // 打开弹窗、切换选项时只刷新预览，不自动调 AI（避免还没选好就消耗额度）。
+    // ── 多行编辑器：一行＝一个实验 + 该实验「从哪一步开始合并」 ──
+    // 至少两行（关联至少要两个实验）；第 3 行起右上角有 ✕ 可以删掉整行。
+    // 已经选过的实验不会再出现在别的行里 —— 同一个实验只能用一次。
+    const stepsCache = {};         // runId -> 该实验的步骤
+    let rows = [];                 // [{ runId, stepIdx }]
     let verified = false;
-    let verifiedKey = '';              // 记下哪一组选择通过了检测，换了选项就作废
-
-    const choiceKey = () => myIdx() + '|' + otherId() + '|' + otherIdx();
+    let verifiedKey = '';
 
     const primaryBtn = () => document.querySelector('.modal-card .actions .primary');
 
@@ -3296,160 +3258,223 @@
       btn.disabled = !!disabled;
     };
 
-    // 只更新两边预览；选项一变就把检测结果作废，按钮回到「检测关联」
-    const refreshPreview = () => {
-      showPreview($('lk-mine-view'), (mySteps || [])[myIdx()]);
-      showPreview($('lk-other-view'), otherSteps[otherIdx()]);
+    // 可以选的实验：本次实验 + 其它全部实验
+    const allRuns = [{ id: Number(runId), title: (me && me.title) || '本次实验', status: 'running' }]
+      .concat((others || []).map((o) => ({ id: Number(o.id), title: o.title, status: o.status })));
 
-      if (verifiedKey !== choiceKey()) verified = false;
-      setPrimary(verified ? '确认关联' : '检测关联', false);
-
-      if (!verified) {
-        const box = $('lk-check');
-        box.className = 'lk-check';
-        box.innerHTML = '选好两边后点「检测关联」，会用 AI 比对这一步之后的步骤是否一致。';
-      }
+    const runTitle = (id) => {
+      const r = allRuns.find((x) => Number(x.id) === Number(id));
+      return (r && r.title) || ('实验 #' + id);
     };
 
-    // 对方还没做到要关联的那一步？提醒一下，但不拦着
-    const reachWarn = () => {
-      let last = -1;
-      (otherSteps || []).forEach((x, i) => { if (stepHasProgress(x)) last = i; });
-      const oi = otherIdx();
-      const otherName = (((others || []).find((o) => o.id === otherId())) || {}).title || '对方实验';
-      return (oi > last)
-        ? '<span>⚠ 「' + esc(otherName) + '」目前只进行到 第 ' + (last + 2) + ' 步，还没做到要关联的 第 ' + (oi + 1)
-          + ' 步 —— 仍可关联，等它做到这一步后两边数据会合起来算。</span>'
-        : '';
+    const loadSteps = async (id) => {
+      if (stepsCache[id]) return stepsCache[id];
+      const { data } = await client.from(RUN_STEP).select('*').eq('run_id', id).order('position');
+      stepsCache[id] = data || [];
+      return stepsCache[id];
     };
 
-    /* 「检测关联」：调 AI（不可用时退回本地逐条比对）。
-       通过 → 按钮变「确认关联」，可以写库；不通过 → 按钮保持「检测关联」，把原因写在下面。 */
-    const doCheck = async () => {
-      const a = mySteps || [];
-      const ai = myIdx();
-      const oi = otherIdx();
+    const choiceKey = () => rows.map((r) => r.runId + ':' + r.stepIdx).join('|');
+
+    const tip = () => (rows.length < 2
+      ? '至少选两个实验。点下面的「＋」加一行。'
+      : '选好后点「检测关联」，会用 AI 比对各行「从所选步骤往后」的步骤是否一致。');
+
+    // 任何一个选择变了，上一次的检测结果就作废 —— 免得拿旧结论去写库
+    const invalidate = () => {
+      verified = false;
+      verifiedKey = '';
+      setPrimary('检测关联', false);
       const box = $('lk-check');
+      if (box) { box.className = 'lk-check'; box.innerHTML = tip(); }
+    };
+
+    const renderRows = () => {
+      const host = $('lk-rows');
+      if (!host) return;
+
+      const used = rows.map((r) => Number(r.runId));
+      host.innerHTML = rows.map((r, i) => {
+        // 已经在本行选中的实验保留；别的行选过的实验就不再出现
+        const expOpts = allRuns
+          .filter((o) => Number(o.id) === Number(r.runId) || used.indexOf(Number(o.id)) === -1)
+          .map((o) => '<option value="' + o.id + '"'
+            + (Number(o.id) === Number(r.runId) ? ' selected' : '') + '>'
+            + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
+
+        const steps = stepsCache[r.runId] || [];
+        const stepOpts = steps.length
+          ? steps.map((s, k) => '<option value="' + k + '"' + (k === r.stepIdx ? ' selected' : '') + '>第 '
+              + (k + 1) + ' 步：' + esc(s.title) + '</option>').join('')
+          : '<option value="0">（这个实验还没有步骤）</option>';
+
+        return [
+          '<div class="lk-row">',
+          '  <span class="lk-row-no">实验' + (i + 1) + '</span>',
+          '  <select data-pick="exp" data-row="' + i + '" aria-label="实验' + (i + 1) + '">' + expOpts + '</select>',
+          '  <select data-pick="step" data-row="' + i + '" aria-label="实验' + (i + 1) + ' 从哪一步开始合并">' + stepOpts + '</select>',
+          // 关联至少要两个实验，所以前两行不给删
+          i >= 2
+            ? '  <button type="button" class="ghost tiny lk-del" data-del-row="' + i + '" title="删掉这一行" aria-label="删掉这一行">✕</button>'
+            : '  <span class="lk-row-pad"></span>',
+          '</div>',
+        ].join('');
+      }).join('');
+
+      host.querySelectorAll('[data-pick="exp"]').forEach((sel) => {
+        sel.addEventListener('change', async () => {
+          const i = Number(sel.dataset.row);
+          rows[i].runId = Number(sel.value);
+          rows[i].stepIdx = 0;
+          await loadSteps(rows[i].runId);
+          invalidate();
+          renderRows();          // 可选实验跟着变，整块重画
+        });
+      });
+
+      host.querySelectorAll('[data-pick="step"]').forEach((sel) => {
+        sel.addEventListener('change', () => {
+          rows[Number(sel.dataset.row)].stepIdx = Number(sel.value);
+          invalidate();
+        });
+      });
+
+      host.querySelectorAll('[data-del-row]').forEach((b) => {
+        b.addEventListener('click', () => {
+          rows.splice(Number(b.dataset.delRow), 1);
+          invalidate();
+          renderRows();
+        });
+      });
+    };
+
+    const addRow = async () => {
+      const used = rows.map((r) => Number(r.runId));
+      const free = allRuns.filter((o) => used.indexOf(Number(o.id)) === -1);
+      if (!free.length) { setStatus('没有别的实验可以加了。', 'warn'); return; }
+      rows.push({ runId: Number(free[0].id), stepIdx: 0 });
+      await loadSteps(Number(free[0].id));
+      invalidate();
+      renderRows();
+    };
+
+    const addBtn = $('lk-add-row');
+    if (addBtn) addBtn.addEventListener('click', addRow);
+
+    // ── 「检测关联」：相邻两行逐对比对，全部通过才允许写库 ──
+    const doCheckAll = async () => {
+      const box = $('lk-check');
+      if (rows.length < 2) { setStatus('至少选两个实验才能关联。', 'warn'); return; }
+
+      for (let i = 0; i < rows.length; i++) {
+        const steps = await loadSteps(rows[i].runId);
+        if (!steps.length) {
+          setStatus('实验' + (i + 1) + '「' + runTitle(rows[i].runId) + '」还没有步骤，不能关联。', 'warn');
+          return;
+        }
+        if (rows[i].stepIdx > steps.length - 1) rows[i].stepIdx = steps.length - 1;
+      }
 
       verified = false;
-      refreshPreview();
       setPrimary('检测中…', true);
       box.className = 'lk-check';
-      box.innerHTML = '正在用 AI 比对后续步骤…';
+      box.innerHTML = '正在逐对比对「从所选步骤往后」的步骤…';
 
-      const local = compareTail(a, otherSteps, ai, oi);
+      const results = [];
+      for (let i = 0; i < rows.length - 1; i++) {
+        const A = stepsCache[rows[i].runId] || [];
+        const B = stepsCache[rows[i + 1].runId] || [];
+        const local = compareTail(A, B, rows[i].stepIdx, rows[i + 1].stepIdx);
 
-      let verdict = null;
-      let failReason = '';
-      try {
-        const { data, error } = await client.functions.invoke('check-link', {
-          body: {
-            mine: a.slice(ai).map((s) => s.title),
-            other: otherSteps.slice(oi).map((s) => s.title),
-          },
-        });
-        if (error) failReason = errorText(error);
-        else if (data && typeof data.same === 'boolean') verdict = data;
-        else failReason = 'AI 没有返回可用的结果';
-      } catch (err) {
-        failReason = errorText(err);
-        console.warn('[SciHub] check-link 调用失败，退回本地比对：', err);
+        let verdict = null;
+        try {
+          const { data, error } = await client.functions.invoke('check-link', {
+            body: {
+              mine: A.slice(rows[i].stepIdx).map((s) => s.title),
+              other: B.slice(rows[i + 1].stepIdx).map((s) => s.title),
+            },
+          });
+          if (!error && data && typeof data.same === 'boolean') verdict = data;
+        } catch (err) {
+          console.warn('[SciHub] check-link 调用失败，退回本地比对：', err);
+        }
+
+        results.push({ i: i, local: local, verdict: verdict, same: verdict ? verdict.same : local.same });
       }
 
-      const aiUsed = !!verdict;
-      const same = aiUsed ? verdict.same : local.same;
-
-      // 通过 → 按钮变「确认关联」
-      if (same) {
-        verified = true;
-        verifiedKey = choiceKey();
-        setPrimary('确认关联', false);
-
-        box.className = 'lk-check ok';
-        box.innerHTML = '✓ 检测通过，可以关联合并。'
-          + '<span>' + esc(aiUsed
-            ? (verdict.reason || ('AI 判定两边从这一步起是同一套操作（共 ' + local.nx + ' 步）。'))
-            : ('本地比对：从这一步起后续 ' + local.nx + ' 个步骤完全一致。')) + '</span>'
-          + (aiUsed ? '' : '<span>（AI 校验暂时不可用' + (failReason ? '：' + esc(failReason) : '') + '，已退回本地比对）</span>')
-          + reachWarn();
+      const bad = results.filter((x) => !x.same);
+      if (bad.length) {
+        setPrimary('检测关联', false);
+        box.className = 'lk-check bad';
+        box.innerHTML = '<b>⚠ 检测未通过，不能关联合并</b>'
+          + bad.map((x) => '<span>· 实验' + (x.i + 1) + ' 与 实验' + (x.i + 2)
+              + '：从所选步骤起 第 ' + (x.local.at + 1) + ' 条就不一样'
+              + '（剩余 ' + x.local.nx + ' 步 / ' + x.local.ny + ' 步）'
+              + (x.verdict && x.verdict.reason ? ' —— ' + esc(x.verdict.reason) : '')
+              + '</span>').join('')
+          + '<span>调整某一行的步骤、或换一个关联起点，再重新检测。</span>';
         return;
       }
 
-      // 不通过 → 按钮保持「检测关联」，并给出失败原因
-      setPrimary('检测关联', false);
-
-      const mineTxt = aiUsed && verdict.mine
-        ? esc(verdict.mine)
-        : (local.x ? '第 ' + (ai + local.at + 1) + ' 步「' + esc(local.x.title) + '」' : '（本实验已无后续步骤）');
-      const otherTxt = aiUsed && verdict.other
-        ? esc(verdict.other)
-        : (local.y ? '第 ' + (oi + local.at + 1) + ' 步「' + esc(local.y.title) + '」' : '（对方已无后续步骤）');
-
-      box.className = 'lk-check bad';
-      box.innerHTML = '<b>⚠ 检测未通过，不能关联合并</b>'
-        + (aiUsed && verdict.reason ? '<span>原因：' + esc(verdict.reason) + '</span>' : '')
-        + '<span>· 本实验：' + mineTxt + '</span>'
-        + '<span>· 对方：' + otherTxt + '</span>'
-        + '<span>剩余步骤数 ' + local.nx + ' / ' + local.ny
-        + (local.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点，然后重新检测。</span>'
-        + (aiUsed ? '' : '<span>（AI 校验暂时不可用' + (failReason ? '：' + esc(failReason) : '') + '，以上是本地比对结果）</span>')
-        + reachWarn();
+      verified = true;
+      verifiedKey = choiceKey();
+      setPrimary('确认关联', false);
+      box.className = 'lk-check ok';
+      box.innerHTML = '✓ 检测通过，可以关联合并。'
+        + '<span>' + results.map((x) => '实验' + (x.i + 1) + '↔实验' + (x.i + 2) + '：'
+            + (x.verdict ? 'AI 判定一致' : '本地比对一致')
+            + '（各 ' + x.local.nx + ' / ' + x.local.ny + ' 步）').join('；')
+        + '</span>';
     };
 
-    const loadOtherSteps = async () => {
-      const { data: st } = await client.from(RUN_STEP).select('*').eq('run_id', otherId()).order('position');
-      otherSteps = st || [];
-      const sel = $('lk-other-step');
-      sel.innerHTML = otherSteps.length
-        ? otherSteps.map((s, i) => '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('')
-        : '<option value="0">（对方没有步骤）</option>';
-      verified = false;
-      refreshPreview();
-    };
-
-    $('lk-mine').addEventListener('change', refreshPreview);
-    $('lk-other').addEventListener('change', loadOtherSteps);
-    $('lk-other-step').addEventListener('change', refreshPreview);
-    await loadOtherSteps();
-
-    async function doLink(thenMore) {
-      // 必须先检测通过才允许写入
-      if (!verified) {
-        setStatus('请先点「检测关联」，通过后才能确认关联。', 'warn');
+    // ── 「确认关联」：相邻两行依次链起来（实验1的这一步 → 实验2，实验2的这一步 → 实验3…）──
+    const writeLinks = async () => {
+      if (!verified || verifiedKey !== choiceKey()) {
+        invalidate();
+        setStatus('选择变过了，请重新点「检测关联」。', 'warn');
         return;
       }
-      const st = (mySteps || [])[myIdx()];
-      if (!st) return;
+
       const note = ($('lk-note').value || '').trim();
+      setPrimary('写入中…', true);
+      try {
+        for (let i = 0; i < rows.length - 1; i++) {
+          const steps = stepsCache[rows[i].runId] || [];
+          const st = steps[rows[i].stepIdx];
+          if (!st) throw new Error('实验' + (i + 1) + ' 没有可关联的步骤');
 
-      const { error } = await client.from(RUN_STEP)
-        .update({ link_run_id: otherId(), link_note: note || null })
-        .eq('id', st.id);
-      if (error) {
-        console.error('[SciHub] 关联写入失败：', error);
-        setStatus('关联失败：请确认已给 run_steps 加上 link_run_id / link_note 两列。', 'error');
+          const { error } = await client.from(RUN_STEP)
+            .update({ link_run_id: rows[i + 1].runId, link_note: note || null })
+            .eq('id', st.id);
+          if (error) throw error;
+
+          st.link_run_id = rows[i + 1].runId;      // 本端缓存同步
+          st.link_note = note || null;
+        }
+      } catch (err) {
+        console.error('[SciHub] 关联写入失败：', err);
+        setPrimary('确认关联', false);
+        setStatus('关联失败：' + errorText(err), 'error');
         return;
       }
-
-      // 本端缓存也同步，免得「再加一条」时还拿着旧步骤
-      st.link_run_id = otherId();
-      st.link_note = note || null;
 
       closeModal();
-
-      // 「＋ 再加一条」：不跳走，直接开个新弹窗接着加（换个步骤就能并进另一个实验）
-      if (thenMore) {
-        setStatus('已关联第 ' + (st.position + 1) + ' 步。换个「本实验的步骤」再选另一个实验，就能继续并。', 'ok');
-        setTimeout(() => linkRun(runId), 150);
-        return;
-      }
-
-      setStatus('已关联，主页会把这两条实验合并成一条。', 'ok');
+      setStatus('已把 ' + rows.length + ' 个实验关联成一组，主页会合并成一条显示。', 'ok');
       route('home');
-    }
+    };
 
-    const moreBtn = $('lk-more-btn');
-    if (moreBtn) moreBtn.addEventListener('click', () => doLink(true));
+    // 打开时先给两行：实验1＝本次实验，实验2＝列表里的第一个其它实验
+    rows = [{ runId: Number(runId), stepIdx: 0 }];
+    await loadSteps(Number(runId));
+    const firstOther = (others || [])[0];
+    if (firstOther) {
+      rows.push({ runId: Number(firstOther.id), stepIdx: 0 });
+      await loadSteps(Number(firstOther.id));
+    }
+    renderRows();
+    const initCheck = $('lk-check');
+    if (initCheck) initCheck.innerHTML = tip();
+
 
     // ── 已经建立的关联：列出来，逐条可删 ─────────────────────
     // 一个实验可能关联了好几个（第 5 步→v6、第 7 步→v7…），加错了要能一条一条撤。

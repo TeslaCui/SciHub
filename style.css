@@ -421,8 +421,22 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 /* 关联弹窗里的「＋ 再加一条」 */
 .lk-more { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
 .lk-more span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.6; }
-/* 加关联的按钮收成一个「＋」：小方按钮，点它是再加一条 */
+/* 加关联的按钮收成一个「＋」：小方按钮，点它是在下面再加一行 */
 .lk-more button { min-width: 34px; padding: 4px 8px; font-size: 15px; line-height: 1; }
+
+/* 关联弹窗的多行编辑器：一行＝一个实验 + 该实验「从哪一步开始合并」 */
+.lk-rows { margin-bottom: 4px; }
+.lk-row {
+  display: grid; grid-template-columns: auto 1fr 1fr 30px;
+  gap: 8px; align-items: center; margin-bottom: 6px;
+}
+.lk-row-no { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.lk-row select { min-width: 0; max-width: 100%; }
+@media (max-width: 560px) {
+  /* 手机上：行号占首列，两个下拉放不下就各占一行 */
+  .lk-row { grid-template-columns: auto 1fr 30px; }
+  .lk-row select[data-pick="step"] { grid-column: 2 / 4; }
+}
 
 /* 关联弹窗里的「已建立的关联」清单：列到哪一步关联了哪个实验，每条一个 ✕ 可单独删除 */
 .lk-added { margin-top: 10px; }
