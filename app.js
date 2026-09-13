@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.64.0';
+const APP_VERSION = '0.65.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -982,12 +982,68 @@ async function renderHome() {
 
   // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。
   // 待办靠它算「实际进度」—— 只看 current_step（上次停在的位置）会取错步骤。
-  // 一次实验「进行到第几步」：以「上次停在这里」为准（current_step）。
-  // 之前还试过用「最后填过数据的步骤」去往前推，但那个推断很容易误判 ——
-  // 步骤被标成完成、或步骤里存过照片/备注，都会让还没做的步骤被当成在做
-  //（v5 就是这样被推到第 9 步的）。current_step 只在点「完成并下一步」时前进，
-  // 语义明确、和你在界面上看到的进度一致。
-  const runProgressPos = (r) => Number(r.current_step) || 0;
+  // 「一次实验进行到第几步」改为交给 AI 判断（见 judgeProgress）：
+  // 把步骤清单（是否标完成 / 填了几项 / 照片数 / 有没有备注 + 系统记录的 current_step）
+  // 发给 parse-plan 的 progress 模式，由它判断现在实际做到哪一步。
+  // 结果按「步骤状态签名」缓存在 localStorage —— 状态没变就不重复调用；
+  // AI 不可用（函数没更新/没部署、断网、没额度）时一律回退到 current_step，界面不会空着。
+  const aiPos = {};
+  const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : (Number(r.current_step) || 0));
+
+  const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
+    const v = (x.values || {})[k];
+    return String(v == null ? '' : v).trim() !== '';
+  }).length;
+
+  const aiProgressKey = (id) => 'scihub.aiProgress.' + id;
+
+  // 步骤状态签名：任一步的完成/填写/照片/备注或 current_step 变了，就重新问一次 AI
+  const progressSignature = (r, steps) => steps.map((x) => [
+    x.position, x.status || '', filledCount(x), (x.images || []).length,
+    String(x.note || '').trim() ? 1 : 0,
+  ].join(':')).join('|') + '#' + (Number(r.current_step) || 0);
+
+  const judgeProgress = async (r) => {
+    const steps = stepMap[r.id] || [];
+    const base = Number(r.current_step) || 0;
+    if (!steps.length) return base;
+
+    const sig = progressSignature(r, steps);
+    try {
+      const raw = window.localStorage.getItem(aiProgressKey(r.id));
+      if (raw) {
+        const c = JSON.parse(raw);
+        if (c && c.sig === sig && Number.isFinite(Number(c.step))) return Number(c.step);
+      }
+    } catch (_e) { /* 隐私模式下忽略缓存 */ }
+
+    try {
+      const { data, error } = await client.functions.invoke('parse-plan', {
+        body: {
+          mode: 'progress',
+          currentStep: base,
+          steps: steps.map((x) => ({
+            position: x.position,
+            title: x.title || '',
+            done: x.status === 'done',
+            filled: filledCount(x),
+            photos: (x.images || []).length,
+            note: String(x.note || '').trim().slice(0, 60),
+          })),
+        },
+      });
+      if (error || !data || !Number.isFinite(Number(data.step))) {
+        console.warn('[SciHub] AI 进度判断不可用（parse-plan 未更新？），改用 current_step：', error);
+        return base;
+      }
+      const step = Math.max(0, Math.min(Number(data.step), steps.length - 1));
+      try { window.localStorage.setItem(aiProgressKey(r.id), JSON.stringify({ sig: sig, step: step })); } catch (_e) { /* 忽略 */ }
+      return step;
+    } catch (err) {
+      console.warn('[SciHub] AI 进度判断调用失败，改用 current_step：', err);
+      return base;
+    }
+  };
 
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
@@ -1048,6 +1104,12 @@ async function renderHome() {
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
   // 「写了时长且还没完成」的步骤 —— 因为「反应 24 小时」这类等待常常写在后面的步骤里
   // （例：现在第 2 步，流程要求从开始算 24h 后必须结束）。
+  // 让 AI 判断每个进行中的实验「现在做哪一步」（结果带缓存，状态没变不会重复调用）
+  await Promise.all(groups.map(async (g) => {
+    const head = g.runs[0];
+    if (head) aiPos[head.id] = await judgeProgress(head);
+  }));
+
   const todos = [];
   groups.forEach((g) => {
     // 一组只出一条待办，用组里第一个实验代表整组

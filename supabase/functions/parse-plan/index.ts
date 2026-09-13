@@ -73,6 +73,23 @@ const DURATION_PROMPT = [
   '6. 只输出 JSON，不要解释，不要 Markdown 代码块。',
 ].join(String.fromCharCode(10));
 
+/* 模式三：判断「现在进行到第几步」。用户给步骤清单 + 系统记录的 currentStep，
+   由模型判断实际做到哪一步（比单看 current_step、或单看「填过数据」都更稳）。 */
+const PROGRESS_PROMPT = [
+  '你是实验进度判断助手。用户给一次实验的步骤清单（每步含：是否已标完成 done、填了几项数据 filled、',
+  '照片数 photos、备注 note），以及系统记录的「上次停在这一步 currentStep」。',
+  '请判断现在实际进行到第几步。',
+  '',
+  '判断规则：',
+  '1. 从前往后看，找出「最后一个确实已经做过的步骤」：done=true，或 filled>0，或 photos>0，或 note 非空。',
+  '2. 若这一步之后紧邻的下一步也已经有填写/照片/备注，说明已经进入下一步，以它为准。',
+  '3. 只标完成、但后面还有明确在做的步骤时，以更靠后的那一步为准。',
+  '4. 完全没有线索（都没有填写痕迹）时，采用 currentStep。',
+  '5. 不要超过步骤总数 - 1，也不要小于 0。',
+  '',
+  '只输出 JSON：{"step": <0 起算的步骤序号>, "reason": "一句话依据"}。不要解释，不要 Markdown。',
+].join(String.fromCharCode(10));
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -83,6 +100,55 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json().catch(() => null);
+    // ── 模式三：{ "mode": "progress", "currentStep": 6, "steps": [{position,title,done,filled,photos,note}] } ──
+    // 响应：{ "step": 6, "reason": "第 7 步已填数据，第 8 步没有任何填写痕迹" }
+    if (body && body.mode === 'progress') {
+      const pgKey = Deno.env.get('DEEPSEEK_API_KEY');
+      if (!pgKey) return json({ error: '服务端未配置 DEEPSEEK_API_KEY' }, 500);
+
+      const items = Array.isArray(body.steps) ? body.steps.slice(0, 200) : [];
+      if (!items.length) return json({ error: '缺少 steps' }, 400);
+
+      const NL = String.fromCharCode(10);
+      const list = items
+        .map((x, i) => (i + 1) + '. [' + String(x?.position ?? i) + '] ' + String(x?.title ?? '')
+          + ' done=' + (x?.done ? '1' : '0') + ' filled=' + Number(x?.filled ?? 0)
+          + ' photos=' + Number(x?.photos ?? 0)
+          + ' note=' + (String(x?.note ?? '') ? '"' + String(x.note).slice(0, 60) + '"' : '无'))
+        .join(NL);
+
+      const userMsg = 'currentStep（0 起算）=' + Number(body.currentStep ?? 0) + NL + '步骤清单：' + NL + list;
+
+      const up = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pgKey },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: PROGRESS_PROMPT },
+            { role: 'user', content: userMsg },
+          ],
+        }),
+      });
+      if (!up.ok) {
+        const detail = await up.text();
+        return json({ error: 'DeepSeek 调用失败', detail: detail.slice(0, 600) }, 502);
+      }
+      const payload3 = await up.json();
+      const content3 = payload3?.choices?.[0]?.message?.content ?? '';
+      let parsed3: { step?: unknown; reason?: unknown };
+      try {
+        parsed3 = JSON.parse(content3);
+      } catch {
+        return json({ error: 'DeepSeek 返回的不是合法 JSON', detail: String(content3).slice(0, 600) }, 502);
+      }
+      const step3 = Number(parsed3?.step);
+      if (!Number.isFinite(step3)) return json({ error: 'AI 没有给出 step' }, 502);
+      return json({ step: step3, reason: String(parsed3?.reason ?? '').slice(0, 300) });
+    }
+
     // ── 模式二：{ "mode": "duration", "steps": [{title, instruction}] } ──
     // 响应：{ "durations": ["约 12 小时（过夜）", "", ...] }
     if (body && body.mode === 'duration') {
