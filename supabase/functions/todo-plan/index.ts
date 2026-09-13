@@ -35,11 +35,16 @@ const CORS_HEADERS = {
 const NL = String.fromCharCode(10);
 
 const SYSTEM_PROMPT = [
-  '你是实验进度与待办助手。用户给若干「进行中的实验」，每个实验有步骤清单：',
-  'position（0 起算的顺序）、title（步骤标题）、done（是否点过「完成并下一步」）、',
-  'filled（这一步填了几个数据项）、planDuration（这一步的时长提示，可能为空）、',
+  '你是实验进度与待办助手。用户给若干「进行中的实验」，每个实验有**完整**步骤清单：',
+  'position（0 起算的顺序）、title（步骤标题）、instruction（这一步的操作说明全文）、',
+  'notice（这一步的注意事项）、planDuration（这一步的时长提示，可能为空）、',
+  'filled（这一步填了几个数据项）、filledKeys（填的是哪些项的名字）、',
   'stepStartedAt / stepUpdatedAt（这一步开始/最近改动的时刻，可能为空），',
   '以及系统记录的 currentStep（上次停在的步骤）。',
+  '',
+  '请**通读整条流程**（说明 + 注意事项）后再判断：理解每个实验在做什么、哪些步骤是动作、',
+  '哪些是等待（如「搅拌 24 h」「60 ℃ 真空干燥不少于 12 h」），这样才判断得准现在做到哪儿、',
+  '接下来该做什么。',
   '',
   '请为每个实验输出一条待办，规则：',
   '',
@@ -92,11 +97,14 @@ Deno.serve(async (req: Request) => {
       lines.push('实验 runId=' + String(r?.id ?? '') + ' 标题=' + String(r?.title ?? '')
         + ' currentStep=' + Number(r?.currentStep ?? 0) + ' 开始于=' + String(r?.startedAt ?? ''));
       steps.forEach((s) => {
-        lines.push('  [' + String(s?.position ?? '') + '] ' + String(s?.title ?? '')
-          + ' done=' + (s?.done ? '1' : '0') + ' filled=' + Number(s?.filled ?? 0)
-          + ' planDuration=' + (String(s?.planDuration ?? '') || '-')
-          + ' stepStartedAt=' + (String(s?.stepStartedAt ?? '') || '-')
-          + ' stepUpdatedAt=' + (String(s?.stepUpdatedAt ?? '') || '-'));
+        const keys = Array.isArray(s?.filledKeys) ? s.filledKeys.join('、') : '';
+        lines.push('  [' + String(s?.position ?? '') + '] ' + String(s?.title ?? ''));
+        lines.push('      说明：' + (String(s?.instruction ?? '') || '（无）'));
+        if (String(s?.notice ?? '')) lines.push('      注意：' + String(s.notice));
+        lines.push('      已填：' + (keys !== '' ? keys : '（无）')
+          + ' | 时长提示：' + (String(s?.planDuration ?? '') || '（无）')
+          + ' | 开始=' + (String(s?.stepStartedAt ?? '') || '-')
+          + ' | 改动=' + (String(s?.stepUpdatedAt ?? '') || '-'));
       });
     });
     const userMsg = 'now=' + String(body?.now ?? '') + NL + lines.join(NL);

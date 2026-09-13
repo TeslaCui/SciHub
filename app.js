@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.72.0';
+const APP_VERSION = '0.73.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1101,12 +1101,21 @@ async function renderHome() {
         title: head.title,
         startedAt: head.started_at,
         currentStep: Number(head.current_step) || 0,
+        // 把「完整步骤内容」都发过去（说明、注意事项、时长、填了哪些项）——
+        // 只给标题和数字的话，AI 看不出流程语义（哪一步是等待、哪一步是动作、下一步该做什么）。
         steps: steps.map((x) => ({
           position: x.position,
           title: x.title || '',
           // 不发送 done：早先点到过后面又退回时它会残留，AI 会据此把进度判到根本没做的步骤
           filled: filledCount(x),
+          filledKeys: Object.keys(x.values || {}).filter((k) => {
+            if (isTimeKey(k)) return false;
+            const v = (x.values || {})[k];
+            return String(v == null ? '' : v).trim() !== '';
+          }).slice(0, 12),
           planDuration: planDurAt(head, x.position),
+          instruction: String(x.instruction || '').slice(0, 500),
+          notice: String(x.notice || '').slice(0, 150),
           stepStartedAt: x.started_at || '',
           stepUpdatedAt: x.updated_at || '',
         })),
