@@ -799,6 +799,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .todo-empty { color: var(--muted); font-size: 12px; line-height: 1.7; }
 .todo-empty span { font-size: 11px; }
 
+/* 待办底部的新增表单：标题 + 可选截止时间 + 添加 */
+.todo-add { display: flex; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.todo-add input { flex: 1 1 120px; min-width: 0; margin: 0; font-size: 12px; padding: 6px 8px; }
+.todo-add input[type="datetime-local"] { flex: 0 1 158px; }
+.todo-add button { flex-shrink: 0; }
+
 /* 日历整体收窄：电脑端不再占满整屏（每格约 52px 见方），窄屏自动跟着缩 */
 .cal-card { margin-bottom: 18px; max-width: 440px; padding: 14px 16px; }
 .cal-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }

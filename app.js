@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.36.0';
+const APP_VERSION = '0.37.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -958,6 +958,26 @@ async function renderHome() {
     });
   });
 
+  // 手动待办（存在 research_todos 里）：与实验无关的事，比如「明天 10:00 取样品」
+  let myTodos = [];
+  if (client) {
+    const { data: manual, error: manualErr } = await client
+      .from('research_todos')
+      .select('*')
+      .eq('done', false)
+      .order('created_at', { ascending: false });
+    if (manualErr) console.warn('[SciHub] 待办读取失败（表可能还没建）：', manualErr);
+    else myTodos = manual || [];
+  }
+  myTodos.forEach((t) => {
+    todos.push({
+      kind: 'todo',
+      id: t.id,
+      title: t.title,
+      due: t.due_at ? new Date(t.due_at) : null,
+    });
+  });
+
   // 有结束时间的排前面（超时的最前），没设时长的排最后
   todos.sort((a, b) => {
     if (a.due && b.due) return a.due - b.due;
@@ -972,6 +992,12 @@ async function renderHome() {
     '  <div class="todo-title">待办 · 计时提醒</div>',
     todos.length
       ? todos.map((t) => {
+          const isRun = t.kind === 'run';
+          const title = isRun ? t.run.title : t.title;
+          const sub = isRun
+            ? esc((t.step && t.step.title) || '') + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '')
+            : (t.due ? '手动待办' : '手动待办 · 未设时间');
+
           const hasDue = !!t.due;
           const leftMin = hasDue ? Math.round((t.due - Date.now()) / 60000) : 0;
           const overdue = hasDue && leftMin < 0;
@@ -979,10 +1005,10 @@ async function renderHome() {
 
           let whenTxt;
           if (!hasDue) {
-            whenTxt = '进行中 · 这一步未设时长提示';
+            whenTxt = isRun ? '进行中 · 这一步未设时长提示' : '随时';
           } else {
             const sameDay = t.due.toDateString() === today.toDateString();
-            whenTxt = (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' 结束 · '
+            whenTxt = (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' · '
               + (overdue
                 ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
                 : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟'));
@@ -990,14 +1016,23 @@ async function renderHome() {
 
           return '<div class="todo-item' + (overdue ? ' overdue' : '') + '">'
             + '<div class="todo-main">'
-            + '<b>' + esc(t.run.title) + '</b>'
-            + '<span>' + esc((t.step && t.step.title) || '') + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '') + '</span>'
+            + '<b>' + esc(title) + '</b>'
+            + '<span>' + sub + '</span>'
             + '<em>' + whenTxt + '</em>'
             + '</div>'
-            + '<button type="button" class="ghost tiny" data-run="' + t.run.id + '">去处理</button>'
+            // 自动项（来自进行中的实验）不能在这里删 —— 它跟着实验走；
+            // 手动项才有删除按钮。
+            + (isRun
+              ? '<button type="button" class="ghost tiny" data-run="' + t.run.id + '">去处理</button>'
+              : '<button type="button" class="icon-btn del" data-todo-del="' + t.id + '" title="删除这条待办" aria-label="删除">×</button>')
             + '</div>';
         }).join('')
-      : '<div class="todo-empty">当前没有进行中的实验。<br><span>开始一个实验后，它的当前步骤会自动出现在这里。</span></div>',
+      : '<div class="todo-empty">当前没有待办。<br><span>开始实验后，当前步骤会自动出现在这里；也可以在下面自己加一条。</span></div>',
+    '  <div class="todo-add">',
+    '    <input id="todo-title" placeholder="加一条待办，如：明天 10:00 取样品" maxlength="120">',
+    '    <input id="todo-due" type="datetime-local" title="可选：截止时间">',
+    '    <button type="button" class="ghost tiny" id="todo-add-btn">添加</button>',
+    '  </div>',
     '</div>',
   ].join('\n');
 
@@ -1112,6 +1147,48 @@ async function renderHome() {
   document.addEventListener('click', (e) => {
     if (!e.target.closest('[data-tip-id]') && !e.target.closest('#cal-tip')) hideTip();
   });
+
+  // 待办：添加 / 删除（来自进行中实验的自动项不在这里删 —— 它跟着实验走）
+  const addTodoBtn = $('todo-add-btn');
+  if (addTodoBtn) {
+    const titleEl = $('todo-title');
+    const dueEl = $('todo-due');
+
+    const doAdd = async () => {
+      const title = (titleEl.value || '').trim();
+      if (!title) { titleEl.focus(); return; }
+
+      addTodoBtn.disabled = true;
+      const { error } = await client.from('research_todos').insert({
+        user_id: state.user.id,
+        title: title,
+        due_at: dueEl.value ? new Date(dueEl.value).toISOString() : null,
+      });
+      addTodoBtn.disabled = false;
+
+      if (error) {
+        console.error('[SciHub] 添加待办失败：', error);
+        setStatus('添加待办失败：请确认已在 Supabase 建好 research_todos 表。', 'error');
+        return;
+      }
+      setStatus('已添加待办。', 'ok');
+      renderHome();
+    };
+
+    addTodoBtn.addEventListener('click', doAdd);
+    titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
+  }
+
+  host.querySelectorAll('[data-todo-del]').forEach((btn) => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const { error } = await client.from('research_todos').delete().eq('id', Number(btn.dataset.todoDel));
+    if (error) {
+      console.error('[SciHub] 删除待办失败：', error);
+      setStatus('删除待办失败。', 'error');
+      return;
+    }
+    renderHome();
+  }));
 
   // 翻月：上月 / 下月 / 回到本月
   host.querySelectorAll('[data-cal]').forEach((btn) => btn.addEventListener('click', (e) => {
