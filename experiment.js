@@ -171,9 +171,15 @@
 
   /* 从文本里猜时长提示（如「24 h」「过夜」「12 h」「4 h」） */
   function guessDuration(text) {
-    const m = text.match(/(\d+(?:\.\d+)?)\s*(h|小时|min|分钟)/i);
-    if (/过夜|不少于\s*12\s*h|overnight/i.test(text)) return '需隔夜等待';
+    const t = String(text || '');
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(h|小时|min|分钟)/i);
     if (m) return '约 ' + m[1] + ' ' + (m[2].toLowerCase() === 'h' ? '小时' : m[2]);
+    // 没有数字的常见写法，折算成能用来算结束时间的话
+    if (/过夜|隔夜|整夜|一夜|一晚|overnight/i.test(t)) return '约 12 小时（过夜）';
+    if (/隔天|第二天|次日|一整天|整天|全天/.test(t)) return '约 24 小时（隔天）';
+    if (/半天|半日/.test(t)) return '约 12 小时（半天）';
+    if (/一周|整周|一个星期/.test(t)) return '约 7 天（一周）';
+    if (/半小时|半个小时/.test(t)) return '约 30 分钟';
     return '';
   }
 
@@ -911,9 +917,50 @@
   }
 
   /* 保存草稿：新建（来自 docx 导入）或更新（编辑已有方案） */
+  /* 给「没写时长」的步骤补时长提示：先用规则从说明里抓（含「过夜」这类词），
+     规则抓不到的再交给 AI（parse-plan 的 duration 模式）一次性补上。
+     补的结果写进方案里，之后待办 / 执行界面都走确定性路径，不必每次再调 AI。
+     AI 不可用（函数没更新 / 没部署 / 断网）就静默跳过，不影响保存。 */
+  async function fillStepDurations(steps) {
+    const todo = [];
+    (steps || []).forEach((x, i) => {
+      if (String(x.duration_hint || '').trim()) return;
+      const byRule = guessDuration(x.instruction || '');
+      if (byRule) { x.duration_hint = byRule; return; }
+      if (String(x.instruction || '').trim()) todo.push(i);
+    });
+    if (!todo.length) return 0;
+
+    try {
+      const { data, error } = await client.functions.invoke('parse-plan', {
+        body: {
+          mode: 'duration',
+          steps: todo.map((i) => ({ title: steps[i].title || '', instruction: steps[i].instruction || '' })),
+        },
+      });
+      if (error || !data || !Array.isArray(data.durations)) {
+        console.warn('[SciHub] 时长 AI 解析不可用（parse-plan 未更新 / 未部署？），已跳过：', error);
+        return 0;
+      }
+      let n = 0;
+      todo.forEach((i, k) => {
+        const d = String(data.durations[k] || '').trim();
+        if (d) { steps[i].duration_hint = d; n += 1; }
+      });
+      return n;
+    } catch (err) {
+      console.warn('[SciHub] 时长 AI 解析调用失败，已跳过：', err);
+      return 0;
+    }
+  }
+
   async function saveDraft() {
     collectDraft();
     if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
+    // 缺时长的步骤先补齐（规则 → AI 兜底），这样待办不必每次再调 AI
+    const filled = await fillStepDurations(draft.steps);
+    if (filled) console.info('[SciHub] 已用 AI 补上 ' + filled + ' 个步骤的时长提示');
+
     const title = draft.title.trim() || '未命名实验方案';
     const wasEdit = !!draft.id;
 

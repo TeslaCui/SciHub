@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.60.0';
+const APP_VERSION = '0.61.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -943,6 +943,19 @@ async function renderHome() {
   // ── 待办 / 计时提醒 ──
   // 进行中的实验，按「当前步骤的时长提示」推算该在什么时间结束。
   // 比如步骤写着「反应 24 小时」，就从开始时间往后 24 小时提醒。
+  // 「过夜」「隔天」这类没有数字的自然语言时长 → 折算成小时
+  const NL_HOURS = [
+    [/半天|半日/, 12],
+    [/过夜|隔夜|整夜|一夜|一晚|overnight/i, 12],
+    [/隔天|第二天|次日|一整天|整天|全天/, 24],
+    [/一周|整周|一个星期/, 168],
+    [/半小时|半个小时/, 0.5],
+  ];
+  const nlHours = (t) => {
+    for (let i = 0; i < NL_HOURS.length; i++) if (NL_HOURS[i][0].test(t)) return NL_HOURS[i][1];
+    return 0;
+  };
+
   const parseDurationHours = (text) => {
     const t = String(text || '');
     const h = t.match(/(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z]))/i);
@@ -951,14 +964,20 @@ async function renderHome() {
     if (d) return Number(d[1]) * 24;
     const m = t.match(/(\d+(?:\.\d+)?)\s*(?:分钟|min(?:ute)?s?)/i);
     if (m) return Number(m[1]) / 60;
-    return 0;
+    return nlHours(t);
   };
 
   // 从一段说明里挑出写着的时长（「静置 12 h」→「12 h」），挑不到返回空串。
   // 方案里没填「时长提示」时，靠它兜底算结束时间。
   const pickDurationText = (text) => {
-    const m = String(text || '').match(/(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z])|天|days?|分钟|min(?:ute)?s?)/i);
-    return m ? m[0] : '';
+    const t = String(text || '');
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z])|天|days?|分钟|min(?:ute)?s?)/i);
+    if (m) return m[0];
+    for (let i = 0; i < NL_HOURS.length; i++) {
+      const hit = t.match(NL_HOURS[i][0]);
+      if (hit) return hit[0];
+    }
+    return '';
   };
 
   // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。

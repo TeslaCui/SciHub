@@ -57,6 +57,22 @@ const SYSTEM_PROMPT = `你是化学/材料实验方案的结构化助手。用�
 输出 JSON 结构：
 {"title":"方案名","steps":[{"title":"步骤标题","instruction":"操作要点","notice":"","duration_hint":"","fields":[{"label":"字段名","unit":"g"}]}]}`;
 
+/* 模式二：只把「时长」抽出来。保存方案时用它把「过夜」「隔天」这类自然语言
+   一次性整成标准提示，写进方案的 duration_hint —— 之后待办走确定性路径。 */
+const DURATION_PROMPT = [
+  '你是实验步骤的时长提取助手。用户给出一组实验步骤（标题 + 操作说明），',
+  '请判断每一步是否包含「需要等待 / 持续一段时间」，并把时间写成简短中文提示。',
+  '',
+  '规则：',
+  '1. 只输出 JSON：{"durations": ["约 1 小时", "", "..."]}。数组长度必须与输入步骤数严格一致、顺序对应。',
+  '2. 明确数字的，写成「约 24 小时」「约 30 分钟」（h→小时、min→分钟、d→天）。',
+  '3. 自然语言写法的，换算成标准提示并保留原词：「过夜 / 隔夜 / 一晚」→「约 12 小时（过夜）」；',
+  '   「隔天 / 次日」→「约 24 小时（隔天）」；「半天」→「约 12 小时（半天）」。',
+  '4. 该步骤确实没有任何等待 / 持续时间（纯操作、称量、记录数据等）→ 该项填空字符串。',
+  '5. 不要编造：原文没写就别猜数值。',
+  '6. 只输出 JSON，不要解释，不要 Markdown 代码块。',
+].join(String.fromCharCode(10));
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -67,6 +83,48 @@ Deno.serve(async (req: Request) => {
 
   try {
     const body = await req.json().catch(() => null);
+    // ── 模式二：{ "mode": "duration", "steps": [{title, instruction}] } ──
+    // 响应：{ "durations": ["约 12 小时（过夜）", "", ...] }
+    if (body && body.mode === 'duration') {
+      const durKey = Deno.env.get('DEEPSEEK_API_KEY');
+      if (!durKey) return json({ error: '服务端未配置 DEEPSEEK_API_KEY' }, 500);
+
+      const items = Array.isArray(body.steps) ? body.steps.slice(0, 60) : [];
+      if (!items.length) return json({ error: '缺少 steps' }, 400);
+
+      const list = items
+        .map((x, i) => (i + 1) + '. 标题：' + String(x?.title ?? '') + ' 说明：' + String(x?.instruction ?? '').slice(0, 800))
+        .join(String.fromCharCode(10));
+
+      const up = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + durKey },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          temperature: 0,
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: DURATION_PROMPT },
+            { role: 'user', content: list },
+          ],
+        }),
+      });
+      if (!up.ok) {
+        const detail = await up.text();
+        return json({ error: 'DeepSeek 调用失败', detail: detail.slice(0, 600) }, 502);
+      }
+      const payload2 = await up.json();
+      const content2 = payload2?.choices?.[0]?.message?.content ?? '';
+      let parsed2: { durations?: unknown };
+      try {
+        parsed2 = JSON.parse(content2);
+      } catch {
+        return json({ error: 'DeepSeek 返回的不是合法 JSON', detail: String(content2).slice(0, 600) }, 502);
+      }
+      const rows = Array.isArray(parsed2?.durations) ? parsed2.durations : [];
+      return json({ durations: rows.map((x) => String(x ?? '').trim()) });
+    }
+
     const text = body && typeof body.text === 'string' ? body.text : '';
     if (!text.trim()) {
       return json({ error: '缺少 text' }, 400);
