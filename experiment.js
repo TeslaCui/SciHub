@@ -1452,6 +1452,20 @@
       }
     }
 
+    // 我是不是某个合并组里的「子实验」？—— 别的实验的某一步 link 到我，就说明是。
+    // 那种情况只看合并点之前的步骤：合并点之后的事是和大家一起做的，不该各看各的。
+    run.mergeCut = null;
+    run.mergedFrom = [];
+    try {
+      const { data: intoMe } = await client.from(RUN_STEP).select('run_id,position').eq('link_run_id', runId);
+      if (intoMe && intoMe.length) {
+        run.mergeCut = Math.max.apply(null, intoMe.map((x) => x.position));
+        run.mergedFrom = intoMe.map((x) => x.run_id);
+      }
+    } catch (err) {
+      console.warn('[SciHub] 合并点检查失败：', err);
+    }
+
     // 与方案对齐检查：方案后来增/删/改过步骤就会记下差异，界面顶部实时提示
     try { run.drift = await planDiff(r); } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
 
@@ -1550,23 +1564,28 @@
 
   function drawRun() {
     const host = $('view-run');
+
+    // 关联子实验：只看合并点之前的步骤（合并点之后是和大家一起做的，不该各看各的）
+    const cut = run.mergeCut;
+    const total = cut == null ? run.steps.length : Math.max(1, Math.min(cut, run.steps.length));
+    if (run.pos > total - 1) run.pos = total - 1;      // 浏览位置也夹进可见范围
+
     const s = run.steps[run.pos];
     if (!s) { host.innerHTML = '<div class="empty">没有可执行的步骤。</div>'; return; }
 
-    const total = run.steps.length;
-    const done = run.steps.filter((x) => x.status === 'done').length;
+    const done = run.steps.slice(0, total).filter((x) => x.status === 'done').length;
 
-    // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤。
+    // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤（只在可见范围内看）。
     // 翻看后面的步骤不会推进它 —— 进度由填写的数据决定，不由浏览位置决定。
     let reached = 0;
-    run.steps.forEach((x, i) => { if (stepHasProgress(x)) reached = i; });
+    run.steps.slice(0, total).forEach((x, i) => { if (stepHasProgress(x)) reached = i; });
 
     const reachedPct = total > 1 ? Math.round((reached / (total - 1)) * 100) : 100;
     const posPct = total > 1 ? Math.round((run.pos / (total - 1)) * 100) : 100;
 
     const isLast = run.pos === total - 1;
     const resumed = (run.data.current_step || 0) === run.pos && run.pos > 0;
-    const d = run.drift || { same: true, added: [], removed: [], changed: [], fieldAdded: [] };
+    const d = run.drift || { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
 
     // 与方案的同步状态：不一致时把差异逐条列出来，配一个「立即同步」
     const diffRows = [];
@@ -1601,8 +1620,9 @@
       '</div>',
 
       // 步骤节点：点任意一个直接跳过去，只是浏览，不会改变实验进度
+      // （关联子实验只画到合并点为止）
       '<div class="step-nav">',
-      run.steps.map((x, i) => {
+      run.steps.slice(0, total).map((x, i) => {
         const cls = ['step-dot'];
         if (stepHasProgress(x)) cls.push('done');
         if (i === reached) cls.push('reached');
@@ -1615,6 +1635,16 @@
       '<div class="hc-meta run-status">已进行到 <b>第 ' + (reached + 1) + ' 步</b> · 正在浏览 第 ' + (run.pos + 1) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
+
+      // 关联子实验：说清楚为什么只看到这里
+      cut != null
+        ? [
+            '<div class="merge-note">',
+            '  <b>⇄ 这是关联实验（合并点：第 ' + (cut + 1) + ' 步）</b>',
+            '  <span>第 ' + (cut + 1) + ' 步及之后是和关联的实验一起做的，所以这次实验只显示前 ' + total + ' 步；合并后的完整数据在主页那一栏查看 / 导出。</span>',
+            '</div>',
+          ].join('\n')
+        : '',
       // 实时同步状态：一致 → 一行淡字；不一致 → 提示条 + 逐条差异 + 「立即同步」
       d.same
         ? '<div class="sync-ok">✓ 与方案一致</div>'
@@ -1663,7 +1693,8 @@
       '  </div>',
       '  <div class="run-actions">',
       '    <button type="button" class="ghost" id="run-prev" ' + (run.pos === 0 ? 'disabled' : '') + '>上一步</button>',
-      '    <button type="button" class="primary" id="run-next">' + (isLast ? '完成实验' : '完成并下一步') + '</button>',
+      '    <button type="button" class="primary" id="run-next">'
+        + (isLast ? (cut != null ? '完成到合并点' : '完成实验') : '完成并下一步') + '</button>',
       '  </div>',
       '  <div class="autosave" id="autosave"></div>',
       '</div>',
@@ -2795,12 +2826,28 @@
 
   async function nextStep() {
     const s = run.steps[run.pos];
+
+    // 关联子实验：做到合并点就该停 —— 合并点之后是和大家一起做的
+    const cut = run.mergeCut;
+    const total = cut == null ? run.steps.length : Math.max(1, Math.min(cut, run.steps.length));
+
     if (!s.started_at) s.started_at = new Date().toISOString();
     s.status = 'done';
     s.finished_at = new Date().toISOString();
     await saveStep(s, true);
 
-    run.pos = Math.min(run.pos + 1, run.steps.length - 1);
+    // 已经到合并点：这次实验该做的部分做完了，不再往下走
+    if (cut != null && run.pos >= total - 1) {
+      await client.from(RUN).update({
+        current_step: run.pos,
+        updated_at: new Date().toISOString(),
+      }).eq('id', run.id);
+      setStatus('已做到合并点（第 ' + total + ' 步）。第 ' + (cut + 1) + ' 步及之后由合并后的实验一起做。', 'ok');
+      drawRun();
+      return;
+    }
+
+    run.pos = Math.min(run.pos + 1, total - 1);
     const ns = run.steps[run.pos];
     if (ns && !ns.started_at) {
       ns.started_at = new Date().toISOString();
@@ -2997,9 +3044,16 @@
       '  <textarea id="lk-note" rows="3" placeholder="如：混合 v5.1 和 v5 的热解后材料，然后进行酸洗"></textarea>',
       '</label>',
       '<div id="lk-check" class="lk-check"></div>',
+
+      // 一个实验常要和好几个实验合并（第 5 步→v6、第 7 步→v7…）：
+      // 这条存完不关窗，直接接着加下一条。
+      '<div class="lk-more">',
+      '  <button type="button" class="ghost tiny" id="lk-more-btn">＋ 再加一条关联（到另一个实验）</button>',
+      '  <span>可以连续加多条：换个步骤再选另一个实验，就能把 3 个以上的实验并成一组。</span>',
+      '</div>',
     ].join(''), [
       { label: '取消', onClick: closeModal },
-      { label: '确认关联', primary: true, onClick: doLink },
+      { label: '确认关联', primary: true, onClick: () => doLink(false) },
     ]);
 
     let otherSteps = [];
@@ -3111,7 +3165,7 @@
     $('lk-other-step').addEventListener('change', runCheck);
     await loadOtherSteps();
 
-    async function doLink() {
+    async function doLink(thenMore) {
       const same = await runCheck();
       if (!same) return;                         // 不一致就不写库
       const st = (mySteps || [])[myIdx()];
@@ -3126,10 +3180,26 @@
         setStatus('关联失败：请确认已给 run_steps 加上 link_run_id / link_note 两列。', 'error');
         return;
       }
+
+      // 本端缓存也同步，免得「再加一条」时还拿着旧步骤
+      st.link_run_id = otherId();
+      st.link_note = note || null;
+
       closeModal();
+
+      // 「＋ 再加一条」：不跳走，直接开个新弹窗接着加（换个步骤就能并进另一个实验）
+      if (thenMore) {
+        setStatus('已关联第 ' + (st.position + 1) + ' 步。换个「本实验的步骤」再选另一个实验，就能继续并。', 'ok');
+        setTimeout(() => linkRun(runId), 150);
+        return;
+      }
+
       setStatus('已关联，主页会把这两条实验合并成一条。', 'ok');
       route('home');
     }
+
+    const moreBtn = $('lk-more-btn');
+    if (moreBtn) moreBtn.addEventListener('click', () => doLink(true));
   }
 
   window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun };

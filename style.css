@@ -409,6 +409,19 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .lost-row b { display: block; }
 .lost-row span { display: block; color: var(--muted); margin-top: 2px; word-break: break-word; }
 
+/* 关联子实验的说明条：解释为什么只看到合并点 */
+.merge-note {
+  margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(16, 185, 129, .08); border: 1px solid rgba(16, 185, 129, .35);
+  border-left: 4px solid var(--brand);
+}
+.merge-note b { display: block; color: var(--brand); font-size: 13px; margin-bottom: 4px; }
+.merge-note span { display: block; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* 关联弹窗里的「＋ 再加一条」 */
+.lk-more { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.lk-more span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+
 /* 整卡可点（首页方案卡片 / 方案列表卡片）：操作都收在详情页，这里只负责点进去 */
 .home-card.clickable, .plan-card.clickable { cursor: pointer; }
 .home-card.clickable:hover, .plan-card.clickable:hover { border-color: var(--brand); }
