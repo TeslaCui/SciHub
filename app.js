@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.73.0';
+const APP_VERSION = '0.74.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1279,23 +1279,30 @@ async function renderHome() {
     };
     const hoursOf = (x) => parseDurationHours(durOf(x));
 
-    // 指向哪一步：
-    //   ① 正在做的那一步本身写了时长（如「反应 24 h」）→ 报它，并按「这步开始的时刻」
-    //      算出结束时间（例：10:41 开始反应 24 h → 明天 10:41）；
-    //   ② 否则报「下一步该做的动作」（如热解完成后还没做的「酸洗」）—— 如果那一步
-    //      本身没写时间限定，就只提示等待，不硬算时间。
-    const doing = steps.find((x) => x.position === curPos) || null;
-    const nextStep = steps.find((x) => x.position > curPos && x.status !== 'done') || null;
+    // 指向哪一步 —— 关键是区分「正停在这一步」还是「已经点完成、往后走了」：
+    //   ① 已往后走（current_step 比"最后填过数据的步"更靠后）→ 报**下一步该做的动作**
+    //      （v5：第 7 步热解做完了、人在等酸洗 → 显示「等待下一步：1 M HNO3 预酸洗」）
+    //   ② 正停在这一步（没往后走）→ 报**这一步本身**；它写了时长就给结束时间
+    //      （v5.1：正在第 3 步反应 24 h → 显示「第 3 步 · 快速加入与室温反应 · 约 24 小时」+ 结束时间）
+    const curStepPos = Number(r.current_step) || 0;
+    let lastFilled = -1;
+    steps.forEach((x, k) => { if (filledCount(x) > 0) lastFilled = k; });
+    const progressed = lastFilled >= 0 && curStepPos > lastFilled;
+    const at = (pos) => steps.find((x) => x.position === pos) || null;
 
     let cur = null;
     let isNext = false;
-    if (doing && doing.status !== 'done' && hoursOf(doing) > 0) {
-      cur = doing;
-    } else if (nextStep) {
-      cur = nextStep;
-      isNext = true;
+    if (progressed) {
+      const next = steps.find((x) => x.position > lastFilled) || null;
+      if (next) { cur = next; isNext = true; } else { cur = at(lastFilled) || steps[steps.length - 1]; }
     } else {
-      cur = doing || steps[0];
+      const doing = at(Math.max(curStepPos, lastFilled)) || at(curStepPos) || steps[0];
+      if (doing && hoursOf(doing) > 0) {
+        cur = doing;
+      } else {
+        const next = steps.find((x) => x.position > doing.position) || null;
+        if (next) { cur = next; isNext = true; } else { cur = doing; }
+      }
     }
     let hours = hoursOf(cur);
     // AI 给了时长就用它的（它在「过夜」「隔天」这类语义上更准）
