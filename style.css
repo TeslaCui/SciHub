@@ -797,6 +797,18 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 @media (max-width: 560px) {
   .pyro-grid { grid-template-columns: 1fr; }
+
+  /* 手机端：日历与待办各占满一行。
+     上面 .home-top > .cal-card 用的是 flex:0 0 auto（basis:auto），宽度按内容算，
+     日历 7 列的最小内容宽度会把卡片顶出屏幕 —— 这里改回按行宽分配并允许收缩。 */
+  .home-top > .cal-card,
+  .home-top > .todo-card { flex: 1 1 100%; min-width: 0; }
+
+  .cal-card { max-width: none; padding: 12px 10px; }
+  .cal-grid { gap: 3px; }
+  .cal-cell { border-radius: 4px; font-size: 10px; }
+  .cal-week span { font-size: 10px; }
+  .cal-legend { font-size: 10px; }
 }
 
 /* ── 主页：实验日历（热力图）+ 待办计时 ───────────────── */

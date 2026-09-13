@@ -3031,6 +3031,19 @@
 
       const local = compareTail(a, otherSteps, ai, oi);
 
+      // 对方还没做到要关联的那一步？提醒一下 —— 但不拦着（可以先规划关联、后执行）。
+      const reachedIdx = (arr) => {
+        let last = -1;
+        (arr || []).forEach((x, i) => { if (stepHasProgress(x)) last = i; });
+        return last;
+      };
+      const otherReached = reachedIdx(otherSteps);
+      const otherName = (((others || []).find((o) => o.id === otherId())) || {}).title || '对方实验';
+      const notReachedWarn = (oi > otherReached)
+        ? '<span>⚠ 「' + esc(otherName) + '」目前只进行到 第 ' + (otherReached + 2) + ' 步，还没做到要关联的 第 ' + (oi + 1)
+          + ' 步 —— 仍可关联，等它做到这一步后两边数据会合起来算。</span>'
+        : '';
+
       box.className = 'lk-check';
       box.innerHTML = '正在用 AI 比对后续步骤…';
       if (okBtn) okBtn.disabled = true;
@@ -3056,7 +3069,8 @@
         box.innerHTML = '✓ 后续步骤一致，可以合并。'
           + '<span>' + esc(aiUsed
             ? (verdict.reason || ('AI 判定两边从这一步起是同一套操作（共 ' + local.nx + ' 步）。'))
-            : ('本地比对：从这一步起后续 ' + local.nx + ' 个步骤完全一致。')) + '</span>';
+            : ('本地比对：从这一步起后续 ' + local.nx + ' 个步骤完全一致。')) + '</span>'
+          + notReachedWarn;
         if (okBtn) okBtn.disabled = false;
         return same;
       }
@@ -3076,7 +3090,8 @@
         + '<span>· 对方：' + otherTxt + '</span>'
         + '<span>剩余步骤数 ' + local.nx + ' / ' + local.ny
         + (local.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点。</span>'
-        + (aiUsed ? '' : '<span>（AI 校验暂时不可用，以上是本地比对结果）</span>');
+        + (aiUsed ? '' : '<span>（AI 校验暂时不可用，以上是本地比对结果）</span>')
+        + notReachedWarn;
       if (okBtn) okBtn.disabled = true;
       return same;
     };
