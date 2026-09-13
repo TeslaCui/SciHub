@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.38.0';
+const APP_VERSION = '0.38.1';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -942,12 +942,20 @@ async function renderHome() {
     });
   }
 
-  // 待办（自动）：所有「进行中」的实验都会进来，取当前步骤作为一条待办。
-  // 步骤里写了时长提示（如「反应 24 小时」）才推算结束时间；没写就只标「进行中」。
+  // 待办（自动）：所有「进行中」的实验都会进来，每个实验一条。
+  // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
+  // 「写了时长且还没完成」的步骤 —— 因为「反应 24 小时」这类等待常常写在后面的步骤里
+  // （例：现在第 2 步，流程要求从开始算 24h 后必须结束）。
   const todos = [];
   (runs || []).forEach((r) => {
     const steps = stepMap[r.id] || [];
-    const cur = steps.find((x) => x.position === (r.current_step || 0)) || steps[0];
+    const curPos = r.current_step || 0;
+
+    const pendingTimed = steps.filter((x) => x.position >= curPos
+      && x.status !== 'done'
+      && parseDurationHours(x.duration_hint) > 0);
+
+    const cur = steps.find((x) => x.position === curPos) || pendingTimed[0] || steps[0];
     const hours = parseDurationHours(cur && cur.duration_hint);
     todos.push({
       kind: 'run',
@@ -995,7 +1003,9 @@ async function renderHome() {
           const isRun = t.kind === 'run';
           const title = isRun ? t.run.title : t.title;
           const sub = isRun
-            ? esc((t.step && t.step.title) || '') + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '')
+            ? '第 ' + (((t.step && t.step.position) != null ? t.step.position : 0) + 1) + ' 步'
+              + (t.step && t.step.title ? ' · ' + esc(t.step.title) : '')
+              + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '')
             : (t.due ? '手动待办' : '手动待办 · 未设时间');
 
           const hasDue = !!t.due;
