@@ -419,3 +419,20 @@ select
      where table_schema = 'public' and table_name = 'research_todos')             as todos_table,
   (select count(*) from pg_tables
      where schemaname = 'public' and tablename = 'research_todos' and rowsecurity) as todos_rls;
+
+-- ─────────────────────────────────────────────────────────────
+-- 实验之间的关联（新增）
+-- 场景：v5.1 的第 7 步「酸洗」其实是和 v5 一起做的 ——
+--   把 v5.1 和 v5 的热解后材料混在一起，然后统一酸洗。
+-- 于是在「步骤」上记下：这一步关联到哪个实验 + 一句关联说明。
+-- 有了它，主页就能把有关联的实验合并成一条显示。
+-- 幂等：列已存在则跳过。老数据为 null，界面按「没有关联」处理。
+-- ─────────────────────────────────────────────────────────────
+alter table public.run_steps add column if not exists link_run_id bigint;
+alter table public.run_steps add column if not exists link_note   text;
+
+-- 自检 9：应看到 link_columns=2
+select
+  (select count(*) from information_schema.columns
+     where table_schema = 'public' and table_name = 'run_steps'
+       and column_name in ('link_run_id', 'link_note'))            as link_columns;

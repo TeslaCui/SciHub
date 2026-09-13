@@ -2190,7 +2190,8 @@
 
       const blob = await buildDocx(paras);
       const safe = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
-      downloadBlob(blob, safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
+      // 文件名统一带「实验记录」前缀，方便和方案 / 其它文档区分
+      downloadBlob(blob, '实验记录-' + safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
       setStatus('已导出到第 ' + (cur + 1) + ' 步（共 ' + upto.length + ' 个步骤'
         + (imgTotal ? '、' + imgTotal + ' 张照片' : '') + '）。', 'ok');
     } catch (err) {
