@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.46.0';
+const APP_VERSION = '0.47.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1093,6 +1093,12 @@ async function renderHome() {
     '</div>',
   ].join('\n');
 
+  // 圆环进度（与设计稿一致）：底环 + 亮色弧段，100 周长便于直接写 dasharray
+  const progRing = (pct) => '<svg class="prog-ring" viewBox="0 0 36 36" aria-hidden="true">'
+    + '<circle class="ring-bg" cx="18" cy="18" r="15.9155"/>'
+    + '<circle class="ring-fg" cx="18" cy="18" r="15.9155" stroke-dasharray="' + Math.max(0, Math.min(100, pct)) + ', 100"/>'
+    + '</svg>';
+
   host.innerHTML = [
     '<div class="home-top">' + calendar + todoCard + '</div>',
     '<div class="section-title">进行中的实验</div>',
@@ -1100,6 +1106,31 @@ async function renderHome() {
       ? groups.map((g) => {
           const r = g.runs[0];
           const multi = g.runs.length > 1;
+
+          // 合并点 = 组里最早提出关联的那一步（如 v5.1 第 7 步酸洗 → 合并点是第 7 步）
+          const linkAt = g.links.length ? Math.min.apply(null, g.links.map((l) => l.position)) : null;
+
+          // 每个子实验的进度：只看合并点之前的部分，做到哪里、是否已到合并点
+          const subRows = g.runs.map((x) => {
+            const st = stepMap[x.id] || [];
+            const cut = linkAt == null ? st.length - 1 : linkAt - 1;
+            let reached = 0;
+            st.forEach((s, i) => {
+              if (i > cut) return;
+              const hasData = Object.keys(s.values || {}).some((k) => String((s.values || {})[k] || '').trim());
+              if (s.status === 'done' || (s.images || []).length || String(s.note || '').trim() || hasData) reached = i;
+            });
+            const total = linkAt == null ? Math.max(1, st.length) : linkAt;   // 合并点之前的步数
+            return {
+              run: x,
+              reached: reached,
+              total: total,
+              pct: Math.round(((reached + 1) / total) * 100),
+              doneAll: linkAt != null && reached >= linkAt - 1,                // 已做到合并点
+            };
+          });
+          const notReady = subRows.filter((x) => !x.doneAll).length;
+
           return [
             '<article class="home-card' + (multi ? ' linked' : '') + '">',
             '  <div class="hc-main">',
@@ -1108,14 +1139,42 @@ async function renderHome() {
               : esc(r.title)) + '</div>',
             '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + ((r.current_step || 0) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
-            multi && g.links.length
-              ? '    <div class="link-summary">⇄ ' + g.links.map((l) => {
-                  const a = (g.runs.find((x) => x.id === l.from) || {}).title || '';
-                  const b = (g.runs.find((x) => x.id === l.to) || {}).title || '';
+
+            // 合并后只保留这一栏；子实验收在下拉里，提示直接挂在下拉标题上
+            multi ? [
+              '    <details class="sub-runs"' + (notReady ? ' open' : '') + '>',
+              '      <summary>',
+              '        <span class="sub-toggle">展开 ' + g.runs.length + ' 个关联子实验</span>',
+              notReady
+                ? '<span class="sub-warn">⚠ ' + notReady + ' 个还没做到第 ' + ((linkAt || 0) + 1) + ' 步</span>'
+                : '<span class="sub-ok">✓ 全部已到合并步骤</span>',
+              '      </summary>',
+              '      <div class="sub-list">',
+              subRows.map((x) => [
+                '        <div class="sub-row' + (x.doneAll ? ' done' : '') + '">',
+                '          ' + progRing(x.pct),
+                '          <div class="sub-info">',
+                '            <b>' + esc(x.run.title) + '</b>',
+                '            <span>已到 第 ' + (x.reached + 1) + ' 步 · 共 ' + x.total + ' 步'
+                  + (linkAt != null ? '（合并点：第 ' + (linkAt + 1) + ' 步）' : '') + '</span>',
+                '          </div>',
+                x.doneAll
+                  ? '          <span class="sub-done">✓ 已完成</span>'
+                  : '          <span class="sub-pending">未到合并步</span>',
+                '          <button type="button" class="ghost tiny" data-run="' + x.run.id + '">'
+                  + (x.doneAll ? '查看' : '继续') + '</button>',
+                '        </div>',
+              ].join('\n')).join(''),
+              '      </div>',
+              '    </details>',
+              g.links.length ? '    <div class="link-summary">⇄ ' + g.links.map((l) => {
+                  const a = (g.runs.find((y) => y.id === l.from) || {}).title || '';
+                  const b = (g.runs.find((y) => y.id === l.to) || {}).title || '';
                   return '第 ' + (l.position + 1) + ' 步「' + esc(a) + ' → ' + esc(b) + '」'
                     + (l.note ? '：' + esc(l.note) : '');
-                }).join('；') + '</div>'
-              : '',
+                }).join('；') + '</div>' : '',
+            ].join('\n') : '',
+
             '  </div>',
             '  <div class="hc-actions">',
             '    <button type="button" class="plan-start" data-run="' + r.id + '">继续</button>',
