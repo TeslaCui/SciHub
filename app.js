@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.71.0';
+const APP_VERSION = '0.72.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1000,7 +1000,12 @@ async function renderHome() {
   };
   const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : localProgressPos(r));
 
+  // 「这一步填了几项数据」：只数真正的记录项，**时间类字段（日期/时间/时刻）不算** ——
+  // 「顺手记了个开始时间」不等于这一步做过了。v5 的第 8/9 步就是这样被当成"做过"的：
+  // 它们的 values 里只有时间被写过，实际粉末、体积、pH 这些一个都没填。
+  const isTimeKey = (k) => /日期|时间|时刻/.test(String(k || ''));
   const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
+    if (isTimeKey(k)) return false;
     const v = (x.values || {})[k];
     return String(v == null ? '' : v).trim() !== '';
   }).length;
