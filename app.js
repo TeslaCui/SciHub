@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.81.0';
+const APP_VERSION = '0.82.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -849,7 +849,7 @@ async function renderHome() {
   // 一次取回若干实验的步骤。run_steps.duration_hint 是后加的列（见 supabase_schema.sql），
   // 还没在 Supabase 执行那段 SQL 时查它会整条查询 400 —— 所以先带上，失败就去掉重查。
   const STEP_COLS = 'run_id,position,title,status,link_run_id,link_note,'
-    + 'values,images,note,started_at,updated_at';
+    + 'values,images,note,started_at,updated_at,fields';
   const loadRunSteps = async (ids) => {
     const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint')
       .in('run_id', ids).order('position');
