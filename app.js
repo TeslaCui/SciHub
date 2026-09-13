@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.69.0';
+const APP_VERSION = '0.70.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1195,6 +1195,56 @@ async function renderHome() {
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
   // 「写了时长且还没完成」的步骤 —— 因为「反应 24 小时」这类等待常常写在后面的步骤里
   // （例：现在第 2 步，流程要求从开始算 24h 后必须结束）。
+  // ── 方案自愈：让旧方案自动跟上新功能 ───────────────────────
+  // 进行中实验所用的方案，若有步骤没填「时长提示」（老方案普遍如此 —— 当年没这功能），
+  // 这里用「规则 + AI」补齐并写回方案：不用重新导入、也不用手动去编辑保存。
+  // 天然幂等：只补 duration_hint 为空的步骤，补过之后下次就查不出来了。
+  const healPlanDurations = async (ids) => {
+    if (!ids || !ids.length) return;
+    try {
+      const { data: missing, error } = await client.from('plan_steps')
+        .select('id,plan_id,position,title,instruction')
+        .in('plan_id', ids)
+        .eq('duration_hint', '')
+        .limit(60);
+      if (error || !missing || !missing.length) return;
+
+      const updates = [];
+      const needAi = [];
+      missing.forEach((s) => {
+        const byRule = pickDurationText(s.instruction || '');
+        if (byRule) updates.push({ id: s.id, duration_hint: byRule });
+        else if (String(s.instruction || '').trim()) needAi.push(s);
+      });
+
+      if (needAi.length) {
+        const { data, error: aiErr } = await client.functions.invoke('parse-plan', {
+          body: {
+            mode: 'duration',
+            steps: needAi.map((s) => ({ title: s.title || '', instruction: s.instruction || '' })),
+          },
+        });
+        if (!aiErr && data && Array.isArray(data.durations)) {
+          needAi.forEach((s, k) => {
+            const d = String(data.durations[k] || '').trim();
+            if (d) updates.push({ id: s.id, duration_hint: d });
+          });
+        } else if (aiErr) {
+          console.warn('[SciHub] 方案自愈：AI 补时长不可用（parse-plan 未更新？），本次只补规则能认的：', aiErr);
+        }
+      }
+
+      for (let i = 0; i < updates.length; i++) {
+        await client.from('plan_steps').update({ duration_hint: updates[i].duration_hint }).eq('id', updates[i].id);
+      }
+      if (updates.length) console.info('[SciHub] 方案自愈：已补上 ' + updates.length + ' 个步骤的「时长提示」');
+    } catch (err) {
+      console.warn('[SciHub] 方案自愈失败（不影响其它功能）：', err);
+    }
+  };
+
+  await healPlanDurations(planIds);
+
   // 让 todo-plan 制订待办（进行到第几步 + 文案 + 等多久），失败则下面用本地规则兜底
   await fetchAiTodos(groups);
 
