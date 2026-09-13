@@ -410,13 +410,13 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .drift-body em { color: #93c5fd; }
 }
 
-/* 字段行：字段名 / 单位 / 填写方式（文本、数字、时间…）/ 删除按钮 */
-.field-row { display: grid; grid-template-columns: 1fr 84px 104px 34px; gap: 8px; margin-bottom: 8px; align-items: center; }
+/* 字段行：拖动手柄 / 字段名 / 单位 / 填写方式（文本、数字、时间…）/ 删除 */
+.field-row { display: grid; grid-template-columns: 20px 1fr 84px 104px 34px; gap: 8px; margin-bottom: 8px; align-items: center; }
 
-/* 窄屏：字段名独占一行，单位/填写方式/删除挤成第二行 */
+/* 窄屏：字段名独占一行，其余挤成第二行 */
 @media (max-width: 720px) {
-  .field-row { grid-template-columns: 1fr 1fr 34px; }
-  .field-row > input:first-child { grid-column: 1 / -1; }
+  .field-row { grid-template-columns: 20px 1fr 1fr 34px; }
+  .field-row > input:first-of-type { grid-column: 2 / -1; }
 }
 
 /* 执行界面的数据字段：参数多时自动分两列（手机上仍是一列），备注独占整行 */
@@ -432,8 +432,20 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .sub-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .ghost.tiny { font-size: 12px; padding: 4px 10px; }
-/* 注意事项的一行：输入框 + 删除按钮 */
-.line-row { display: grid; grid-template-columns: 1fr 34px; gap: 8px; margin-bottom: 6px; }
+/* 注意事项的一行：拖动手柄 + 输入框 + 删除 */
+.line-row { display: grid; grid-template-columns: 20px 1fr 34px; gap: 8px; margin-bottom: 6px; align-items: center; }
+
+/* ── 拖动排序（步骤 / 数据字段 / 注意事项）───────────── */
+.drag-handle {
+  cursor: grab; color: var(--muted); font-size: 15px; line-height: 1;
+  text-align: center; user-select: none; -webkit-user-select: none;
+}
+.drag-handle:hover { color: var(--brand); }
+.drag-handle:active { cursor: grabbing; }
+.step-card.dragging, .field-row.dragging, .line-row.dragging { opacity: .45; }
+.step-card.over, .field-row.over, .line-row.over {
+  outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 8px;
+}
 
 /* 「＋ 添加板块」：收成一个入口，点开再选类型 */
 .add-block { margin-top: 10px; }

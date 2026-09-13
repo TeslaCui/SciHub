@@ -637,7 +637,10 @@
       '</div>',
       draft.steps.map((s, si) => [
         '<div class="step-card" data-step="' + si + '">',
-        '  <div class="step-head"><span class="step-no">' + (si + 1) + '</span>',
+        '  <div class="step-head">',
+        // 拖动手柄：只有手柄可拖，免得在输入框里选文字时误触发拖动
+        '    <span class="drag-handle" draggable="true" data-drag-step="' + si + '" title="拖动调整步骤顺序">⠿</span>',
+        '    <span class="step-no">' + (si + 1) + '</span>',
         '    <input class="step-title-text" data-title="' + si + '" value="' + esc(s.title) + '" placeholder="步骤标题">',
         '    <button type="button" class="ghost" data-drop-step="' + si + '">删除步骤</button>',
         '  </div>',
@@ -648,13 +651,14 @@
         //    新增板块统一走底部的「＋ 添加板块」，每个板块也能单独移除。 ──
 
         s.fields.length ? [
-          '  <div class="sub-block">',
+          '  <div class="sub-block" data-fields-area="' + si + '">',
           '    <div class="sub-head"><span>数据字段</span><span class="sub-tools">',
           '      <button type="button" class="ghost tiny" data-add-field="' + si + '">＋ 加字段</button>',
           '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-fields">移除板块</button>',
           '    </span></div>',
           s.fields.map((f, fi) => [
-            '    <div class="field-row">',
+            '    <div class="field-row" data-field-row="' + si + '-' + fi + '">',
+            '      <span class="drag-handle" draggable="true" data-drag-field="' + si + '-' + fi + '" title="拖动调整字段顺序">⠿</span>',
             '      <input data-field-name="' + si + '-' + fi + '" value="' + esc(f.label) + '" placeholder="字段名">',
             '      <input data-field-unit="' + si + '-' + fi + '" value="' + esc(f.unit || '') + '" placeholder="单位，可空">',
             '      <select data-field-type="' + si + '-' + fi + '" title="填写方式">',
@@ -667,13 +671,14 @@
         ].join('\n') : '',
 
         s.notice ? [
-          '  <div class="sub-block">',
+          '  <div class="sub-block" data-notices-area="' + si + '">',
           '    <div class="sub-head"><span>⚠ 注意事项</span><span class="sub-tools">',
           '      <button type="button" class="ghost tiny" data-add-notice="' + si + '">＋ 加一条</button>',
           '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-notice">移除板块</button>',
           '    </span></div>',
           noticeLines(s).map((line, ni) => [
-            '    <div class="line-row">',
+            '    <div class="line-row" data-line-row="' + si + '-' + ni + '">',
+            '      <span class="drag-handle" draggable="true" data-drag-notice="' + si + '-' + ni + '" title="拖动调整顺序">⠿</span>',
             '      <input data-notice="' + si + '-' + ni + '" value="' + esc(line) + '" placeholder="如：出现沉淀即为异常">',
             '      <button type="button" class="icon-btn del" data-drop-notice="' + si + '-' + ni + '" title="删除这条" aria-label="删除这条">×</button>',
             '    </div>',
@@ -751,8 +756,94 @@
     draft.steps = draft.steps.filter((s) => s.title || s.instruction);
   }
 
+  /* 通用拖动排序：只有手柄可拖（避免在输入框里选文字时误触发）。
+     attr 指定读哪个 data-* 作为「位置键」；reorder(fromKey, toKey) 负责重排数据。 */
+  function bindDragSort(host, attr, reorder) {
+    let fromKey = null;
+
+    const clear = () => host.querySelectorAll('.dragging, .over').forEach((n) => n.classList.remove('dragging', 'over'));
+
+    host.querySelectorAll('[' + attr + ']').forEach((handle) => {
+      const item = handle.closest('.step-card, .field-row, .line-row');
+      if (!item) return;
+
+      const keyOf = () => handle.getAttribute(attr);
+
+      handle.addEventListener('dragstart', (e) => {
+        fromKey = keyOf();
+        item.classList.add('dragging');
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          // Firefox 必须 setData 才会真正开始拖拽
+          try { e.dataTransfer.setData('text/plain', 'x'); } catch (_e) { /* 忽略 */ }
+        }
+      });
+
+      handle.addEventListener('dragend', () => { fromKey = null; clear(); });
+
+      item.addEventListener('dragover', (e) => {
+        if (fromKey == null) return;
+        e.preventDefault();
+        item.classList.add('over');
+      });
+      item.addEventListener('dragleave', () => item.classList.remove('over'));
+
+      item.addEventListener('drop', (e) => {
+        if (fromKey == null) return;
+        e.preventDefault();
+
+        const toKey = keyOf();
+        const from = fromKey;
+        clear();
+        fromKey = null;
+        if (from === toKey) return;
+
+        collectDraft();
+        reorder(from, toKey);
+        renderDraft();
+      });
+    });
+  }
+
   function bindDraft() {
     const host = $('view-plan');
+
+    // 步骤排序（位置键就是步骤序号）
+    bindDragSort(host, 'data-drag-step', (a, b) => {
+      const moved = draft.steps.splice(Number(a), 1)[0];
+      if (moved) draft.steps.splice(Number(b), 0, moved);
+    });
+
+    // 数据字段排序（位置键是 "步骤-字段"，只允许同一步骤内排序）
+    bindDragSort(host, 'data-drag-field', (a, b) => {
+      const ai = Number(String(a).split('-')[0]);
+      const af = Number(String(a).split('-')[1]);
+      const bi = Number(String(b).split('-')[0]);
+      const bf = Number(String(b).split('-')[1]);
+      if (ai !== bi) return;
+
+      const list = draft.steps[ai] && draft.steps[ai].fields;
+      if (!list) return;
+      const moved = list.splice(af, 1)[0];
+      if (moved) list.splice(bf, 0, moved);
+    });
+
+    // 注意事项排序（同样只允许同一步骤内排序）
+    bindDragSort(host, 'data-drag-notice', (a, b) => {
+      const ai = Number(String(a).split('-')[0]);
+      const an = Number(String(a).split('-')[1]);
+      const bi = Number(String(b).split('-')[0]);
+      const bn = Number(String(b).split('-')[1]);
+      if (ai !== bi) return;
+
+      const s = draft.steps[ai];
+      if (!s) return;
+      const lines = noticeLines(s);
+      const moved = lines.splice(an, 1)[0];
+      if (moved == null) return;
+      lines.splice(bn, 0, moved);
+      s.notice = lines.filter(Boolean).join('；');
+    });
 
     host.querySelectorAll('[data-drop-step]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
