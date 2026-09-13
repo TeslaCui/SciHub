@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.74.0';
+const APP_VERSION = '0.75.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1085,7 +1085,15 @@ async function renderHome() {
     (list || []).forEach((t) => {
       const id = Number(t && t.runId);
       if (!Number.isFinite(id)) return;
-      if (Number.isFinite(Number(t.step))) aiPos[id] = Number(t.step);
+      if (Number.isFinite(Number(t.step))) {
+        // AI 有时会把「第 N 步」（1 起算的步号）当成 position 返回 —— 差一位就会让界面整体偏移
+        // （v5 显示第 9 步、其实停在第 8 步就是这么来的）。这里用实际的 position 集合校验，差一位就纠回来。
+        const steps = stepMap[id] || [];
+        const positions = steps.map((x) => x.position);
+        let st = Number(t.step);
+        if (positions.length && positions.indexOf(st) === -1 && positions.indexOf(st - 1) !== -1) st = st - 1;
+        aiPos[id] = st;
+      }
       aiWhy[id] = String((t && t.reason) || '');
       aiLabel[id] = String((t && t.label) || '');
       aiHours[id] = Number((t && t.dueInHours) || 0) || 0;
