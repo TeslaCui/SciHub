@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.65.0';
+const APP_VERSION = '0.66.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -988,6 +988,7 @@ async function renderHome() {
   // 结果按「步骤状态签名」缓存在 localStorage —— 状态没变就不重复调用；
   // AI 不可用（函数没更新/没部署、断网、没额度）时一律回退到 current_step，界面不会空着。
   const aiPos = {};
+  const aiWhy = {};                 // runId -> AI 给出的判断依据（显示在界面上，方便核对）
   const runProgressPos = (r) => (aiPos[r.id] != null ? aiPos[r.id] : (Number(r.current_step) || 0));
 
   const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
@@ -1013,7 +1014,10 @@ async function renderHome() {
       const raw = window.localStorage.getItem(aiProgressKey(r.id));
       if (raw) {
         const c = JSON.parse(raw);
-        if (c && c.sig === sig && Number.isFinite(Number(c.step))) return Number(c.step);
+        if (c && c.sig === sig && Number.isFinite(Number(c.step))) {
+          aiWhy[r.id] = String(c.reason || '');
+          return Number(c.step);
+        }
       }
     } catch (_e) { /* 隐私模式下忽略缓存 */ }
 
@@ -1037,7 +1041,10 @@ async function renderHome() {
         return base;
       }
       const step = Math.max(0, Math.min(Number(data.step), steps.length - 1));
-      try { window.localStorage.setItem(aiProgressKey(r.id), JSON.stringify({ sig: sig, step: step })); } catch (_e) { /* 忽略 */ }
+      aiWhy[r.id] = String(data.reason || '');
+      try {
+        window.localStorage.setItem(aiProgressKey(r.id), JSON.stringify({ sig: sig, step: step, reason: aiWhy[r.id] }));
+      } catch (_e) { /* 忽略 */ }
       return step;
     } catch (err) {
       console.warn('[SciHub] AI 进度判断调用失败，改用 current_step：', err);
@@ -1173,6 +1180,7 @@ async function renderHome() {
       hours: hours,
       dur: durOf(cur),
       isNext: isNext,
+      why: aiWhy[r.id] || '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
         : null,
@@ -1257,6 +1265,8 @@ async function renderHome() {
                 }).join('；') + '</span>'
               : '')
             + '<em>' + whenTxt + '</em>'
+            // AI 为什么这么判（方便对照：如果判错了，一眼能看出它依据的是哪一步的什么痕迹）
+            + (t.why ? '<span class="hc-meta" title="AI 判断依据">AI：' + esc(t.why) + '</span>' : '')
             + '</div>'
             // 自动项（来自进行中的实验）不能在这里删 —— 它跟着实验走；
             // 手动项才有删除按钮。
@@ -1314,7 +1324,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join(' ⇄ ') + ' <span class="link-tag">关联实验</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
+            '    <div class="hc-meta"' + (aiWhy[r.id] ? ' title="AI 判断依据：' + esc(aiWhy[r.id]) + '"' : '') + '>开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             // 合并后只保留这一栏；子实验收在下拉里，提示直接挂在下拉标题上
