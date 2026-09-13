@@ -858,3 +858,17 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .cal-tip-steps { margin-top: 4px; color: var(--muted); }
 .cal-tip-step i { font-style: normal; color: var(--brand); margin-left: 4px; }
 .cal-tip-none { color: var(--muted); }
+
+/* ── 步骤关联其它实验 ──────────────────────────────── */
+.link-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.link-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 5px 10px; border-radius: 999px;
+  background: rgba(16, 185, 129, .10); border: 1px solid rgba(16, 185, 129, .35);
+  font-size: 12px; line-height: 1.5;
+}
+.link-chip b { font-weight: 600; }
+.link-chip i { font-style: normal; color: var(--muted); }
+
+/* 主页：合并后的「关联实验」卡片 */
+.link-summary { color: var(--muted); font-size: 12px; margin-top: 3px; line-height: 1.6; }

@@ -1231,6 +1231,14 @@
     run.urlErrors = {};
     run.drift = { fields: [] };
 
+    // 步骤上关联到的其它实验：把标题一次性查出来，界面上直接显示名字
+    run.linked = {};
+    const linkIds = [...new Set(run.steps.map((s) => s.link_run_id).filter(Boolean))];
+    if (linkIds.length) {
+      const { data: linkedRuns } = await client.from(RUN).select('id,title').in('id', linkIds);
+      (linkedRuns || []).forEach((x) => { run.linked[x.id] = x.title; });
+    }
+
     // 预取图片的签名地址（私有 bucket）：一次批量签名，并记录失败原因给缩略图提示
     const paths = [];
     run.steps.forEach((s) => (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); }));
@@ -1367,6 +1375,17 @@
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
+      // 这一步是不是和其它实验一起做的？比如「v5.1 第 7 步酸洗」和 v5 一起酸洗
+      '  <div class="link-row">',
+      s.link_run_id
+        ? [
+            '<span class="link-chip">⇄ 已关联：<b>' + esc(run.linked[s.link_run_id] || ('实验 #' + s.link_run_id)) + '</b>'
+              + (s.link_note ? '<i>' + esc(s.link_note) + '</i>' : '') + '</span>',
+            '<button type="button" class="ghost tiny" id="link-edit">改说明</button>',
+            '<button type="button" class="ghost tiny" id="link-del">取消关联</button>',
+          ].join('')
+        : '<button type="button" class="ghost tiny" id="link-add">＋ 关联其它实验</button>',
+      '  </div>',
       s.notice ? [
         '  <div class="notice">',
         '    <span class="notice-icon" aria-hidden="true">⚠</span>',
@@ -1399,6 +1418,85 @@
     bindPyro(s);
 
     $('run-exit').addEventListener('click', () => route('home'));
+
+    // ── 步骤关联其它实验 ────────────────────────────────
+    // 场景：v5.1 的第 7 步「酸洗」是和 v5 一起做的 —— 混料后统一酸洗。
+    // 关联后，主页会把这两条实验合并成一条显示。
+    const curStep = () => run.steps[run.pos];
+
+    const saveLink = async (linkRunId, note) => {
+      const st = curStep();
+      const { error } = await client.from(RUN_STEP)
+        .update({ link_run_id: linkRunId, link_note: note })
+        .eq('id', st.id);
+      if (error) {
+        console.error('[SciHub] 关联写入失败：', error);
+        setStatus('关联失败：请确认已在 Supabase 给 run_steps 加上 link_run_id / link_note 两列。', 'error');
+        return false;
+      }
+      st.link_run_id = linkRunId;
+      st.link_note = note;
+      if (linkRunId && !run.linked[linkRunId]) {
+        const { data } = await client.from(RUN).select('title').eq('id', linkRunId).maybeSingle();
+        run.linked[linkRunId] = (data && data.title) || ('实验 #' + linkRunId);
+      }
+      return true;
+    };
+
+    const openLinkDialog = async () => {
+      const st = curStep();
+      const { data: others } = await client
+        .from(RUN)
+        .select('id,title,status,started_at')
+        .neq('id', run.id)
+        .order('started_at', { ascending: false });
+
+      const opts = (others || []).map((o) => '<option value="' + o.id + '"'
+        + (String(st.link_run_id) === String(o.id) ? ' selected' : '') + '>'
+        + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
+
+      openModal('关联其它实验', [
+        '<label>关联到哪个实验',
+        '  <select id="link-select">',
+        '    <option value="">— 请选择 —</option>',
+        opts,
+        '  </select>',
+        '</label>',
+        '<label>关联说明',
+        '  <textarea id="link-note" rows="3" placeholder="如：混合 v5.1 和 v5 的热解后材料，然后进行酸洗">'
+          + esc(st.link_note || '') + '</textarea>',
+        '</label>',
+        '<p class="hint small">关联后，主页会把这两条实验合并成一条显示。</p>',
+      ].join(''), [
+        { label: '取消', onClick: closeModal },
+        {
+          label: '保存',
+          primary: true,
+          onClick: async () => {
+            const id = $('link-select').value ? Number($('link-select').value) : null;
+            if (!id) { setStatus('请先选择要关联的实验。', 'error'); return; }
+            const note = ($('link-note').value || '').trim();
+            if (await saveLink(id, note || null)) {
+              closeModal();
+              setStatus('已关联，主页会合并显示这两条实验。', 'ok');
+              drawRun();
+            }
+          },
+        },
+      ]);
+    };
+
+    const linkAdd = $('link-add');
+    if (linkAdd) linkAdd.addEventListener('click', openLinkDialog);
+    const linkEdit = $('link-edit');
+    if (linkEdit) linkEdit.addEventListener('click', openLinkDialog);
+    const linkDel = $('link-del');
+    if (linkDel) linkDel.addEventListener('click', async () => {
+      if (await saveLink(null, null)) {
+        setStatus('已取消关联。', 'ok');
+        drawRun();
+      }
+    });
 
     // 步骤节点：点一下直接跳到那一步。只是浏览，不影响「已进行到第几步」。
     host.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => {
