@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.33.0';
+const APP_VERSION = '0.34.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -834,7 +834,7 @@ async function renderHome() {
   if (monthRuns.length) {
     const { data: rs } = await client
       .from('run_steps')
-      .select('run_id,position,title,status')
+      .select('run_id,position,title,status,duration_hint')
       .in('run_id', monthRuns.map((r) => r.id))
       .order('position');
     (rs || []).forEach((x) => {
@@ -914,8 +914,77 @@ async function renderHome() {
     '</div>',
   ].join('\n');
 
+  // ── 待办 / 计时提醒 ──
+  // 进行中的实验，按「当前步骤的时长提示」推算该在什么时间结束。
+  // 比如步骤写着「反应 24 小时」，就从开始时间往后 24 小时提醒。
+  const parseDurationHours = (text) => {
+    const t = String(text || '');
+    const h = t.match(/(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z]))/i);
+    if (h) return Number(h[1]);
+    const d = t.match(/(\d+(?:\.\d+)?)\s*(?:天|days?)/i);
+    if (d) return Number(d[1]) * 24;
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(?:分钟|min(?:ute)?s?)/i);
+    if (m) return Number(m[1]) / 60;
+    return 0;
+  };
+
+  // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
+  const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
+  if (needSteps.length) {
+    const { data: more } = await client
+      .from('run_steps')
+      .select('run_id,position,title,status,duration_hint')
+      .in('run_id', needSteps)
+      .order('position');
+    (more || []).forEach((x) => {
+      if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
+      stepMap[x.run_id].push(x);
+    });
+  }
+
+  const todos = [];
+  (runs || []).forEach((r) => {
+    const steps = stepMap[r.id] || [];
+    const cur = steps.find((x) => x.position === (r.current_step || 0)) || steps[0];
+    const hours = parseDurationHours(cur && cur.duration_hint);
+    if (hours > 0) {
+      todos.push({
+        run: r,
+        step: cur,
+        due: new Date(new Date(r.started_at).getTime() + hours * 3600 * 1000),
+      });
+    }
+  });
+  todos.sort((a, b) => a.due - b.due);   // 快到期的排前面
+
+  const hhmm = (d) => p2(d.getHours()) + ':' + p2(d.getMinutes());
+  const todoCard = [
+    '<div class="card todo-card">',
+    '  <div class="todo-title">待办 · 计时提醒</div>',
+    todos.length
+      ? todos.map((t) => {
+          const leftMin = Math.round((t.due - Date.now()) / 60000);
+          const overdue = leftMin < 0;
+          const absMin = Math.abs(leftMin);
+          const leftTxt = overdue
+            ? '已超时 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟')
+            : '还需 ' + (absMin >= 60 ? Math.round(absMin / 60) + ' 小时' : absMin + ' 分钟');
+          const sameDay = t.due.toDateString() === today.toDateString();
+          return '<div class="todo-item' + (overdue ? ' overdue' : '') + '">'
+            + '<div class="todo-main">'
+            + '<b>' + esc(t.run.title) + '</b>'
+            + '<span>' + esc((t.step && t.step.title) || '') + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '') + '</span>'
+            + '<em>' + (sameDay ? '今天 ' : fmtText(t.due.toISOString()) + ' ') + hhmm(t.due) + ' 结束 · ' + leftTxt + '</em>'
+            + '</div>'
+            + '<button type="button" class="ghost tiny" data-run="' + t.run.id + '">去处理</button>'
+            + '</div>';
+        }).join('')
+      : '<div class="todo-empty">暂无需要计时的步骤。<br><span>步骤里写了「约 24 小时」这类时长提示，就会在这里提醒结束时间。</span></div>',
+    '</div>',
+  ].join('\n');
+
   host.innerHTML = [
-    calendar,
+    '<div class="home-top">' + calendar + todoCard + '</div>',
     '<div class="section-title">进行中的实验</div>',
     runs.length
       ? runs.map((r) => [
