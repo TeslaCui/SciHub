@@ -332,11 +332,6 @@
     const host = $('view-plans');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
 
-    // 卡片上的两个图标操作（行内 SVG，无外部依赖）
-    const ICON_TAG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 12 22l-9-9V4a1 1 0 0 1 1-1h9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>';
-    const ICON_TRASH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
-    const ICON_REFRESH = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>';
-
     const { data, error } = await client.from(PLAN).select('id,title,source,created_at,parse_version').order('created_at', { ascending: false });
     if (error) {
       host.querySelector('.empty').textContent = '方案暂时无法加载，请稍后重试。';
@@ -345,19 +340,14 @@
     }
 
     const cards = (data || []).map((p) => [
-      '<article class="plan-card" data-open="' + p.id + '" title="点击查看与编辑">',
+      '<article class="plan-card clickable" data-open="' + p.id + '" role="button" tabindex="0" title="查看方案详情">',
       '  <div class="hc-main">',
       '    <div class="hc-title">' + esc(p.title) + '</div>',
       '    <div class="hc-meta">' + (p.source ? esc(p.source) + ' · ' : '') + fmt(p.created_at) + '</div>',
       '  </div>',
-      '  <div class="hc-actions">',
-      '    <button type="button" class="plan-start" data-start="' + p.id + '">开始实验</button>',
       planNeedsUpgrade(p)
-        ? '    <button type="button" class="icon-btn fresh" data-upgrade="' + p.id + '" title="这个方案还没用上最新的解析功能，点此重新解析（不影响已开始的实验）" aria-label="重新解析">' + ICON_REFRESH + '</button>'
+        ? '  <span class="ver-stale" title="这个方案还没用上最新的解析功能，可在详情页重新解析">可重新解析</span>'
         : '',
-      '    <button type="button" class="icon-btn" data-rename="' + p.id + '" data-name="' + esc(p.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
-      '    <button type="button" class="icon-btn del" data-del="' + p.id + '" title="删除" aria-label="删除">' + ICON_TRASH + '</button>',
-      '  </div>',
       '</article>',
     ].join('\n')).join('');
 
@@ -377,33 +367,15 @@
       if (f) startImport(f);
     });
 
-    // 点卡片进详情（点按钮时不触发）
-    host.querySelectorAll('[data-open]').forEach((card) => card.addEventListener('click', (e) => {
-      if (e.target.closest('button')) return;
-      route('plan', Number(card.dataset.open));
-    }));
-
-    host.querySelectorAll('[data-start]').forEach((b) => b.addEventListener('click', () => startRun(Number(b.dataset.start))));
-    host.querySelectorAll('[data-upgrade]').forEach((b) => b.addEventListener('click', async () => {
-      b.disabled = true;
-      try {
-        await upgradePlan(Number(b.dataset.upgrade));
-        // 关键：重新读一遍方案并重绘列表。
-        // 内容补齐后 planNeedsUpgrade 会返回 false，这个按钮也就随之消失。
-        listPlans();
-      } catch (err) {
-        console.error('[SciHub] 更新方案失败：', err);
-        setStatus('更新失败：' + errorText(err), 'error');
-        b.disabled = false;
-      }
-    }));
-    host.querySelectorAll('[data-rename]').forEach((b) => b.addEventListener('click', () => renamePlan(Number(b.dataset.rename), b.dataset.name)));
-    host.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      if (!window.confirm('删除这个方案？已生成的实验记录不受影响。')) return;
-      await client.from(PLAN).delete().eq('id', Number(b.dataset.del));
-      setStatus('方案已删除。', 'ok');
-      listPlans();
-    }));
+    // 整卡进详情。操作按钮一律不放在这里 —— 开始实验 / 编辑 / 重命名 / 删除 / 重新解析
+    // 全部收在方案详情页，保证每个功能只有一个入口。
+    host.querySelectorAll('[data-open]').forEach((card) => {
+      const open = () => route('plan', Number(card.dataset.open));
+      card.addEventListener('click', open);
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+      });
+    });
   }
 
   /* 按当前解析规则「重建」方案内容：
@@ -689,15 +661,10 @@
         (s.pyro_seq || isPyroText(s)) ? [
           '  <div class="sub-block">',
           '    <div class="sub-head"><span>🔥 热解程序</span><span class="sub-tools">',
-          '      <button type="button" class="ghost tiny" data-gen-pyro="' + si + '">按温度/速率生成</button>',
           s.pyro_seq ? '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-pyro">移除板块</button>' : '',
           '    </span></div>',
-          '    <div class="pyro-grid">',
-          '      <label>初始温度（℃）<input type="number" step="any" inputmode="decimal" data-pyro-room="' + si + '" placeholder="如 30"></label>',
-          '      <label>升温速率（℃/min）<input type="number" step="any" inputmode="decimal" data-pyro-rate="' + si + '" value="5"></label>',
-          '      <label>最终温度（℃）<input type="number" step="any" inputmode="decimal" data-pyro-final="' + si + '" placeholder="如 950"></label>',
-          '    </div>',
-          '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="生成结果会填在这里，也可直接粘贴">',
+          // 生成/试算统一走右上角「小工具」里的热解计算器，这里只负责保存这一串程序
+          '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="粘贴程序串，或用右上角小工具算好再粘过来">',
           '  </div>',
         ].join('\n') : '',
 
@@ -880,25 +847,6 @@
       if (kind === 'notice') s.notice = '';
       if (kind === 'pyro') s.pyro_seq = '';
       renderDraft();
-    }));
-
-    // 按「初始温度 / 升温速率 / 最终温度」生成热解程序
-    host.querySelectorAll('[data-gen-pyro]').forEach((b) => b.addEventListener('click', () => {
-      collectDraft();
-      const si = Number(b.dataset.genPyro);
-      const s = draft.steps[si];
-      const val = (sel) => { const n = document.querySelector(sel); return n ? n.value : ''; };
-
-      const next = buildPyroSeq(
-        s.pyro_seq || 'C30-T60-C30-T184-C950-T60-C950--121',
-        val('[data-pyro-room="' + si + '"]'),
-        val('[data-pyro-rate="' + si + '"]'),
-        val('[data-pyro-final="' + si + '"]')
-      );
-      if (!next) { setStatus('先粘贴一个作为模板的热解程序。', 'warn'); return; }
-      s.pyro_seq = next;
-      renderDraft();
-      setStatus('已按温度与速率生成热解程序。', 'ok');
     }));
 
     // 数据字段：删除一行
@@ -1335,7 +1283,7 @@
       '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + ' · 已进行 ' + sinceText(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成' : '') + '</div>',
       '  </div>',
       '  <div class="hc-actions">',
-      '    <button type="button" class="ghost" id="run-export">导出数据</button>',
+      // 导出统一放在主页的「进行中的实验」卡片上，这里不再重复一个入口
       '    <button type="button" class="ghost" id="run-exit">返回主页</button>',
       '  </div>',
       '</div>',
@@ -1388,7 +1336,6 @@
     bindPyro(s);
 
     $('run-exit').addEventListener('click', () => route('home'));
-    $('run-export').addEventListener('click', exportRunData);
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
     const syncBtn = $('run-sync-fields');
@@ -2111,6 +2058,11 @@
 
       if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
 
+      // 只导出到「当前进行到的步骤」为止 —— 还没做到的那几步不写进文档。
+      // 实验做完时 current_step 已是最后一步，所以等于全量导出。
+      const cur = Math.min(Math.max(0, Number(run.data.current_step) || 0), run.steps.length - 1);
+      const upto = run.steps.filter((s) => s.position <= cur);
+
       setStatus('正在生成 Word 文档…');
       const title = run.data.title || '实验';
       const paras = [
@@ -2118,7 +2070,7 @@
         {
           text: '开始于 ' + fmt(run.data.started_at)
             + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中')
-            + ' · 共 ' + run.steps.length + ' 步',
+            + ' · 已做到第 ' + (cur + 1) + ' 步（共 ' + run.steps.length + ' 步）',
           size: 9, align: 'center',
         },
         '',
@@ -2126,7 +2078,7 @@
 
       let imgTotal = 0;
 
-      for (const s of run.steps) {
+      for (const s of upto) {
         paras.push({ text: '第 ' + (s.position + 1) + ' 步　' + (s.title || ''), bold: true, size: 13, color: '0F766E' });
         if (s.pyro_seq) paras.push({ text: '热解程序：' + s.pyro_seq, size: 10 });
         if (s.duration_hint) paras.push({ text: '时长提示：' + s.duration_hint, size: 10 });
@@ -2167,8 +2119,8 @@
       const blob = await buildDocx(paras);
       const safe = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
       downloadBlob(blob, safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
-      setStatus('已导出：' + run.steps.length + ' 个步骤'
-        + (imgTotal ? '、' + imgTotal + ' 张照片' : '') + '。', 'ok');
+      setStatus('已导出到第 ' + (cur + 1) + ' 步（共 ' + upto.length + ' 个步骤'
+        + (imgTotal ? '、' + imgTotal + ' 张照片' : '') + '）。', 'ok');
     } catch (err) {
       console.error('[SciHub] 导出失败：', err);
       setStatus('导出失败：' + errorText(err), 'error');

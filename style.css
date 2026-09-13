@@ -396,6 +396,11 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .drift-body em { display: block; margin-top: 5px; font-style: normal; color: #3730a3; font-size: 12px; line-height: 1.5; }
 .drift .ghost { flex-shrink: 0; align-self: center; }
 
+/* 整卡可点（首页方案卡片 / 方案列表卡片）：操作都收在详情页，这里只负责点进去 */
+.home-card.clickable, .plan-card.clickable { cursor: pointer; }
+.home-card.clickable:hover, .plan-card.clickable:hover { border-color: var(--brand); }
+.home-card.clickable:focus-visible, .plan-card.clickable:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
 /* 深色模式：白底橙框会很刺眼，改成半透明底 + 亮色文字 */
 @media (prefers-color-scheme: dark) {
   .notice { background: rgba(234, 88, 12, .14); border-color: rgba(251, 146, 60, .5); border-left-color: #fb923c; }

@@ -661,7 +661,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.29.0';
+const APP_VERSION = '0.30.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -821,19 +821,18 @@ async function renderHome() {
     '<div class="section-title">开始新的实验</div>',
     (plans && plans.length)
       ? plans.map((p) => [
-          '<article class="home-card">',
+          '<article class="home-card clickable" data-open-plan="' + p.id + '" role="button" tabindex="0" title="查看方案详情">',
           '  <div class="hc-main">',
           '    <div class="hc-title">' + esc(p.title) + '</div>',
-          '    <div class="hc-meta">按这份方案开始一次新实验</div>',
+          '    <div class="hc-meta">查看方案详情与操作</div>',
           '  </div>',
-          '  <div class="hc-actions"><button type="button" class="plan-start" data-start-plan="' + p.id + '">开始实验</button></div>',
           '</article>',
         ].join('\n')).join('\n')
       : '<div class="empty">还没有实验方案。<br><button type="button" class="ghost" data-go="plans" style="margin-top:10px">去导入 Word 方案</button></div>',
 
     '<div class="section-title">快捷入口</div>',
     '<div class="quick-grid">',
-    '  <button type="button" class="quick" data-go="plans"><b>方案管理</b><span>导入、编辑、重命名或删除实验方案</span></button>',
+    '  <button type="button" class="quick" data-go="plans"><b>方案管理</b><span>导入、查看详情、编辑或删除实验方案</span></button>',
     '  <button type="button" class="quick" data-go="records"><b>科研记录</b><span>查看与检索已保存的记录</span></button>',
     '  <button type="button" class="quick" data-new-record><b>新建记录</b><span>随手记一条实验日志或文献笔记</span></button>',
     '</div>',
@@ -854,11 +853,16 @@ async function renderHome() {
   host.querySelectorAll('[data-run]').forEach((btn) => {
     btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
   });
-  host.querySelectorAll('[data-start-plan]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (window.Plans) window.Plans.start(Number(btn.dataset.startPlan));
+
+  // 方案卡片：整卡点开详情（操作按钮统一放在详情页，这里不再重复）
+  host.querySelectorAll('[data-open-plan]').forEach((el) => {
+    const open = () => { if (window.Plans) window.Plans.editor(Number(el.dataset.openPlan)); };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
     });
   });
+
   host.querySelectorAll('[data-go]').forEach((btn) => {
     btn.addEventListener('click', () => route(btn.dataset.go));
   });
