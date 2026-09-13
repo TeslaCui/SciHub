@@ -1266,14 +1266,34 @@
     runChannel = null;
   }
 
+  /* 这一步是否已经「有进展」：填了数据、附了照片、写了备注，或标记完成。
+     用来算「实验进行位置」—— 它和「当前浏览位置」是两回事。 */
+  function stepHasProgress(x) {
+    if (!x) return false;
+    if (x.status === 'done') return true;
+    if ((x.images || []).length) return true;
+    if (String(x.note || '').trim()) return true;
+    const vals = x.values || {};
+    return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
+  }
+
   function drawRun() {
     const host = $('view-run');
     const s = run.steps[run.pos];
     if (!s) { host.innerHTML = '<div class="empty">没有可执行的步骤。</div>'; return; }
 
+    const total = run.steps.length;
     const done = run.steps.filter((x) => x.status === 'done').length;
-    const pct = Math.round((done / run.steps.length) * 100);
-    const isLast = run.pos === run.steps.length - 1;
+
+    // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤。
+    // 翻看后面的步骤不会推进它 —— 进度由填写的数据决定，不由浏览位置决定。
+    let reached = 0;
+    run.steps.forEach((x, i) => { if (stepHasProgress(x)) reached = i; });
+
+    const reachedPct = total > 1 ? Math.round((reached / (total - 1)) * 100) : 100;
+    const posPct = total > 1 ? Math.round((run.pos / (total - 1)) * 100) : 100;
+
+    const isLast = run.pos === total - 1;
     const resumed = (run.data.current_step || 0) === run.pos && run.pos > 0;
     const drift = (run.drift && run.drift.fields) || [];
 
@@ -1287,8 +1307,27 @@
       '    <button type="button" class="ghost" id="run-exit">返回主页</button>',
       '  </div>',
       '</div>',
-      '<div class="progress"><i style="width:' + pct + '%"></i></div>',
-      '<div class="hc-meta" style="margin-bottom:10px">第 ' + (run.pos + 1) + ' / ' + run.steps.length + ' 步 · 已完成 ' + done + ' 步'
+
+      // 进度条：绿色实心＝实验进行到的位置（按数据算）；空心圆环＝当前正在浏览的位置
+      '<div class="progress">',
+      '  <i style="width:' + reachedPct + '%"></i>',
+      '  <span class="prog-mark prog-reached" style="left:' + reachedPct + '%" title="已进行到第 ' + (reached + 1) + ' 步"></span>',
+      '  <span class="prog-mark prog-pos" style="left:' + posPct + '%" title="正在浏览第 ' + (run.pos + 1) + ' 步"></span>',
+      '</div>',
+
+      // 步骤节点：点任意一个直接跳过去，只是浏览，不会改变实验进度
+      '<div class="step-nav">',
+      run.steps.map((x, i) => {
+        const cls = ['step-dot'];
+        if (stepHasProgress(x)) cls.push('done');
+        if (i === reached) cls.push('reached');
+        if (i === run.pos) cls.push('cur');
+        return '<button type="button" class="' + cls.join(' ') + '" data-goto="' + i + '"'
+          + ' title="第 ' + (i + 1) + ' 步：' + esc(x.title) + '">' + (i + 1) + '</button>';
+      }).join(''),
+      '</div>',
+
+      '<div class="hc-meta run-status">已进行到 <b>第 ' + (reached + 1) + ' 步</b> · 正在浏览 第 ' + (run.pos + 1) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
       drift.length ? [
@@ -1336,6 +1375,15 @@
     bindPyro(s);
 
     $('run-exit').addEventListener('click', () => route('home'));
+
+    // 步骤节点：点一下直接跳到那一步。只是浏览，不影响「已进行到第几步」。
+    host.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => {
+      const i = Number(b.dataset.goto);
+      if (i === run.pos) return;
+      run.pos = i;
+      drawRun();
+    }));
+
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
     $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
     const syncBtn = $('run-sync-fields');
