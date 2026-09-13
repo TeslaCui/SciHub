@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.37.0';
+const APP_VERSION = '0.38.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1027,12 +1027,8 @@ async function renderHome() {
               : '<button type="button" class="icon-btn del" data-todo-del="' + t.id + '" title="删除这条待办" aria-label="删除">×</button>')
             + '</div>';
         }).join('')
-      : '<div class="todo-empty">当前没有待办。<br><span>开始实验后，当前步骤会自动出现在这里；也可以在下面自己加一条。</span></div>',
-    '  <div class="todo-add">',
-    '    <input id="todo-title" placeholder="加一条待办，如：明天 10:00 取样品" maxlength="120">',
-    '    <input id="todo-due" type="datetime-local" title="可选：截止时间">',
-    '    <button type="button" class="ghost tiny" id="todo-add-btn">添加</button>',
-    '  </div>',
+      : '<div class="todo-empty">当前没有待办。<br><span>开始实验后，当前步骤会自动出现在这里；也可以点下方「＋」自己加一条。</span></div>',
+    '  <button type="button" class="todo-add-btn" id="todo-add-btn" title="添加一条待办">＋ 添加待办</button>',
     '</div>',
   ].join('\n');
 
@@ -1148,35 +1144,55 @@ async function renderHome() {
     if (!e.target.closest('[data-tip-id]') && !e.target.closest('#cal-tip')) hideTip();
   });
 
-  // 待办：添加 / 删除（来自进行中实验的自动项不在这里删 —— 它跟着实验走）
+  // 待办：点「＋ 添加待办」弹窗填写（删除见下；来自进行中实验的自动项不在这里删）
   const addTodoBtn = $('todo-add-btn');
   if (addTodoBtn) {
-    const titleEl = $('todo-title');
-    const dueEl = $('todo-due');
+    addTodoBtn.addEventListener('click', () => {
+      openModal('添加待办', [
+        '<label>内容<input id="todo-title" maxlength="120" placeholder="如：明天 10:00 取样品"></label>',
+        '<label>截止时间（可留空）<input id="todo-due" type="datetime-local"></label>',
+        '<p class="hint small">留空就是一条没有截止时间的待办。</p>',
+      ].join(''), [
+        { label: '取消', onClick: closeModal },
+        {
+          label: '添加',
+          primary: true,
+          onClick: async () => {
+            const titleEl = $('todo-title');
+            const title = (titleEl.value || '').trim();
+            if (!title) { titleEl.focus(); return; }
 
-    const doAdd = async () => {
-      const title = (titleEl.value || '').trim();
-      if (!title) { titleEl.focus(); return; }
+            const dueEl = $('todo-due');
+            const { error } = await client.from('research_todos').insert({
+              user_id: state.user.id,
+              title: title,
+              due_at: dueEl.value ? new Date(dueEl.value).toISOString() : null,
+            });
 
-      addTodoBtn.disabled = true;
-      const { error } = await client.from('research_todos').insert({
-        user_id: state.user.id,
-        title: title,
-        due_at: dueEl.value ? new Date(dueEl.value).toISOString() : null,
-      });
-      addTodoBtn.disabled = false;
+            if (error) {
+              console.error('[SciHub] 添加待办失败：', error);
+              setStatus('添加待办失败：请确认已在 Supabase 建好 research_todos 表。', 'error');
+              return;
+            }
+            closeModal();
+            setStatus('已添加待办。', 'ok');
+            renderHome();
+          },
+        },
+      ]);
 
-      if (error) {
-        console.error('[SciHub] 添加待办失败：', error);
-        setStatus('添加待办失败：请确认已在 Supabase 建好 research_todos 表。', 'error');
-        return;
-      }
-      setStatus('已添加待办。', 'ok');
-      renderHome();
-    };
-
-    addTodoBtn.addEventListener('click', doAdd);
-    titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') doAdd(); });
+      // 弹窗一出来就聚焦，回车即可提交
+      setTimeout(() => {
+        const t = $('todo-title');
+        if (!t) return;
+        t.focus();
+        t.addEventListener('keydown', (e) => {
+          if (e.key !== 'Enter') return;
+          const ok = document.querySelector('.modal-card .actions .primary');
+          if (ok) ok.click();
+        });
+      }, 30);
+    });
   }
 
   host.querySelectorAll('[data-todo-del]').forEach((btn) => btn.addEventListener('click', async (e) => {
