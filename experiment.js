@@ -1218,6 +1218,7 @@
         instruction: s.instruction,
         notice: s.notice || '',
         pyro_seq: s.pyro_seq || '',
+        duration_hint: s.duration_hint || '',
         fields: s.fields,
         values: {},
         images: [],
@@ -3132,7 +3133,7 @@
   /* ── 进行中的实验（主页用）────────────────────────────── */
 
   async function runningRuns() {
-    const { data } = await client.from(RUN).select('id,title,started_at,current_step,updated_at')
+    const { data } = await client.from(RUN).select('id,title,started_at,current_step,updated_at,plan_id')
       .eq('status', 'running').order('updated_at', { ascending: false }).limit(5);
     return data || [];
   }

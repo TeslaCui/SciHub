@@ -662,7 +662,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.56.0';
+const APP_VERSION = '0.57.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -971,6 +971,21 @@ async function renderHome() {
     });
   }
 
+  // 起跑时没把方案里的「时长提示」快照进实验步骤（老数据的时长全是空），
+  // 所以待办算结束时间时用方案里同一步骤的时长兜底 —— 不重建实验也能算出来。
+  const planDur = {};        // plan_id -> { position: 时长文本 }
+  const planIds = [...new Set((runs || []).map((r) => r.plan_id).filter(Boolean))];
+  if (planIds.length) {
+    const { data: ps } = await client
+      .from('plan_steps')
+      .select('plan_id,position,duration_hint')
+      .in('plan_id', planIds);
+    (ps || []).forEach((x) => {
+      if (!planDur[x.plan_id]) planDur[x.plan_id] = {};
+      if (x.duration_hint) planDur[x.plan_id][x.position] = x.duration_hint;
+    });
+  }
+
   // ── 把有关联的实验合并成一组 ──────────────────────────
   // 某实验的某个步骤 link_run_id 指向另一个实验时（如 v5.1 第 7 步酸洗 → v5），
   // 这两个实验算一组：主页只显示一条「关联实验」，同一件事不重复出现。
@@ -1014,19 +1029,28 @@ async function renderHome() {
     steps.forEach((x, k) => { if (stepTouched(x)) reached = k; });
     const curPos = Math.max(Number(r.current_step) || 0, reached);
 
+    // 这一步的「时长」：优先用实验步骤自己的；实验里没有就回方案里同一步骤取
+    const durOf = (x) => {
+      const own = String((x && x.duration_hint) || '').trim();
+      if (own) return own;
+      const byPlan = planDur[r.plan_id] || {};
+      return (x && byPlan[x.position]) || '';
+    };
+    const hoursOf = (x) => parseDurationHours(durOf(x));
+
     const pendingTimed = steps.filter((x) => x.position >= curPos
       && x.status !== 'done'
-      && parseDurationHours(x.duration_hint) > 0);
+      && hoursOf(x) > 0);
 
     const doing = reached >= 0 ? steps[reached] : null;     // 正在做的那一步
     // 正在做的那步本身写了时长 → 报它；否则报后面第一个「有时长的等待步」；
     // 都没有就退回到当前步 / 第一步，界面会显示「未设时长提示」
-    const cur = (doing && parseDurationHours(doing.duration_hint) > 0 ? doing : null)
+    const cur = (doing && hoursOf(doing) > 0 ? doing : null)
       || pendingTimed[0]
       || doing
       || steps.find((x) => x.position === curPos)
       || steps[0];
-    const hours = parseDurationHours(cur && cur.duration_hint);
+    const hours = hoursOf(cur);
 
     // 结束时间 =「这一步开始的时刻」+ 它的时长。时间锚点按可靠性依次退化：
     //   本步 started_at（点「完成并下一步」开始这步时会写）
@@ -1052,6 +1076,7 @@ async function renderHome() {
       group: g,
       step: cur,
       hours: hours,
+      dur: durOf(cur),
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
         : null,
@@ -1101,7 +1126,7 @@ async function renderHome() {
           const sub = isRun
             ? '第 ' + (((t.step && t.step.position) != null ? t.step.position : 0) + 1) + ' 步'
               + (t.step && t.step.title ? ' · ' + esc(t.step.title) : '')
-              + (t.step && t.step.duration_hint ? ' · ' + esc(t.step.duration_hint) : '')
+              + (t.dur ? ' · ' + esc(t.dur) : '')
             : (t.due ? '手动待办' : '手动待办 · 未设时间');
 
           const hasDue = !!t.due;
