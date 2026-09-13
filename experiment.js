@@ -3173,7 +3173,8 @@
       '</div>',
     ].join(''), [
       { label: '取消', onClick: closeModal },
-      { label: '确认关联', primary: true, onClick: () => doLink(false) },
+      // 初始是「检测关联」：点它才调 AI；通过后按钮才变成「确认关联」
+      { label: '检测关联', primary: true, onClick: () => doCheck() },
     ]);
 
     let otherSteps = [];
@@ -3193,36 +3194,67 @@
 
     // 用 AI 判断两边「从所选步骤往后」是不是同一套操作。
     // AI 不可用（函数没部署 / 断网 / 没配额）时退回本地逐条比对，功能不至于不可用。
-    const runCheck = async () => {
+    // ── 两步走：先「检测关联」（调 AI），通过后按钮才变成「确认关联」 ──
+    // 打开弹窗、切换选项时只刷新预览，不自动调 AI（避免还没选好就消耗额度）。
+    let verified = false;
+    let verifiedKey = '';              // 记下哪一组选择通过了检测，换了选项就作废
+
+    const choiceKey = () => myIdx() + '|' + otherId() + '|' + otherIdx();
+
+    const primaryBtn = () => document.querySelector('.modal-card .actions .primary');
+
+    const setPrimary = (label, disabled) => {
+      const btn = primaryBtn();
+      if (!btn) return;
+      btn.textContent = label;
+      btn.disabled = !!disabled;
+    };
+
+    // 只更新两边预览；选项一变就把检测结果作废，按钮回到「检测关联」
+    const refreshPreview = () => {
+      showPreview($('lk-mine-view'), (mySteps || [])[myIdx()]);
+      showPreview($('lk-other-view'), otherSteps[otherIdx()]);
+
+      if (verifiedKey !== choiceKey()) verified = false;
+      setPrimary(verified ? '确认关联' : '检测关联', false);
+
+      if (!verified) {
+        const box = $('lk-check');
+        box.className = 'lk-check';
+        box.innerHTML = '选好两边后点「检测关联」，会用 AI 比对这一步之后的步骤是否一致。';
+      }
+    };
+
+    // 对方还没做到要关联的那一步？提醒一下，但不拦着
+    const reachWarn = () => {
+      let last = -1;
+      (otherSteps || []).forEach((x, i) => { if (stepHasProgress(x)) last = i; });
+      const oi = otherIdx();
+      const otherName = (((others || []).find((o) => o.id === otherId())) || {}).title || '对方实验';
+      return (oi > last)
+        ? '<span>⚠ 「' + esc(otherName) + '」目前只进行到 第 ' + (last + 2) + ' 步，还没做到要关联的 第 ' + (oi + 1)
+          + ' 步 —— 仍可关联，等它做到这一步后两边数据会合起来算。</span>'
+        : '';
+    };
+
+    /* 「检测关联」：调 AI（不可用时退回本地逐条比对）。
+       通过 → 按钮变「确认关联」，可以写库；不通过 → 按钮保持「检测关联」，把原因写在下面。 */
+    const doCheck = async () => {
       const a = mySteps || [];
       const ai = myIdx();
       const oi = otherIdx();
       const box = $('lk-check');
-      const okBtn = document.querySelector('.modal-card .actions .primary');
 
-      showPreview($('lk-mine-view'), a[ai]);
-      showPreview($('lk-other-view'), otherSteps[oi]);
+      verified = false;
+      refreshPreview();
+      setPrimary('检测中…', true);
+      box.className = 'lk-check';
+      box.innerHTML = '正在用 AI 比对后续步骤…';
 
       const local = compareTail(a, otherSteps, ai, oi);
 
-      // 对方还没做到要关联的那一步？提醒一下 —— 但不拦着（可以先规划关联、后执行）。
-      const reachedIdx = (arr) => {
-        let last = -1;
-        (arr || []).forEach((x, i) => { if (stepHasProgress(x)) last = i; });
-        return last;
-      };
-      const otherReached = reachedIdx(otherSteps);
-      const otherName = (((others || []).find((o) => o.id === otherId())) || {}).title || '对方实验';
-      const notReachedWarn = (oi > otherReached)
-        ? '<span>⚠ 「' + esc(otherName) + '」目前只进行到 第 ' + (otherReached + 2) + ' 步，还没做到要关联的 第 ' + (oi + 1)
-          + ' 步 —— 仍可关联，等它做到这一步后两边数据会合起来算。</span>'
-        : '';
-
-      box.className = 'lk-check';
-      box.innerHTML = '正在用 AI 比对后续步骤…';
-      if (okBtn) okBtn.disabled = true;
-
       let verdict = null;
+      let failReason = '';
       try {
         const { data, error } = await client.functions.invoke('check-link', {
           body: {
@@ -3230,27 +3262,36 @@
             other: otherSteps.slice(oi).map((s) => s.title),
           },
         });
-        if (!error && data && typeof data.same === 'boolean') verdict = data;
+        if (error) failReason = errorText(error);
+        else if (data && typeof data.same === 'boolean') verdict = data;
+        else failReason = 'AI 没有返回可用的结果';
       } catch (err) {
+        failReason = errorText(err);
         console.warn('[SciHub] check-link 调用失败，退回本地比对：', err);
       }
 
       const aiUsed = !!verdict;
       const same = aiUsed ? verdict.same : local.same;
 
+      // 通过 → 按钮变「确认关联」
       if (same) {
+        verified = true;
+        verifiedKey = choiceKey();
+        setPrimary('确认关联', false);
+
         box.className = 'lk-check ok';
-        box.innerHTML = '✓ 后续步骤一致，可以合并。'
+        box.innerHTML = '✓ 检测通过，可以关联合并。'
           + '<span>' + esc(aiUsed
             ? (verdict.reason || ('AI 判定两边从这一步起是同一套操作（共 ' + local.nx + ' 步）。'))
             : ('本地比对：从这一步起后续 ' + local.nx + ' 个步骤完全一致。')) + '</span>'
-          + notReachedWarn;
-        if (okBtn) okBtn.disabled = false;
-        return same;
+          + (aiUsed ? '' : '<span>（AI 校验暂时不可用' + (failReason ? '：' + esc(failReason) : '') + '，已退回本地比对）</span>')
+          + reachWarn();
+        return;
       }
 
-      // 不一致：优先用 AI 给的理由，没有就退回本地差异
-      box.className = 'lk-check bad';
+      // 不通过 → 按钮保持「检测关联」，并给出失败原因
+      setPrimary('检测关联', false);
+
       const mineTxt = aiUsed && verdict.mine
         ? esc(verdict.mine)
         : (local.x ? '第 ' + (ai + local.at + 1) + ' 步「' + esc(local.x.title) + '」' : '（本实验已无后续步骤）');
@@ -3258,16 +3299,15 @@
         ? esc(verdict.other)
         : (local.y ? '第 ' + (oi + local.at + 1) + ' 步「' + esc(local.y.title) + '」' : '（对方已无后续步骤）');
 
-      box.innerHTML = '<b>⚠ 后续步骤不一致，不能关联合并</b>'
-        + (aiUsed && verdict.reason ? '<span>' + esc(verdict.reason) + '</span>' : '')
+      box.className = 'lk-check bad';
+      box.innerHTML = '<b>⚠ 检测未通过，不能关联合并</b>'
+        + (aiUsed && verdict.reason ? '<span>原因：' + esc(verdict.reason) + '</span>' : '')
         + '<span>· 本实验：' + mineTxt + '</span>'
         + '<span>· 对方：' + otherTxt + '</span>'
         + '<span>剩余步骤数 ' + local.nx + ' / ' + local.ny
-        + (local.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点。</span>'
-        + (aiUsed ? '' : '<span>（AI 校验暂时不可用，以上是本地比对结果）</span>')
-        + notReachedWarn;
-      if (okBtn) okBtn.disabled = true;
-      return same;
+        + (local.tail ? '（步骤条数也不一样）' : '') + '。请改用一致的步骤，或换一个关联起点，然后重新检测。</span>'
+        + (aiUsed ? '' : '<span>（AI 校验暂时不可用' + (failReason ? '：' + esc(failReason) : '') + '，以上是本地比对结果）</span>')
+        + reachWarn();
     };
 
     const loadOtherSteps = async () => {
@@ -3277,17 +3317,21 @@
       sel.innerHTML = otherSteps.length
         ? otherSteps.map((s, i) => '<option value="' + i + '">第 ' + (i + 1) + ' 步：' + esc(s.title) + '</option>').join('')
         : '<option value="0">（对方没有步骤）</option>';
-      await runCheck();
+      verified = false;
+      refreshPreview();
     };
 
-    $('lk-mine').addEventListener('change', runCheck);
+    $('lk-mine').addEventListener('change', refreshPreview);
     $('lk-other').addEventListener('change', loadOtherSteps);
-    $('lk-other-step').addEventListener('change', runCheck);
+    $('lk-other-step').addEventListener('change', refreshPreview);
     await loadOtherSteps();
 
     async function doLink(thenMore) {
-      const same = await runCheck();
-      if (!same) return;                         // 不一致就不写库
+      // 必须先检测通过才允许写入
+      if (!verified) {
+        setStatus('请先点「检测关联」，通过后才能确认关联。', 'warn');
+        return;
+      }
       const st = (mySteps || [])[myIdx()];
       if (!st) return;
       const note = ($('lk-note').value || '').trim();
