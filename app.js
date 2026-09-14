@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.87.0';
+const APP_VERSION = '0.88.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1395,14 +1395,12 @@ async function renderHome() {
       dur: durOf(cur),
       isNext: isNext,
       why: aiWhy[r.id] || '',
-      // AI 给的文案只在「它判的步骤 == 本地判的步骤」时采用；步骤/时长/结束时间永远用本地的，
-      // 这样 AI 慢跑回来也只是润色，不会再把它带偏。
-      aiTxt: (aiPos[r.id] != null && aiPos[r.id] === (cur ? cur.position : -1) && aiLabel[r.id])
-        ? aiLabel[r.id]
-        : (lastDoneStep && nextOfDone
-          ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
-            + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
-          : (isNext ? '等待下一步：' + ((cur && cur.title) || '') : '')),
+      // 待办文案统一用本地格式：无时间要求时一律「已完成第 X 步…，等待进行第 Y 步…」；
+      // AI（todo-plan）只保留作后台参考，不再覆盖这句文案，避免出现和 v5 不一致的写法。
+      aiTxt: (lastDoneStep && nextOfDone
+        ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
+          + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
+        : (isNext ? '等待下一步：' + ((cur && cur.title) || '') : '')),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
