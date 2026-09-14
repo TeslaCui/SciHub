@@ -110,6 +110,7 @@ function applyUser(user) {
     if (changed || !state.records.length) loadRecords();
     if (changed) ensureProfile();
     if (changed) route('home');
+    subscribeHomeRealtime();
   } else {
     state.records = [];
     state.editingId = null;
@@ -662,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.82.0';
+const APP_VERSION = '0.83.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1285,10 +1286,12 @@ async function renderHome() {
     }
   };
 
-  await healPlanDurations(planIds);
+  // 方案自愈改为不阻塞渲染（补旧方案时长是后台动作，不值得每次刷新都等它）
+  healPlanDurations(planIds);
 
-  // 让 todo-plan 制订待办（进行到第几步 + 文案 + 等多久），失败则下面用本地规则兜底
-  await fetchAiTodos(groups);
+  // 待办从 v0.81 起是纯本地确定性计算，不再调用 todo-plan ——
+  // 那个 DeepSeek 往返每次刷新都打一次会让主页明显变慢，而且其结果已不被使用。
+  // （todo-plan 函数保留，以后若要重新引入 AI 语义再打开这里的调用。）
 
   const todos = [];
   groups.forEach((g) => {
@@ -1769,3 +1772,28 @@ async function renderHome() {
 document.querySelectorAll('.nav-btn').forEach((btn) => {
   btn.addEventListener('click', () => route(btn.dataset.route));
 });
+
+/* ── 主页实时刷新：实验步骤/进度一变，待办跟着删除旧项、生成新项 ── */
+let homeChannel = null;
+let homeRefreshTimer = null;
+
+function scheduleHomeRefresh() {
+  if (homeRefreshTimer) return;
+  homeRefreshTimer = setTimeout(() => {
+    homeRefreshTimer = null;
+    const home = $('view-home');
+    if (state.user && home && !home.hidden) renderHome();
+  }, 400);
+}
+
+function subscribeHomeRealtime() {
+  if (!client || homeChannel || !state.user) return;
+  try {
+    homeChannel = client.channel('scihub-home')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'run_steps' }, scheduleHomeRefresh)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'experiment_runs' }, scheduleHomeRefresh)
+      .subscribe();
+  } catch (_error) {
+    homeChannel = null;   // 实时不可用不影响使用，刷新页面仍会重算
+  }
+}

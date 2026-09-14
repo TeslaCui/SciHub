@@ -2442,13 +2442,59 @@
     gallery.addEventListener('click', () => $('photo-gallery').click());
     host.appendChild(gallery);
 
-    // 点缩略图放大
+    // 点缩略图放大（长按拖动后不触发点击）
+    let suppressClick = false;
     host.querySelectorAll('[data-zoom]').forEach((b) => {
-      b.addEventListener('click', () => openLightbox(s, Number(b.dataset.zoom)));
+      b.addEventListener('click', () => {
+        if (suppressClick) { suppressClick = false; return; }
+        openLightbox(s, Number(b.dataset.zoom));
+      });
     });
 
-    // 拖动缩略图调整顺序；顺序会被保存，导出的 Word 文档也按这个顺序排照片
+    // 拖动缩略图调整顺序；顺序会被保存，导出的 Word 文档也按这个顺序排照片。
+    // 桌面走原生 HTML5 拖拽；手机触屏没有 drag 事件，用 Pointer Events 做「长按拖动」。
     let dragFrom = -1;
+    let touchDrag = false;
+    let pressTimer = null;
+
+    const finishTouchDrag = () => {
+      touchDrag = false;
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      document.removeEventListener('pointermove', onTouchMove);
+      document.removeEventListener('pointerup', onTouchUp);
+      document.removeEventListener('pointercancel', onTouchUp);
+      host.querySelectorAll('[data-media]').forEach((f) => f.classList.remove('dragging', 'over'));
+    };
+
+    const onTouchMove = (e) => {
+      if (!touchDrag) return;
+      e.preventDefault();
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const fig = el && el.closest ? el.closest('[data-media]') : null;
+      host.querySelectorAll('[data-media]').forEach((f) => f.classList.toggle('over', f === fig));
+    };
+
+    const onTouchUp = async (e) => {
+      if (!touchDrag) return;
+      e.preventDefault();
+      suppressClick = true;                 // 拖动结束后的 click 是误触，不再打开大图
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const fig = el && el.closest ? el.closest('[data-media]') : null;
+      const to = fig ? Number(fig.dataset.media) : -1;
+      const from = dragFrom;
+      finishTouchDrag();
+      if (from < 0 || to < 0 || from === to) return;
+
+      const list = (s.images || []).slice();
+      const moved = list.splice(from, 1)[0];
+      if (!moved) return;
+      list.splice(to, 0, moved);
+      s.images = list;
+
+      await saveStep(s, true);
+      drawPhotos(s);
+    };
+
     host.querySelectorAll('[data-media]').forEach((fig) => {
       fig.addEventListener('dragstart', (e) => {
         dragFrom = Number(fig.dataset.media);
@@ -2478,6 +2524,27 @@
 
         await saveStep(s, true);
         drawPhotos(s);
+      });
+
+      // 手机：长按进入拖动（避开「删除」「注解输入框」，也不和页面滚动、点开大图冲突）
+      fig.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse') return;
+        if (e.target.closest('.photo-drop') || e.target.closest('.photo-caption')) return;
+        const idx = Number(fig.dataset.media);
+        pressTimer = setTimeout(() => {
+          touchDrag = true;
+          dragFrom = idx;
+          fig.classList.add('dragging');
+          document.addEventListener('pointermove', onTouchMove, { passive: false });
+          document.addEventListener('pointerup', onTouchUp);
+          document.addEventListener('pointercancel', onTouchUp);
+        }, 450);
+      });
+      fig.addEventListener('pointerup', () => {
+        if (pressTimer && !touchDrag) { clearTimeout(pressTimer); pressTimer = null; }
+      });
+      fig.addEventListener('pointercancel', () => {
+        if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
       });
     });
 
