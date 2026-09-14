@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.86.0';
+const APP_VERSION = '0.87.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -870,6 +870,35 @@ async function renderHome() {
     });
   }
 
+  // ── 进度判定（必须先定义在这里：日历悬停要用它给每步打 ✓，而后面的待办/卡片也共用）──
+  // 「这一步填了几项数据」：只数真正的记录项 ——
+  // ① 时间类字段（日期/时间/时刻）不算（顺手记个开始时间不等于做过这一步）；
+  // ② **旧字段的残留值不算**：方案改版后旧键会留在 values 里（如 v5 第 9 步存着
+  //    「样品编号」「热解后样品质量」，但当前字段是分取 ICP/XRD…），不把这类旧键过滤掉，
+  //    进度就会被旧数据推到根本没做的步骤。
+  const isTimeKey = (k) => /日期|时间|时刻/.test(String(k || ''));
+  const fieldLabelSet = (x) => new Set(((x && x.fields) || []).map((f) => f.label));
+  const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
+    if (!fieldLabelSet(x).has(k)) return false;
+    if (isTimeKey(k)) return false;
+    const v = (x.values || {})[k];
+    return String(v == null ? '' : v).trim() !== '';
+  }).length;
+
+  // 「这一步有没有实质进展」：填了当前字段的值，或上传过照片，都算做过。
+  // 时间字段也算（v5.1 反应步只填了「反应开始时间」也是在做）；旧字段残留值不算；
+  // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
+  const stepTouchedAny = (x) => {
+    if ((x && (x.images || [])).length > 0) return true;
+    const labels = fieldLabelSet(x);
+    const vals = (x && x.values) || {};
+    return Object.keys(vals).some((k) => {
+      if (!labels.has(k)) return false;
+      const v = vals[k];
+      return String(v == null ? '' : v).trim() !== '';
+    });
+  };
+
   const byDay = {};
   monthRuns.forEach((r) => {
     const end = r.finished_at ? new Date(r.finished_at) : new Date();
@@ -1003,34 +1032,7 @@ async function renderHome() {
   // AI 有时会把「第 N 步」当 position 返回、差一位就把界面带偏 —— 这里不再让它覆盖定位。
   const runProgressPos = (r) => localProgressPos(r);
 
-  // 「这一步填了几项数据」：只数真正的记录项 ——
-  // ① 时间类字段（日期/时间/时刻）不算（顺手记个开始时间不等于做过这一步）；
-  // ② **旧字段的残留值不算**：方案改版后旧键会留在 values 里（如 v5 第 9 步存着
-  //    「样品编号」「热解后样品质量」，但当前字段是分取 ICP/XRD…），不把这类旧键过滤掉，
-  //    进度就会被旧数据推到根本没做的步骤。
-  const isTimeKey = (k) => /日期|时间|时刻/.test(String(k || ''));
-  const fieldLabelSet = (x) => new Set(((x && x.fields) || []).map((f) => f.label));
-  const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
-    if (!fieldLabelSet(x).has(k)) return false;
-    if (isTimeKey(k)) return false;
-    const v = (x.values || {})[k];
-    return String(v == null ? '' : v).trim() !== '';
-  }).length;
-
-  // 「这一步有没有实质进展」：填了当前字段的值，或上传过照片，都算做过。
-  // 时间字段也算（v5.1 反应步只填了「反应开始时间」也是在做）；旧字段残留值不算；
-  // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
-  const stepTouchedAny = (x) => {
-    if ((x && (x.images || [])).length > 0) return true;
-    const labels = fieldLabelSet(x);
-    const vals = (x && x.values) || {};
-    return Object.keys(vals).some((k) => {
-      if (!labels.has(k)) return false;
-      const v = vals[k];
-      return String(v == null ? '' : v).trim() !== '';
-    });
-  };
-
+  // （进度判定函数已挪到「日历渲染之前」定义，见上面 byDay 前的那段）
   const aiProgressKey = (id) => 'scihub.aiProgress.' + id;
 
   // 步骤状态签名：任一步的「标完成 / 填了数据」情况或 current_step 变了，就重新问一次 AI。
