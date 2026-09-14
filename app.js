@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.83.0';
+const APP_VERSION = '0.84.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1289,9 +1289,9 @@ async function renderHome() {
   // 方案自愈改为不阻塞渲染（补旧方案时长是后台动作，不值得每次刷新都等它）
   healPlanDurations(planIds);
 
-  // 待办从 v0.81 起是纯本地确定性计算，不再调用 todo-plan ——
-  // 那个 DeepSeek 往返每次刷新都打一次会让主页明显变慢，而且其结果已不被使用。
-  // （todo-plan 函数保留，以后若要重新引入 AI 语义再打开这里的调用。）
+  // AI 待办（todo-plan）在后台慢慢跑，不阻塞首屏；结果只用来润色文案，
+  // 而且只有「AI 判的步骤和本地判的步骤一致」时才会采用（见下面 aiTxt 的守卫）。
+  fetchAiTodos(groups);
 
   const todos = [];
   groups.forEach((g) => {
@@ -1389,10 +1389,14 @@ async function renderHome() {
       dur: durOf(cur),
       isNext: isNext,
       why: aiWhy[r.id] || '',
-      aiTxt: (progressed && lastDoneStep && nextOfDone
-        ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
-          + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
-        : ''),
+      // AI 给的文案只在「它判的步骤 == 本地判的步骤」时采用；步骤/时长/结束时间永远用本地的，
+      // 这样 AI 慢跑回来也只是润色，不会再把它带偏。
+      aiTxt: (aiPos[r.id] != null && aiPos[r.id] === (cur ? cur.position : -1) && aiLabel[r.id])
+        ? aiLabel[r.id]
+        : (progressed && lastDoneStep && nextOfDone
+          ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
+            + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
+          : ''),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
