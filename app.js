@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.89.0';
+const APP_VERSION = '0.90.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -779,13 +779,18 @@ document.addEventListener('click', (e) => {
   if (del) { window.Run.remove(Number(del.dataset.runDel)); }
 });
 
+// 每次刷新都「记住」这些事实，避免重复试探/重复请求：
+// ① run_steps 到底有没有 duration_hint 列；② 哪些方案的时长已经自愈过一次。
+let runStepsHasDuration = null;
+const healedPlansOnce = new Set();
+
 async function renderHome() {
   const host = $('view-home');
   host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
 
   // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
   // 那样会静默拿到空列表（表现为「刷新后要切走再切回来才显示」）。这里等它就绪。
-  for (let i = 0; i < 20 && !window.Run; i++) {
+  for (let i = 0; i < 8 && !window.Run; i++) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
 
@@ -852,10 +857,15 @@ async function renderHome() {
   const STEP_COLS = 'run_id,position,title,status,link_run_id,link_note,'
     + 'values,images,note,started_at,updated_at,fields';
   const loadRunSteps = async (ids) => {
-    const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint')
-      .in('run_id', ids).order('position');
-    if (!withDur.error) return withDur.data || [];
-    console.warn('[SciHub] run_steps 还没有 duration_hint 列，改从方案取时长：', withDur.error.message);
+    // 只探测一次「run_steps 有没有 duration_hint」：有就一直带，没有就永远用降级查询，
+    // 不再每次刷新都先撞一次 400 再重查（那次失败往返是主页变慢的元凶之一）。
+    if (runStepsHasDuration !== false) {
+      const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint')
+        .in('run_id', ids).order('position');
+      if (!withDur.error) { runStepsHasDuration = true; return withDur.data || []; }
+      console.warn('[SciHub] run_steps 还没有 duration_hint 列，改从方案取时长：', withDur.error.message);
+      runStepsHasDuration = false;
+    }
     const plain = await client.from('run_steps').select(STEP_COLS)
       .in('run_id', ids).order('position');
     return plain.data || [];
@@ -1319,12 +1329,15 @@ async function renderHome() {
     }
   };
 
-  // 方案自愈改为不阻塞渲染（补旧方案时长是后台动作，不值得每次刷新都等它）
-  healPlanDurations(planIds);
+  // 方案自愈：同一会话里每个方案只补一次时长，避免每次刷新都重复查询/重算。
+  const healTargets = planIds.filter((id) => !healedPlansOnce.has(id));
+  if (healTargets.length) {
+    healTargets.forEach((id) => healedPlansOnce.add(id));
+    healPlanDurations(healTargets);
+  }
 
-  // AI 待办（todo-plan）在后台慢慢跑，不阻塞首屏；结果只用来润色文案，
-  // 而且只有「AI 判的步骤和本地判的步骤一致」时才会采用（见下面 aiTxt 的守卫）。
-  fetchAiTodos(groups);
+  // AI 待办（todo-plan）已不再调用：v0.88 起待办文案完全由本地规则生成，
+  // 每次刷新少一次 Edge Function 往返（这是主页变慢的另一大元凶），功能不丢。
 
   const todos = [];
   groups.forEach((g) => {
