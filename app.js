@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.88.0';
+const APP_VERSION = '0.89.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -909,6 +909,25 @@ async function renderHome() {
     byDay[k].minutes += mins;
   });
 
+  // 当天操作：把每步「开始 / 最近改动」的日期也归到日历 ——
+  // 实验是 13 号开始的，但 14 号做了第 4 步（传了照片），14 号悬停也要能看到。
+  const activityByDay = {};
+  Object.keys(stepMap).forEach((runId) => {
+    const run = (monthRuns || []).find((x) => String(x.id) === String(runId));
+    (stepMap[runId] || []).forEach((st) => {
+      if (!stepTouchedAny(st)) return;
+      const ts = st.updated_at || st.started_at;
+      if (!ts) return;
+      const k = dayKey(ts);
+      if (!activityByDay[k]) activityByDay[k] = [];
+      activityByDay[k].push({
+        runTitle: (run && run.title) || ('实验 #' + runId),
+        pos: st.position + 1,
+        title: st.title || '',
+      });
+    });
+  });
+
   // 颜色深浅：看当天总时长，并把次数也算进去（一次实验至少按 30 分钟计）
   const dayLevel = (info) => {
     if (!info) return 0;
@@ -932,6 +951,13 @@ async function renderHome() {
     const isToday = k === dayKey(today);
     const tipId = k + '#' + d;
 
+    const acts = (activityByDay[k] || []).slice(0, 8);
+    const actHtml = acts.length
+      ? '<div class="cal-tip-head">当天操作</div>'
+        + acts.map((a) => '<div class="cal-tip-step">' + a.pos + '. ' + esc(a.title)
+            + ' · ' + esc(a.runTitle) + ' <i>✓</i></div>').join('')
+      : '';
+
     if (info) {
       tipMap[tipId] = '<div class="cal-tip-head">' + k + ' · ' + info.runs.length + ' 次 · ' + Math.round(info.minutes) + ' 分钟</div>'
         + info.runs.map((r) => {
@@ -944,13 +970,16 @@ async function renderHome() {
             + '<em>' + (r.finished_at ? '已完成' : '进行中') + ' · ' + Math.round(r.minutes) + ' 分钟</em>'
             + (steps ? '<div class="cal-tip-steps">' + steps + (all.length > 8 ? '<div class="cal-tip-step">…</div>' : '') + '</div>' : '')
             + '</div>';
-        }).join('');
+        }).join('')
+        + actHtml;
     } else {
-      tipMap[tipId] = '<div class="cal-tip-head">' + k + '</div><div class="cal-tip-none">这天没有实验</div>';
+      tipMap[tipId] = '<div class="cal-tip-head">' + k + '</div>'
+        + (actHtml || '<div class="cal-tip-none">这天没有实验</div>');
     }
 
-    calCells.push('<div class="cal-cell lv' + lv + (isToday ? ' today' : '')
-      + '" data-tip-id="' + tipId + '"' + (info ? ' title="' + esc(k + '：' + info.runs.length + ' 次实验') + '"' : '')
+    const cellLv = info ? lv : (acts.length ? 1 : 0);
+    calCells.push('<div class="cal-cell lv' + cellLv + (isToday ? ' today' : '')
+      + '" data-tip-id="' + tipId + '"' + ((info || acts.length) ? ' title="' + esc(k + '：' + (info ? info.runs.length + ' 次实验' : acts.length + ' 项操作')) + '"' : '')
       + '><span>' + d + '</span></div>');
   }
 
