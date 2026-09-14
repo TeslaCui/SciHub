@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.84.0';
+const APP_VERSION = '0.86.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -909,7 +909,7 @@ async function renderHome() {
           const all = stepMap[r.id] || [];
           const steps = all.slice(0, 8)
             .map((x) => '<div class="cal-tip-step">' + (x.position + 1) + '. ' + esc(x.title || '')
-              + (x.status === 'done' ? '<i>✓</i>' : '') + '</div>')
+              + (stepTouchedAny(x) ? '<i>✓</i>' : '') + '</div>')
             .join('');
           return '<div class="cal-tip-run"><b>' + esc(r.title) + '</b>'
             + '<em>' + (r.finished_at ? '已完成' : '进行中') + ' · ' + Math.round(r.minutes) + ' 分钟</em>'
@@ -1017,9 +1017,11 @@ async function renderHome() {
     return String(v == null ? '' : v).trim() !== '';
   }).length;
 
-  // 「这一步有没有任何填写」（时间字段也算，但只认这一步当前字段里的键）—— 用于定位进度。
-  // v5.1 的反应步只填了「反应开始时间」这类时间字段，如果不算时间，进度会退到上一步。
+  // 「这一步有没有实质进展」：填了当前字段的值，或上传过照片，都算做过。
+  // 时间字段也算（v5.1 反应步只填了「反应开始时间」也是在做）；旧字段残留值不算；
+  // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
   const stepTouchedAny = (x) => {
+    if ((x && (x.images || [])).length > 0) return true;
     const labels = fieldLabelSet(x);
     const vals = (x && x.values) || {};
     return Object.keys(vals).some((k) => {
@@ -1323,18 +1325,20 @@ async function renderHome() {
 
     let cur = null;
     let isNext = false;
-    let lastDoneStep = at(lastFilled) || null;      // 已完成的那一步（用于文案）
-    let nextOfDone = null;                          // 它的下一步
+    const lastDoneStep = at(lastFilled) || null;      // 已完成的那一步（用于文案）
+    const nextOfDone = (lastFilled >= 0 ? steps.find((x) => x.position > lastFilled) : null) || null;  // 下一步
     if (progressed) {
-      nextOfDone = steps.find((x) => x.position > lastFilled) || null;
-      if (nextOfDone) { cur = nextOfDone; isNext = true; } else { cur = at(lastFilled) || steps[steps.length - 1]; }
+      cur = nextOfDone || lastDoneStep || steps[steps.length - 1];
+      isNext = !!nextOfDone;
     } else {
       const doing = at(Math.max(curStepPos, lastFilled)) || at(curStepPos) || steps[0];
       if (doing && hoursOf(doing) > 0) {
         cur = doing;
+      } else if (nextOfDone) {
+        cur = nextOfDone;
+        isNext = true;
       } else {
-        const next = steps.find((x) => x.position > doing.position) || null;
-        if (next) { cur = next; isNext = true; } else { cur = doing; }
+        cur = doing;
       }
     }
     // 只有「正停在这一步、且这一步本身是等待/持续过程」才显示时间；
@@ -1393,10 +1397,10 @@ async function renderHome() {
       // 这样 AI 慢跑回来也只是润色，不会再把它带偏。
       aiTxt: (aiPos[r.id] != null && aiPos[r.id] === (cur ? cur.position : -1) && aiLabel[r.id])
         ? aiLabel[r.id]
-        : (progressed && lastDoneStep && nextOfDone
+        : (lastDoneStep && nextOfDone
           ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
             + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
-          : ''),
+          : (isNext ? '等待下一步：' + ((cur && cur.title) || '') : '')),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
