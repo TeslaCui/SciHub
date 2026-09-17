@@ -447,6 +447,14 @@ alter table public.run_steps add column if not exists duration_hint text not nul
 alter table public.plan_steps add column if not exists checklist jsonb not null default '[]'::jsonb;
 alter table public.run_steps  add column if not exists checks    jsonb not null default '{}'::jsonb;
 
+-- ─────────────────────────────────────────────────────────────
+-- 方案更新日志：experiment_plans.version_log 存数组，每条
+-- {at, type, source, summary}。上传新版本/编辑保存时追加一条；
+-- 界面按「上传日期」区分不同版本（方案名不变，用日期标识版本）。
+-- 幂等；老数据为空数组。
+-- ─────────────────────────────────────────────────────────────
+alter table public.experiment_plans add column if not exists version_log jsonb not null default '[]'::jsonb;
+
 -- 自检 9：应看到 link_columns=2
 select
   (select count(*) from information_schema.columns

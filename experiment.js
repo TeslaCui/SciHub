@@ -577,6 +577,8 @@
     const stem = 4;
     const oldUsed = new Set();
     const out = [];
+    let newCount = 0;
+    let keptCount = 0;
 
     for (const ns of newSteps) {
       const nk = tkey(ns.title);
@@ -589,7 +591,7 @@
           || (nk.length >= stem && ok.length >= stem && nk.slice(0, stem) === ok.slice(0, stem));
         if (related) { old = os; oi = i; }
       });
-      if (old != null) oldUsed.add(oi);
+      if (old != null) { oldUsed.add(oi); keptCount += 1; } else { newCount += 1; }
 
       const oldFields = (old && old.fields) || [];
       const newFields = (ns.fields || []).map((f) => ({ label: String(f.label || '').trim(), unit: String(f.unit || '').trim(), type: String(f.type || '').trim() })).filter((f) => f.label);
@@ -635,6 +637,7 @@
         pyro_seq: ns.pyro_seq || (old && old.pyro_seq) || '',
         checklist: (ns.checklist && ns.checklist.length) ? ns.checklist : ((old && old.checklist) || []),
         fields: mergedFields,
+        _mark: old ? 'kept' : 'new',
       });
     }
 
@@ -649,10 +652,14 @@
         pyro_seq: os.pyro_seq || '',
         checklist: (os.checklist || []).slice(),
         fields: (os.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
+        _mark: 'user',
       });
     });
 
-    return out;
+    return {
+      steps: out,
+      stats: { newCount: newCount, keptCount: keptCount, userKept: oldSteps.length - oldUsed.size },
+    };
   }
 
   /* 把方案的重建结果同步到正在进行的实验上（改别人的数据前先征得同意） */
@@ -786,6 +793,9 @@
         '    <span class="drag-handle" draggable="true" data-drag-step="' + si + '" title="拖动调整步骤顺序">⠿</span>',
         '    <span class="step-no">' + (si + 1) + '</span>',
         '    <input class="step-title-text" data-title="' + si + '" value="' + esc(s.title) + '" placeholder="步骤标题">',
+        (s._mark === 'new' ? '    <span class="tag-mini">新增</span>'
+          : s._mark === 'kept' ? '    <span class="tag-mini">保留（有你的手动修改）</span>'
+          : s._mark === 'user' ? '    <span class="tag-mini">你之前加的</span>' : ''),
         '    <button type="button" class="ghost" data-drop-step="' + si + '">删除步骤</button>',
         '  </div>',
         '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
@@ -1172,7 +1182,15 @@
 
       if (planId) {
         // 保存后内容就是「当前解析规则 + 手工改动」，因此标记为当前版本
-        const { error } = await client.from(PLAN).update({ title: title, parse_version: PARSE_VERSION }).eq('id', planId);
+        const versionLog = (draft.versionLog || []).concat([draft.versionEntry || {
+          at: new Date().toISOString(),
+          type: '编辑',
+          source: draft.source || '',
+          summary: '手工编辑保存',
+        }]);
+        const { error } = await client.from(PLAN)
+          .update({ title: title, parse_version: PARSE_VERSION, version_log: versionLog })
+          .eq('id', planId);
         if (error) throw error;
         const { error: delErr } = await client.from(STEP).delete().eq('plan_id', planId);
         if (delErr) throw delErr;
@@ -1386,6 +1404,7 @@
       id: plan.id,
       title: plan.title,
       source: plan.source || '',
+      versionLog: (plan.version_log || []).slice(),
       steps: (steps || []).map((s) => ({
         title: s.title || '',
         instruction: s.instruction || '',
@@ -1413,9 +1432,25 @@
     // 按解析版本判断：落后于当前规则才显示「重新解析」
     const canUpgrade = planNeedsUpgrade(plan);
 
+    // 更新日志：按「上传/保存日期」标识版本（方案名不变，用日期区分新旧）
+    const vlog = (plan.version_log || []).slice().reverse();
+    const versionLogHtml = vlog.length ? [
+      '<div class="card" style="margin-bottom:14px">',
+      '  <div class="sub-head"><span>🕓 更新日志（按日期区分版本）</span></div>',
+      vlog.map((e, i) => {
+        const dateTxt = e.at ? fmt(e.at) : '未知日期';
+        const badge = i === 0 ? '<b class="tag-mini">当前 · ' + dateTxt + '</b>' : '<span class="tag-mini">旧版本 · ' + dateTxt + '</span>';
+        return '  <div class="hc-meta" style="margin:6px 0">' + badge
+          + ' ' + esc(e.type || '更新') + (e.source ? ' · ' + esc(e.source) : '')
+          + (e.summary ? ' · ' + esc(e.summary) : '') + '</div>';
+      }).join('\n'),
+      '</div>',
+    ].join('\n') : '';
+
     host.innerHTML = [
       '<div class="section-title">' + esc(plan.title) + '</div>',
       '  <p class="hint small" style="margin-bottom:12px">' + (plan.source ? '来源：' + esc(plan.source) + ' · ' : '') + '共 ' + (steps || []).length + ' 个步骤</p>',
+      versionLogHtml,
 
       // 操作按钮放在标题下方（原来在页面最底部，要滚到底才点得到）
       '<div class="run-actions" style="margin-top:0;margin-bottom:16px;flex-wrap:wrap">',
@@ -1471,7 +1506,14 @@
           id: plan.id,
           title: parsed.title,
           source: name,
-          steps: merged.map((s) => ({
+          versionLog: (plan.version_log || []).slice(),
+          versionEntry: {
+            at: new Date().toISOString(),
+            type: '上传新版本',
+            source: name,
+            summary: '新增 ' + merged.stats.newCount + ' 步、保留并更新 ' + merged.stats.keptCount + ' 步、保留你之前加的 ' + merged.stats.userKept + ' 步',
+          },
+          steps: merged.steps.map((s) => ({
             title: s.title || '',
             instruction: s.instruction || '',
             duration_hint: s.duration_hint || '',
@@ -1479,6 +1521,7 @@
             pyro_seq: s.pyro_seq || '',
             checklist: s.checklist || [],
             fields: (s.fields || []).map((fl) => ({ label: fl.label, unit: fl.unit || '', type: fl.type || '' })),
+            _mark: s._mark || '',
           })),
         };
         renderDraft();
