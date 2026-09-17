@@ -3167,12 +3167,12 @@
       // 参与哪些实验、在哪些步骤合并、各实验合并前的记录、以及合并后的数据。
       const merge = await collectMergeInfo(runId || run.id);
 
-      // 合并组里这份文档是「主实验」：合并点之前的记录归到第一部分，这里只写合并点之后
+      // 合并组：合并点之前的记录归到第一部分，这里只写合并点之后的共同数据
       const from = merge ? merge.linkAt : 0;
       const upto = run.steps.filter((s) => s.position <= cur && s.position >= from);
 
       const paras = [
-        { text: (merge ? '实验记录（合并） · ' : '实验记录 · ') + title, bold: true, size: 16, align: 'center' },
+        { text: (merge ? '实验记录（合并） · 合并实验数据' : '实验记录 · ' + title), bold: true, size: 16, align: 'center' },
         {
           text: '开始于 ' + fmt(run.data.started_at)
             + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中')
@@ -3188,7 +3188,7 @@
         paras.push({ text: '合并信息', bold: true, size: 13, color: '0F766E' });
         paras.push({ text: '参与合并的实验（共 ' + merge.runs.length + ' 个）：', size: 10 });
         merge.runs.forEach((x) => {
-          paras.push({ text: '　· ' + x.title + (x.id === run.data.id ? '　（本次导出的主实验）' : ''), size: 10 });
+          paras.push({ text: '　· ' + x.title, size: 10 });
         });
         paras.push({
           text: '合并点：第 ' + (merge.linkAt + 1) + ' 步 —— 到这一步为止各实验分开做，之后合在一起做。',
@@ -3236,13 +3236,13 @@
             }
             if (String(s.note || '').trim()) paras.push({ text: '　　备注：' + s.note, size: 9 });
             const nImg = (s.images || []).filter((i) => !isVideoFile(i)).length;
-            if (nImg) paras.push({ text: '　　（照片 ' + nImg + ' 张，见下方主实验部分）', size: 9, color: '666666' });
+            if (nImg) paras.push({ text: '　　（照片 ' + nImg + ' 张，见下方合并实验数据部分）', size: 9, color: '666666' });
           });
           paras.push('');
         }
 
-        // ── 三、合并后的数据记录（当前这次实验） ──
-        paras.push({ text: '二、合并后的数据记录（' + title + '）', bold: true, size: 13, color: '0F766E' });
+        // ── 三、合并后的数据记录（合并实验数据，不属于任何单一实验） ──
+        paras.push({ text: '二、合并后的数据记录（合并实验数据）', bold: true, size: 13, color: '0F766E' });
         paras.push({ text: '从第 ' + (merge.linkAt + 1) + ' 步开始的共同操作与数据：', size: 9, color: '666666' });
         if (!upto.length) paras.push({ text: '　（还没做到合并点，暂无合并后的记录）', size: 9, color: '666666' });
         paras.push('');
