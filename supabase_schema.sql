@@ -439,6 +439,14 @@ alter table public.run_steps add column if not exists link_note   text;
 -- ─────────────────────────────────────────────────────────────
 alter table public.run_steps add column if not exists duration_hint text not null default '';
 
+-- ─────────────────────────────────────────────────────────────
+-- 已完成勾选：plan_steps.checklist 存勾选条目（字符串数组，如
+-- ["第一次抽滤","第二次抽滤"]）；run_steps.checks 存勾选状态对象
+-- （{"第一次抽滤":false}），起跑时从方案快照过来。幂等；老数据为空数组/对象。
+-- ─────────────────────────────────────────────────────────────
+alter table public.plan_steps add column if not exists checklist jsonb not null default '[]'::jsonb;
+alter table public.run_steps  add column if not exists checks    jsonb not null default '{}'::jsonb;
+
 -- 自检 9：应看到 link_columns=2
 select
   (select count(*) from information_schema.columns

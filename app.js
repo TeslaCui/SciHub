@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.90.0';
+const APP_VERSION = '0.91.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -857,13 +857,13 @@ async function renderHome() {
   const STEP_COLS = 'run_id,position,title,status,link_run_id,link_note,'
     + 'values,images,note,started_at,updated_at,fields';
   const loadRunSteps = async (ids) => {
-    // 只探测一次「run_steps 有没有 duration_hint」：有就一直带，没有就永远用降级查询，
-    // 不再每次刷新都先撞一次 400 再重查（那次失败往返是主页变慢的元凶之一）。
+    // 只探测一次「run_steps 有没有 duration_hint / checks」：有就一直带，
+    // 没有就降级（不再每次刷新都先撞一次 400 再重查 —— 主页变慢的元凶之一）。
     if (runStepsHasDuration !== false) {
-      const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint')
+      const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint,checks')
         .in('run_id', ids).order('position');
       if (!withDur.error) { runStepsHasDuration = true; return withDur.data || []; }
-      console.warn('[SciHub] run_steps 还没有 duration_hint 列，改从方案取时长：', withDur.error.message);
+      console.warn('[SciHub] run_steps 还没有 duration_hint / checks 列，降级读取：', withDur.error.message);
       runStepsHasDuration = false;
     }
     const plain = await client.from('run_steps').select(STEP_COLS)
@@ -900,6 +900,8 @@ async function renderHome() {
   // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
   const stepTouchedAny = (x) => {
     if ((x && (x.images || [])).length > 0) return true;
+    const checks = (x && x.checks) || {};
+    if (Object.keys(checks).some((k) => !!checks[k])) return true;   // 勾选过也算做过
     const labels = fieldLabelSet(x);
     const vals = (x && x.values) || {};
     return Object.keys(vals).some((k) => {

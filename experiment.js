@@ -123,6 +123,8 @@
           notice: extractNotice(text),
           // 只有真的写了热解程序的步骤才会带上「热解板块」（马弗炉/管式炉的升温曲线）
           pyro_seq: detectPyroSeq(text),
+          // 没有时间要求的步骤，尽量把「第 N 次抽滤」这类事项拆成勾选条目
+          checklist: guessDuration(text) ? [] : checklistOf(null, text),
         };
       }),
     };
@@ -183,6 +185,38 @@
     return '';
   }
 
+  /* 已完成勾选条目：优先用 AI/已有数组；否则按规则从说明里识别，
+     如「第一次抽滤（ ）、第二次抽滤（ ）」→ ['第一次抽滤','第二次抽滤']。 */
+  function checklistOf(given, text) {
+    const arr = Array.isArray(given)
+      ? given.map((x) => String(x == null ? '' : x).trim()).filter(Boolean)
+      : [];
+    if (arr.length) {
+      const seen = new Set();
+      return arr.filter((x) => { const k = x; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 20);
+    }
+
+    const t = String(text || '');
+    const out = [];
+    const seen = new Set();
+    // ①「第N次/第N遍/第N批 + 动作」：第一次抽滤、第二次抽滤…
+    const re = /第\s*[一二三四五六七八九十\d]+\s*[次遍批轮]\s*[，,、]?\s*([^\s，,、。；;()（）]{2,20}?)(?=[（(]|$|[，,、。；;\s]|第)/g;
+    let m;
+    while ((m = re.exec(t))) {
+      const item = (m[1] || '').trim();
+      if (item && !seen.has(item)) { seen.add(item); out.push(item); }
+    }
+    // ② 明显带勾选框的短句：「抽滤（ ）、洗涤（ ）」→ 把动作拆成条目
+    if (!out.length) {
+      const box = /([^\s，,、。；;（）()]{2,20}?)[（(]\s*[）)]/g;
+      while ((m = box.exec(t))) {
+        const item = (m[1] || '').trim();
+        if (item && !seen.has(item)) { seen.add(item); out.push(item); }
+      }
+    }
+    return out.slice(0, 20);
+  }
+
   async function readDocx(file) {
     const JSZip = await loadJSZip();
     const zip = await JSZip.loadAsync(file);
@@ -241,6 +275,8 @@
         notice: String((s && s.notice) || '').trim() || extractNotice(s && s.instruction),
         // 热解程序：AI 给了就用，否则从说明里识别；都没有就留空（不显示热解板块）
         pyro_seq: String((s && s.pyro_seq) || '').trim() || detectPyroSeq(s && s.instruction),
+        // 已完成勾选：AI 给的条目数组；没给就按规则从说明里识别（如「第一次抽滤（）」）
+        checklist: checklistOf(s && s.checklist, s && s.instruction),
         fields: fields,
       };
     });
@@ -290,10 +326,21 @@
             have.add(f.label);
             prev.fields = (prev.fields || []).concat([f]);
           });
+
+          const cHave = new Set((prev.checklist || []).map(String));
+          (s.checklist || []).forEach((c) => {
+            const k = String(c);
+            if (cHave.has(k)) return;
+            cHave.add(k);
+            prev.checklist = (prev.checklist || []).concat([k]);
+          });
           return;
         }
       }
-      out.push(Object.assign({}, s, { fields: (s.fields || []).slice() }));
+      out.push(Object.assign({}, s, {
+        fields: (s.fields || []).slice(),
+        checklist: (s.checklist || []).slice(),
+      }));
     });
 
     // 合并后重新编号，保证 position 连续
@@ -688,6 +735,22 @@
           '  </div>',
         ].join('\n') : '',
 
+        (s.checklist || []).length ? [
+          '  <div class="sub-block" data-checklist-area="' + si + '">',
+          '    <div class="sub-head"><span>☑ 已完成勾选</span><span class="sub-tools">',
+          '      <button type="button" class="ghost tiny" data-add-check="' + si + '">＋ 加一条</button>',
+          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-checklist">移除板块</button>',
+          '    </span></div>',
+          (s.checklist || []).map((c, ci) => [
+            '    <div class="line-row" data-line-row="' + si + '-' + ci + '">',
+            '      <span class="drag-handle" draggable="true" data-drag-check="' + si + '-' + ci + '" title="拖动调整顺序">⠿</span>',
+            '      <input data-check="' + si + '-' + ci + '" value="' + esc(c || '') + '" placeholder="如：第一次抽滤">',
+            '      <button type="button" class="icon-btn del" data-drop-check="' + si + '-' + ci + '" title="删除这条" aria-label="删除这条">×</button>',
+            '    </div>',
+          ].join('\n')).join(''),
+          '  </div>',
+        ].join('\n') : '',
+
         (s.pyro_seq || isPyroText(s)) ? [
           '  <div class="sub-block">',
           '    <div class="sub-head"><span>🔥 热解程序</span><span class="sub-tools">',
@@ -704,6 +767,7 @@
         '    <div class="add-block-menu">',
         s.fields.length ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-fields">数据字段</button>',
         s.notice ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-notice">注意事项</button>',
+        (s.checklist || []).length ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-checklist">已完成勾选</button>',
         s.pyro_seq ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-pyro">热解程序</button>',
         '    </div>',
         '  </details>',
@@ -739,6 +803,14 @@
       // 热解程序（方案里显式填的那一串；板块被移除时为 ''）
       const pyro = document.querySelector('[data-pyro="' + si + '"]');
       s.pyro_seq = pyro ? pyro.value.trim() : '';
+
+      // 已完成勾选：按输入顺序收成条目数组；板块被移除时清空
+      const checks = [];
+      host.querySelectorAll('[data-check^="' + si + '-"]').forEach((inp) => {
+        const v = inp.value.trim();
+        if (v && checks.indexOf(v) === -1) checks.push(v);
+      });
+      s.checklist = checks;
 
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
@@ -842,6 +914,22 @@
       s.notice = lines.filter(Boolean).join('；');
     });
 
+    // 已完成勾选条目排序（只允许同一步骤内排序）
+    bindDragSort(host, 'data-drag-check', (a, b) => {
+      const ai = Number(String(a).split('-')[0]);
+      const an = Number(String(a).split('-')[1]);
+      const bi = Number(String(b).split('-')[0]);
+      const bn = Number(String(b).split('-')[1]);
+      if (ai !== bi) return;
+
+      const s = draft.steps[ai];
+      if (!s) return;
+      const list = s.checklist || (s.checklist = []);
+      const moved = list.splice(an, 1)[0];
+      if (moved == null) return;
+      list.splice(bn, 0, moved);
+    });
+
     host.querySelectorAll('[data-drop-step]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
       draft.steps.splice(Number(b.dataset.dropStep), 1);
@@ -863,6 +951,7 @@
 
       if (kind === 'fields' && !s.fields.length) s.fields = [{ label: '', unit: '', type: 'text' }];
       if (kind === 'notice' && !s.notice) s.notice = '；';   // 占位，渲染出来就是一行空输入
+      if (kind === 'checklist' && !(s.checklist || []).length) s.checklist = [''];
       if (kind === 'pyro' && !s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
       renderDraft();
     }));
@@ -875,6 +964,7 @@
 
       if (kind === 'fields') s.fields = [];
       if (kind === 'notice') s.notice = '';
+      if (kind === 'checklist') s.checklist = [];
       if (kind === 'pyro') s.pyro_seq = '';
       renderDraft();
     }));
@@ -905,9 +995,25 @@
       renderDraft();
     }));
 
+    // 已完成勾选：添加一条 / 删除一条
+    host.querySelectorAll('[data-add-check]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const s = draft.steps[Number(b.dataset.addCheck)];
+      s.checklist = (s.checklist || []).concat(['']);
+      renderDraft();
+    }));
+
+    host.querySelectorAll('[data-drop-check]').forEach((b) => b.addEventListener('click', () => {
+      collectDraft();
+      const parts = String(b.dataset.dropCheck).split('-');
+      const s = draft.steps[Number(parts[0])];
+      (s.checklist || (s.checklist = [])).splice(Number(parts[1]), 1);
+      renderDraft();
+    }));
+
     $('draft-add-step').addEventListener('click', () => {
       collectDraft();
-      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', notice: '', fields: [] });
+      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', notice: '', checklist: [], fields: [] });
       renderDraft();
     });
 
@@ -994,6 +1100,7 @@
         pyro_seq: s.pyro_seq || '',
         fields: s.fields,
         duration_hint: s.duration_hint || '',
+        checklist: s.checklist || [],
       }));
       const { error: stepErr } = await client.from(STEP).insert(rows);
       if (stepErr) throw stepErr;
@@ -1011,6 +1118,14 @@
         if (r.added) bits.push('补上 ' + r.added + ' 步');
         if (r.removed) bits.push('删除 ' + r.removed + ' 步');
         if (bits.length) setStatus(doneMsg + '进行中的实验已同步：' + bits.join('、') + '。', 'ok');
+
+        // 同步失败的实验逐条报出原因，别让失败被"成功提示"盖过去
+        const fails = r.failed || [];
+        if (fails.length) {
+          const list = fails.map((x) => '· ' + x.title + '：' + x.reason).join('\n');
+          console.warn('[SciHub] 以下实验同步失败：', fails);
+          setStatus(doneMsg + '但有 ' + fails.length + ' 个进行中的实验同步失败：\n' + list, 'warn');
+        }
       } catch (err) {
         console.warn('[SciHub] 同步到进行中的实验失败：', err);
         setStatus(doneMsg + '但同步到进行中的实验失败，请稍后重试。', 'warn');
@@ -1032,7 +1147,7 @@
      已填的 values、备注、照片在「没被删掉」的步骤上原样保留。
      返回 { updated, added, removed }。 */
   async function syncPlanToRunningRuns(planId) {
-    const none = { updated: 0, added: 0, removed: 0 };
+    const none = { updated: 0, added: 0, removed: 0, failed: [] };
     const { data: runs } = await client
       .from(RUN).select('id,title,current_step').eq('plan_id', planId).eq('status', 'running');
     if (!runs || !runs.length) return none;
@@ -1067,8 +1182,10 @@
     // ── 再处理「改」和「增」 ──
     let updated = 0;
     let added = 0;
+    const failed = [];
 
     for (const run of runs) {
+      try {
       const byPos = {};
       rows.forEach((rs) => { if (rs.run_id === run.id && planPositions.has(rs.position)) byPos[rs.position] = rs; });
 
@@ -1078,7 +1195,7 @@
 
         // 方案新增的步骤 → 补进这次实验
         if (!rs) {
-          const { error } = await client.from(RUN_STEP).insert({
+          const ins = {
             user_id: state.user.id,
             run_id: run.id,
             position: ps.position,
@@ -1090,13 +1207,22 @@
             values: {},
             images: [],
             status: 'pending',
-          });
+            checks: Object.fromEntries((ps.checklist || []).map((c) => [String(c), false])),
+          };
+          let { error } = await client.from(RUN_STEP).insert(ins);
+          if (error && /checks/.test(String(error.message || ''))) {
+            const slim = Object.assign({}, ins); delete slim.checks;
+            ({ error } = await client.from(RUN_STEP).insert(slim));
+          }
           if (error) throw error;
           added += 1;
           continue;
         }
 
-        // 已存在的步骤：值以字段名为键，字段改名/新增时按含义搬家，搬不走的旧值原样保留
+        // 已存在的步骤：值以字段名为键，字段改名/新增时按含义搬家，搬不走的旧值原样保留。
+        // 勾选条目同名保留原勾选状态，新条目默认未勾选。
+        const oldChecks = rs.checks || {};
+        const nextChecks = Object.fromEntries((ps.checklist || []).map((c) => [String(c), !!oldChecks[String(c)]]));
         const oldFields = rs.fields || [];
         const values = migrateStepValues(oldFields, newFields, rs.values, null);
         const next = {
@@ -1106,13 +1232,18 @@
           pyro_seq: ps.pyro_seq || '',
           fields: newFields,
           values: values,
+          checks: nextChecks,
         };
 
-        const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values]);
-        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
+        const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values, oldChecks]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values, nextChecks]);
         if (before === after) continue;    // 没有实质变化就不写库
 
-        const { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
+        let { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
+        if (error && /checks/.test(String(error.message || ''))) {
+          const slim = Object.assign({}, next); delete slim.checks;
+          ({ error } = await client.from(RUN_STEP).update(slim).eq('id', rs.id));
+        }
         if (error) throw error;
         updated += 1;
       }
@@ -1123,9 +1254,13 @@
       if (want !== run.current_step) {
         await client.from(RUN).update({ current_step: want }).eq('id', run.id);
       }
+      } catch (err) {
+        console.warn('[SciHub] 同步方案到实验失败（' + (run.title || run.id) + '）：', err);
+        failed.push({ runId: run.id, title: run.title || ('实验 #' + run.id), reason: errorText(err) });
+      }
     }
 
-    return { updated: updated, added: added, removed: doomed.length };
+    return { updated: updated, added: added, removed: doomed.length, failed: failed };
   }
 
   /* 重命名（方案列表与详情页共用） */
@@ -1162,6 +1297,7 @@
         duration_hint: s.duration_hint || '',
         notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
         pyro_seq: s.pyro_seq || '',
+        checklist: (s.checklist || []).slice(),
         fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
       })),
     };
@@ -1190,6 +1326,8 @@
       '<div class="run-actions" style="margin-top:0;margin-bottom:16px;flex-wrap:wrap">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
+      '  <button type="button" class="ghost" id="plan-upload-ver">上传新版本</button>',
+      '  <input type="file" id="ver-input" accept=".docx" hidden>',
       canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
       '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
@@ -1206,6 +1344,7 @@
           + noticeLines(s).map((line) => '<span class="notice-item">' + highlight(line) + '</span>').join('')
           + '</div></div>' : '',
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
+        (s.checklist || []).length ? '  <div class="hc-meta" style="margin-top:8px">☑ 已完成勾选：' + (s.checklist || []).map((c) => esc(c)).join('、') + '</div>' : '',
         '</div>',
       ].join('\n')).join(''),
     ].join('\n');
@@ -1213,6 +1352,45 @@
     $('plan-back').addEventListener('click', () => route('plans'));
     $('plan-start').addEventListener('click', () => startRun(planId));
     $('plan-edit').addEventListener('click', () => editPlan(planId));
+
+    // 「上传新版本」：选一份新 .docx → AI 解析（失败回退规则）→ 打开「核对导入结果」
+    // 界面让你确认；保存时会把变化同步到进行中的实验并迁移数据（见 saveDraft）。
+    const verInput = $('ver-input');
+    $('plan-upload-ver').addEventListener('click', () => verInput.click());
+    verInput.addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';   // 允许连续选同一个文件
+      if (!f) return;
+      setStatus('正在解析新版本…');
+      try {
+        const { name, paras } = await readDocx(f);
+        const text = paras.join('\n');
+        let parsed = await parsePlanSmart(text);
+        if (!parsed) parsed = parsePlan(name, paras);
+        parsed.title = parsed.title || plan.title || name;
+        draft = {
+          id: plan.id,
+          title: parsed.title,
+          source: name,
+          steps: parsed.steps.map((s) => ({
+            title: s.title || '',
+            instruction: s.instruction || '',
+            duration_hint: s.duration_hint || '',
+            notice: s.notice || '',
+            pyro_seq: s.pyro_seq || '',
+            checklist: s.checklist || [],
+            fields: (s.fields || []).map((fl) => ({ label: fl.label, unit: fl.unit || '', type: fl.type || '' })),
+          })),
+        };
+        renderDraft();
+        showView('plan');
+        setStatus('已解析出新版本，请核对后保存（保存时会同步到进行中的实验）。', 'ok');
+      } catch (err) {
+        console.error('[SciHub] 解析新版本失败：', err);
+        setStatus('解析新版本失败：' + errorText(err), 'error');
+      }
+    });
+
     const upBtn = $('plan-upgrade');
     if (upBtn) {
       upBtn.addEventListener('click', async () => {
@@ -1270,14 +1448,17 @@
         values: {},
         images: [],
         status: 'pending',
+        // 已完成勾选：把方案的条目快照成「{条目: false}」，执行时逐个打勾
+        checks: Object.fromEntries((s.checklist || []).map((c) => [String(c), false])),
       }));
       let stepErr = (await client.from(RUN_STEP).insert(rows)).error;
-      if (stepErr && /duration_hint/.test(String(stepErr.message || ''))) {
-        // Supabase 里还没执行那段加列的 SQL → 去掉该字段重试，别让实验开不出来
-        console.warn('[SciHub] run_steps 还没有 duration_hint 列，本次不带它写入：', stepErr.message);
+      if (stepErr && /duration_hint|checks/.test(String(stepErr.message || ''))) {
+        // Supabase 里还没执行那段加列的 SQL → 去掉新字段重试，别让实验开不出来
+        console.warn('[SciHub] run_steps 还没有 duration_hint / checks 列，本次不带它们写入：', stepErr.message);
         const slim = rows.map((x) => {
           const o = Object.assign({}, x);
           delete o.duration_hint;
+          delete o.checks;
           return o;
         });
         stepErr = (await client.from(RUN_STEP).insert(slim)).error;
@@ -1686,8 +1867,48 @@
     if (x.status === 'done') return true;
     if ((x.images || []).length) return true;
     if (String(x.note || '').trim()) return true;
+    const checks = x.checks || {};
+    if (Object.keys(checks).some((k) => !!checks[k])) return true;   // 勾选过也算做过
     const vals = x.values || {};
     return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
+  }
+
+  /* 已完成勾选：把 run_steps.checks 渲染成可勾选清单；勾选/取消直接写库，
+     勾过任意一条就算这一步有进展（进度条、待办、日历会跟着动）。 */
+  function drawChecks(s) {
+    const host = $('checks');
+    if (!host) return;
+    const checks = s.checks || {};
+    const keys = Object.keys(checks);
+    if (!keys.length) { host.innerHTML = ''; return; }
+
+    const done = keys.filter((k) => !!checks[k]).length;
+    host.innerHTML = [
+      '<div class="sub-block" style="margin-top:12px">',
+      '  <div class="sub-head"><span>☑ 已完成勾选</span><span class="sub-tools">' + done + '/' + keys.length + '</span></div>',
+      keys.map((k, i) => [
+        '    <label class="check-row" data-check-row="' + i + '">',
+        '      <input type="checkbox" data-check-toggle="' + i + '"' + (checks[k] ? ' checked' : '') + '>',
+        '      <span>' + esc(k) + '</span>',
+        '    </label>',
+      ].join('\n')).join(''),
+      '</div>',
+    ].join('\n');
+
+    host.querySelectorAll('[data-check-toggle]').forEach((cb) => cb.addEventListener('change', async () => {
+      const k = keys[Number(cb.dataset.checkToggle)];
+      const nextChecks = Object.assign({}, s.checks || {}, { [k]: cb.checked });
+      s.checks = nextChecks;
+      const { error } = await client.from(RUN_STEP).update({ checks: nextChecks }).eq('id', s.id);
+      if (error) {
+        console.error('[SciHub] 勾选保存失败：', error);
+        setStatus('勾选保存失败：' + errorText(error), 'error');
+        s.checks = Object.assign({}, s.checks || {}, { [k]: !cb.checked });
+        drawRun();
+        return;
+      }
+      drawRun();   // 重新渲染：进度条/步骤圆点立刻反映这次勾选
+    }));
   }
 
   function drawRun() {
@@ -1827,6 +2048,7 @@
       '  <div class="instr">' + highlight(s.instruction) + '</div>',
       pyroBlock(s),
       '  <div id="fields"></div>',
+      '  <div id="checks"></div>',
       '  <div style="margin-top:14px">',
       '    <div class="hc-meta">实验照片 / 视频</div>',
       '    <div class="photos" id="photos"></div>',
@@ -1844,6 +2066,7 @@
     ].join('\n');
 
     drawFields(s);
+    drawChecks(s);
     drawPhotos(s);
     bindPyro(s);
 
