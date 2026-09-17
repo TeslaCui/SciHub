@@ -15,10 +15,9 @@ style.css             样式
 app.js                认证、科研记录 CRUD、主页（进行中的实验 + 日历 + 待办）、路由、小工具入口
 experiment.js         实验模块：方案导入/编辑、按步执行、拍照、导出、关联实验、热解程序计算器
 supabase_schema.sql   数据库结构参考（与 migrations 基线等价，含自检查询，可手工整段执行）
-supabase/migrations/  数据库迁移（结构以这里为准；push 后由 GitHub Actions 自动应用）
+supabase/migrations/  数据库迁移（结构以这里为准；push 后由 Supabase GitHub 集成自动应用）
 supabase/config.toml  Supabase 项目标识 + 要部署的 Edge Functions 声明
 supabase/functions/   Edge Function（DeepSeek 代理）：parse-plan / match-params / check-link / todo-plan
-.github/workflows/    GitHub Actions：push 自动「应用迁移 + 部署 Edge Functions」
 manifest.json / sw.js / version.json   PWA 与版本标记
 tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 ```
@@ -29,24 +28,32 @@ tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 
 ## Supabase 自动化（push 即同步）
 
-`.github/workflows/supabase.yml` 在 **push 到 `master` 且改动涉及 `supabase/`** 时自动执行：
+仓库已按 Supabase 的**标准结构**组织，push 后由 **Supabase 官方 GitHub 集成**自动同步：
 
-1. `supabase db push` —— 应用 `supabase/migrations/` 里还没跑过的迁移；
-2. `supabase functions deploy` —— 部署 `supabase/config.toml` 声明的 4 个 Edge Function。
+| 文件 | 作用 |
+| --- | --- |
+| `supabase/config.toml` | 项目标识 + 要部署的 4 个 Edge Function 声明 |
+| `supabase/migrations/*.sql` | 数据库迁移（**结构以这里为准**） |
+| `supabase/functions/*/index.ts` | Edge Function 源码 |
+
+集成在每次 push 到 `master` 时执行两步：**Migrate**（应用 `supabase/migrations/` 里还没跑过的迁移）→ **Deploy**（部署 `config.toml` 里声明的函数）。
 
 因此：**以后改数据库结构 = 新增一个迁移文件；改 Edge Function = 直接改代码**，push 即可，不必再进 Dashboard 手贴 SQL 或手动部署。
 
-### 一次性配置（3 个 GitHub Secret）
+### 一次性配置（在 Supabase 侧，不需要任何仓库密钥）
 
-仓库 **Settings → Secrets and variables → Actions → New repository secret**：
+1. Supabase Dashboard → **Project Settings → Integrations → GitHub** → 连接仓库 `TeslaCui/SciHub`；
+2. 授权 Supabase 的 GitHub App 访问该仓库，**Production branch 选 `master`**；
+3. 连接后会在仓库/项目上显示部署状态：Database → **Migrations** 能看到已应用的迁移列表。
 
-| Secret | 取值位置 |
-| --- | --- |
-| `SUPABASE_ACCESS_TOKEN` | Supabase Dashboard → Account → **Access Tokens** → 新建令牌 |
-| `SUPABASE_PROJECT_ID` | 项目 ref（本项目：`ttjnxndmjwhwpamyeuva`） |
-| `SUPABASE_DB_PASSWORD` | Dashboard → Project Settings → **Database** → 数据库密码（忘了可在那里重置） |
+> 想给 PR 建预览环境需要 Pro 计划；只做「push 自动同步」用免费计划即可。
 
-配好后：**Actions → Sync Supabase → Run workflow** 手动跑一次确认（workflow 会先校验三个 secret 是否齐全，缺了会直接报「缺少 GitHub Secret: …」）。
+### 备选：用 GitHub Actions 代替（需要 workflow scope）
+
+仓库里还留了一份等价的 workflow 参考实现（`.github/workflows/supabase.yml`，内容是 `supabase db push` + `supabase functions deploy`）。
+要用它的话需要：
+- 仓库 Settings → Secrets and variables → Actions 里加 `SUPABASE_ACCESS_TOKEN`、`SUPABASE_PROJECT_ID`、`SUPABASE_DB_PASSWORD`；
+- 推送 workflow 文件的凭据必须带 **`workflow` scope**（否则 GitHub 会拒绝，报 `refusing to allow an OAuth App to create or update workflow`）。
 
 ### 以后怎么改结构
 
@@ -58,7 +65,7 @@ git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
 ```
 
 约定：
-- 迁移文件名用**时间戳前缀**（`YYYYMMDDHHMMSS_说明.sql`），CLI 按名字排序执行；
+- 迁移文件名用**时间戳前缀**（`YYYYMMDDHHMMSS_说明.sql`），按名字排序执行；
 - 每份迁移都要**幂等**（`if not exists` / `drop … if exists`），这样基线在新环境重跑也安全；
 - 结构改完记得同步 `supabase_schema.sql`（它作为人读的参考，与迁移基线保持一致）；
 - **基线（`*_init.sql`）不要改**，新变更一律新增文件 —— 已应用过的迁移不会再执行，改了也不会生效。
@@ -120,7 +127,7 @@ git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
 
 1. 打开 <https://supabase.com/dashboard>，进入本项目使用的 Supabase 项目。
 2. 建库结构，二选一：
-   - **自动化（推荐）**：按上面「Supabase 自动化」配好 3 个 GitHub Secret，然后在 Actions 里手动跑一次 **Sync Supabase** —— 迁移会自动应用，不用手贴 SQL；Edge Functions 也一并部署。
+   - **自动化（推荐）**：按上面「Supabase 自动化」在 Supabase 里连接好 GitHub 仓库 —— 之后每次 push 到 `master` 都会自动应用迁移并部署 Edge Functions，不用手贴 SQL。
    - **手动**：左侧 **SQL Editor** → 新建查询 → 粘贴 `supabase_schema.sql` 全部内容 → **Run**（或按顺序粘贴 `supabase/migrations/*.sql`）。脚本幂等，可重复执行，只创建 `research_` / `experiment_` / `plan_` / `run_` 前缀的对象。执行完会依次输出 9 段自检，预期：
 
    | 自检 | 预期输出 |

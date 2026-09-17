@@ -1,11 +1,12 @@
-# Supabase 项目配置 —— 供 Supabase CLI / GitHub Actions / 官方 GitHub 集成识别。
+# Supabase 项目配置 —— 供 Supabase CLI / 官方 GitHub 集成 / CI 识别。
 #
 # 这里只放「公开的」项目标识与函数声明，不含任何密钥：
-#   · Access Token、DB 密码走 GitHub 仓库 Secret（见 .github/workflows/supabase.yml）
+#   · 官方 GitHub 集成不需要任何仓库密钥（在 Supabase Dashboard 里连接仓库即可）
+#   · 若改用 GitHub Actions，Access Token / DB 密码放 GitHub 仓库 Secret
 #   · DeepSeek 等第三方 key 走 Supabase 服务端 Secret（Dashboard → Edge Functions → Secrets）
 #
 # [functions.*] 里声明的函数 = 需要部署的 Edge Function；
-# push 到 master 后由 GitHub Actions 执行 `supabase functions deploy`（见 workflow）。
+# push 到 master 后由 Supabase GitHub 集成执行 Migrate（migrations）→ Deploy（这些函数）。
 
 project_id = "ttjnxndmjwhwpamyeuva"
 

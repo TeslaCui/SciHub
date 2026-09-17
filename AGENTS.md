@@ -21,6 +21,6 @@
 2. 前端改动至少在本地静态服务器上打开验证：登录/注册、新建/编辑/删除、刷新后数据仍在。
 3. `supabase_schema.sql` 与 `app.js` 的表名、字段名必须保持一致，改动其一需同步另一处。
 4. **数据库结构变更走迁移**：新增 `supabase/migrations/<时间戳>_说明.sql`（幂等：`if not exists` / `drop … if exists`），并同步 `supabase_schema.sql`（人读参考）、同步 `app.js` 里的列名与查询。不要修改已应用过的迁移文件（改了不会生效），基线 `*_init.sql` 只作初始快照。
-5. Edge Function 改动后 push 即由 `.github/workflows/supabase.yml` 自动部署；不要提交任何密钥（Access Token / DB 密码只放 GitHub Secret，DeepSeek key 只放 Supabase 服务端 Secret）。
+5. Edge Function 与迁移的部署由 **Supabase 官方 GitHub 集成**在 push 到 `master` 后自动完成（Migrate → Deploy）；不要提交任何密钥（Access Token / DB 密码只放 GitHub Secret，DeepSeek key 只放 Supabase 服务端 Secret）。推送 `.github/workflows/` 下的文件需要凭据带 `workflow` scope，否则 GitHub 会拒绝推送。
 6. 修改前端资源后，同步更新 `version.json` 与 `sw.js` 中的缓存版本号，避免用户拿到旧缓存。
 7. 验证失败、目标分支不明确或远程不可用时不要提交/推送，直接报告阻塞原因。
