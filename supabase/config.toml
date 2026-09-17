@@ -1,0 +1,25 @@
+# Supabase 项目配置 —— 供 Supabase CLI / GitHub Actions / 官方 GitHub 集成识别。
+#
+# 这里只放「公开的」项目标识与函数声明，不含任何密钥：
+#   · Access Token、DB 密码走 GitHub 仓库 Secret（见 .github/workflows/supabase.yml）
+#   · DeepSeek 等第三方 key 走 Supabase 服务端 Secret（Dashboard → Edge Functions → Secrets）
+#
+# [functions.*] 里声明的函数 = 需要部署的 Edge Function；
+# push 到 master 后由 GitHub Actions 执行 `supabase functions deploy`（见 workflow）。
+
+project_id = "ttjnxndmjwhwpamyeuva"
+
+# Edge Functions：verify_jwt = true 表示调用必须带合法 JWT
+# （前端用 anon key 调 client.functions.invoke 时会自动带上）。
+# 四个函数都不接收匿名裸调用，避免第三方白蹭 DeepSeek 额度。
+[functions.parse-plan]
+verify_jwt = true
+
+[functions.match-params]
+verify_jwt = true
+
+[functions.check-link]
+verify_jwt = true
+
+[functions.todo-plan]
+verify_jwt = true

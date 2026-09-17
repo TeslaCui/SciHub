@@ -1,21 +1,10 @@
--- SciHub · 科研工作台 —— Supabase 建表脚本（人读参考 / 手工初始化）
--- 幂等：可整段重复执行，不会覆盖已有数据。
+-- SciHub · 科研工作台 —— 基线迁移（幂等）
 --
--- 用法（二选一）：
---   A. 自动化：push 到 master 后由 GitHub Actions 跑 `supabase db push`，
---      结构以 supabase/migrations/ 为准（见 .github/workflows/supabase.yml）。
---   B. 手动：Supabase Dashboard → SQL Editor → 粘贴本文件 → Run。
+-- 这份文件是「当前线上结构的完整快照」，内容与 supabase_schema.sql 等价，
+-- 只是去掉了里面的自检 select。首次执行会把已存在的对象全部跳过（都是 if not exists）。
 --
--- 注意：**以后改结构请新增 supabase/migrations/<时间戳>_xxx.sql**，
---       本文件只跟着同步（它就是迁移基线的副本 + 末尾自检查询）。
---
--- 约定：
---   1. 本项目是 SciHub 专用实例，脚本只创建 research_ 前缀的对象；
---      research_ 前缀也让脚本将来被复用到共享项目时，不会与既有表重名。
---   2. 所有表都启用 RLS，策略统一为「只能读写自己名下的行」（auth.uid() = user_id）。
---   3. create policy 不支持 IF NOT EXISTS，因此先 DROP POLICY IF EXISTS 再重建。
---   4. 末尾显式 grant 给 authenticated：即使项目关闭了「Automatically expose new tables」，
---      登录用户仍能通过 Data API 读写（数据行安全由 RLS 保证）。
+-- 之后改结构：**新增一个 supabase/migrations/<时间戳>_xxx.sql**，不要再改这份基线；
+-- push 到 master 后由 GitHub Actions 自动 `supabase db push` 应用（见 .github/workflows/supabase.yml）。
 
 -- ─────────────────────────────────────────────────────────────
 -- 科研记录
@@ -43,8 +32,6 @@ create policy "own research records" on research_records
 create index if not exists research_records_user_occurred_idx
   on research_records (user_id, occurred_on desc, created_at desc);
 
--- 显式授权：即使项目没开「Automatically expose new tables」，登录用户也能经由 Data API 读写。
--- 注意：授权只决定「能否调用 API」，行的可见性仍由上面的 RLS 策略（auth.uid() = user_id）决定。
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on research_records to authenticated;
 
@@ -65,19 +52,6 @@ drop trigger if exists research_records_touch on research_records;
 create trigger research_records_touch
   before update on research_records
   for each row execute function research_touch_updated_at();
-
--- ─────────────────────────────────────────────────────────────
--- 自检：执行后应看到 tables=1, policies=1, indexes=1, triggers=1
--- ─────────────────────────────────────────────────────────────
-select
-  (select count(*) from information_schema.tables
-     where table_schema = 'public' and table_name = 'research_records')                         as tables,
-  (select count(*) from pg_policies
-     where schemaname = 'public' and tablename = 'research_records')                            as policies,
-  (select count(*) from pg_indexes
-     where schemaname = 'public' and indexname = 'research_records_user_occurred_idx')          as indexes,
-  (select count(*) from information_schema.triggers
-     where trigger_name = 'research_records_touch')                                             as triggers;
 
 -- ─────────────────────────────────────────────────────────────
 -- 账号档案：注册登记「用户名 + 电话」，登录支持 邮箱 / 用户名 / 电话 三选一
@@ -109,7 +83,6 @@ create policy "own research profile" on research_profiles
 grant select, insert, update, delete on research_profiles to authenticated;
 
 -- 注册前查重：返回冲突的字段名（username / phone / email），无冲突返回空串。
--- 必须 security definer：注册时用户还没登录，匿名角色读不到 research_profiles。
 create or replace function research_check_signup(p_username text, p_phone text, p_email text)
 returns text
 language sql
@@ -134,7 +107,7 @@ as $$
   end
 $$;
 
--- 登录标识符 → 邮箱：前端拿到邮箱后再走标准密码登录，不需要邮箱验证码。
+-- 登录标识符 → 邮箱：前端拿到邮箱后再走标准密码登录。
 create or replace function research_lookup_login_email(p_identifier text)
 returns text
 language sql
@@ -153,21 +126,10 @@ as $$
   limit 1
 $$;
 
--- 默认 public 角色即可执行，必须先收回，再只授权给 anon / authenticated。
 revoke all on function research_check_signup(text, text, text) from public;
 revoke all on function research_lookup_login_email(text) from public;
 grant execute on function research_check_signup(text, text, text) to anon, authenticated;
 grant execute on function research_lookup_login_email(text) to anon, authenticated;
-
--- ─────────────────────────────────────────────────────────────
--- 自检 2：账号档案对象。应看到 profile_tables=1, profile_functions=2
--- ─────────────────────────────────────────────────────────────
-select
-  (select count(*) from information_schema.tables
-     where table_schema = 'public' and table_name = 'research_profiles')             as profile_tables,
-  (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname = 'public'
-       and p.proname in ('research_check_signup', 'research_lookup_login_email'))     as profile_functions;
 
 -- ─────────────────────────────────────────────────────────────
 -- 实验方案与方案步骤（从 docx 导入或手动录入）
@@ -301,24 +263,7 @@ create policy "own experiment images delete" on storage.objects
   using (bucket_id = 'experiment-images' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- ─────────────────────────────────────────────────────────────
--- 自检 3：实验模块。应看到 exp_tables=4, exp_policies=4, exp_bucket=1, exp_image_policies=4
--- ─────────────────────────────────────────────────────────────
-select
-  (select count(*) from information_schema.tables
-     where table_schema = 'public'
-       and table_name in ('experiment_plans', 'plan_steps', 'experiment_runs', 'run_steps'))             as exp_tables,
-  (select count(*) from pg_policies
-     where schemaname = 'public'
-       and tablename in ('experiment_plans', 'plan_steps', 'experiment_runs', 'run_steps'))              as exp_policies,
-  (select count(*) from storage.buckets where id = 'experiment-images')                                 as exp_bucket,
-  (select count(*) from pg_policies
-     where schemaname = 'storage' and tablename = 'objects'
-       and policyname like 'own experiment images%')                                                    as exp_image_policies;
-
--- ─────────────────────────────────────────────────────────────
--- 实时同步：把「实验执行」相关表加入 Realtime 发布
--- 同一实验在多台设备上会实时互相推送改动（前端已订阅 run_steps）
--- 幂等：已在发布中则跳过
+-- 实时同步：把「实验执行」相关表加入 Realtime 发布（前端已订阅 run_steps）
 -- ─────────────────────────────────────────────────────────────
 do $$
 begin
@@ -338,66 +283,25 @@ begin
 end
 $$;
 
--- 自检 4：Realtime 发布是否已包含这两张表（预期 realtime_tables=2）
-select
-  (select count(*) from pg_publication_tables
-     where pubname = 'supabase_realtime' and schemaname = 'public'
-       and tablename in ('run_steps', 'experiment_runs'))          as realtime_tables;
-
 -- ─────────────────────────────────────────────────────────────
--- 步骤「注意事项」（新增）
--- 方案步骤与执行快照各留一列，用来在执行界面醒目提醒，例如：
---   「正常溶液呈红色，出现沉淀即异常」「离心前注意配平」
--- 幂等：列已存在则跳过；老数据为 null，界面按「没有注意事项」处理
+-- 步骤「注意事项」
 -- ─────────────────────────────────────────────────────────────
 alter table public.plan_steps add column if not exists notice text;
 alter table public.run_steps  add column if not exists notice text;
 
--- 自检 5：应看到 notice_columns=2
-select
-  (select count(*) from information_schema.columns
-     where table_schema = 'public'
-       and table_name in ('plan_steps', 'run_steps')
-       and column_name = 'notice')                                  as notice_columns;
-
 -- ─────────────────────────────────────────────────────────────
--- 方案「解析规则版本」（新增）
--- 方案记下导入时用的解析规则版本；落后于前端当前版本时，
--- 界面会像页脚版本号那样提示「解析规则 v1 → v2」并给出更新入口。
--- 幂等：列已存在则跳过。老方案为 null，前端按 v1 处理 —— 因此会提示更新，
--- 这正是想要的效果（它们确实是旧规则导入的）。
+-- 方案「解析规则版本」
 -- ─────────────────────────────────────────────────────────────
 alter table public.experiment_plans add column if not exists parse_version int;
 
--- 自检 6：应看到 parse_version_columns=1
-select
-  (select count(*) from information_schema.columns
-     where table_schema = 'public'
-       and table_name = 'experiment_plans'
-       and column_name = 'parse_version')                           as parse_version_columns;
-
 -- ─────────────────────────────────────────────────────────────
--- 步骤「热解程序」（新增）
--- 建方案时就把程序定下来，例如：
---   C30-T60-C30-T184-C950-T60-C950--121
--- 执行界面据此显示热解程序计算器（初始温度 / 升温速率 / 最终温度可现场调整并重算）。
--- 幂等：列已存在则跳过。老数据为 null，界面会退化为从步骤说明里自动识别。
+-- 步骤「热解程序」
 -- ─────────────────────────────────────────────────────────────
 alter table public.plan_steps add column if not exists pyro_seq text;
 alter table public.run_steps  add column if not exists pyro_seq text;
 
--- 自检 7：应看到 pyro_seq_columns=2
-select
-  (select count(*) from information_schema.columns
-     where table_schema = 'public'
-       and table_name in ('plan_steps', 'run_steps')
-       and column_name = 'pyro_seq')                                as pyro_seq_columns;
-
 -- ─────────────────────────────────────────────────────────────
--- 手动待办（新增）
--- 主页待办区里，「进行中的实验」是自动算出来的（不入库）；
--- 用户还可以自己加与实验无关的事：「明天 10:00 取样品」「周五送测 XRD」。
--- 这张表只存手动添加的那些。幂等：表已存在则跳过。
+-- 手动待办（与实验无关的事，例如「周五送测 XRD」）
 -- ─────────────────────────────────────────────────────────────
 create table if not exists public.research_todos (
   id          bigserial primary key,
@@ -408,7 +312,6 @@ create table if not exists public.research_todos (
   created_at  timestamptz not null default now()
 );
 
--- 与其它表一致：只允许读写自己那一行
 alter table public.research_todos enable row level security;
 
 drop policy if exists "research_todos own rows" on public.research_todos;
@@ -419,50 +322,18 @@ create policy "research_todos own rows" on public.research_todos
 
 create index if not exists research_todos_user_idx on public.research_todos (user_id, created_at desc);
 
--- 自检 8：应看到 todos_table=1 且 todos_rls=1
-select
-  (select count(*) from information_schema.tables
-     where table_schema = 'public' and table_name = 'research_todos')             as todos_table,
-  (select count(*) from pg_tables
-     where schemaname = 'public' and tablename = 'research_todos' and rowsecurity) as todos_rls;
-
 -- ─────────────────────────────────────────────────────────────
--- 实验之间的关联（新增）
--- 场景：v5.1 的第 7 步「酸洗」其实是和 v5 一起做的 ——
---   把 v5.1 和 v5 的热解后材料混在一起，然后统一酸洗。
--- 于是在「步骤」上记下：这一步关联到哪个实验 + 一句关联说明。
--- 有了它，主页就能把有关联的实验合并成一条显示。
--- 幂等：列已存在则跳过。老数据为 null，界面按「没有关联」处理。
+-- 实验之间的关联（v5.1 第 7 步酸洗 与 v5 一起做 → 主页合并成一条）
 -- ─────────────────────────────────────────────────────────────
 alter table public.run_steps add column if not exists link_run_id bigint;
 alter table public.run_steps add column if not exists link_note   text;
 
--- ─────────────────────────────────────────────────────────────
--- run_steps.duration_hint：起跑时把方案里那一步的「时长提示」也快照过来。
--- 之前只有 plan_steps 有这一列，实验步骤没有 —— 结果待办算结束时间时永远说
--- 「这一步未设时长提示」，执行界面也看不到时长提示。这里补上；幂等，
--- 老数据留空，待办会回方案里同一步骤取（见 app.js 的 planDur）。
--- ─────────────────────────────────────────────────────────────
+-- run_steps.duration_hint：起跑时把方案里那一步的「时长提示」也快照过来
 alter table public.run_steps add column if not exists duration_hint text not null default '';
 
--- ─────────────────────────────────────────────────────────────
--- 已完成勾选：plan_steps.checklist 存勾选条目（字符串数组，如
--- ["第一次抽滤","第二次抽滤"]）；run_steps.checks 存勾选状态对象
--- （{"第一次抽滤":false}），起跑时从方案快照过来。幂等；老数据为空数组/对象。
--- ─────────────────────────────────────────────────────────────
+-- 已完成勾选：plan_steps.checklist 存条目数组；run_steps.checks 存勾选状态对象
 alter table public.plan_steps add column if not exists checklist jsonb not null default '[]'::jsonb;
 alter table public.run_steps  add column if not exists checks    jsonb not null default '{}'::jsonb;
 
--- ─────────────────────────────────────────────────────────────
--- 方案更新日志：experiment_plans.version_log 存数组，每条
--- {at, type, source, summary}。上传新版本/编辑保存时追加一条；
--- 界面按「上传日期」区分不同版本（方案名不变，用日期标识版本）。
--- 幂等；老数据为空数组。
--- ─────────────────────────────────────────────────────────────
+-- 方案更新日志：每条 {at, type, source, summary}，界面按上传日期区分版本
 alter table public.experiment_plans add column if not exists version_log jsonb not null default '[]'::jsonb;
-
--- 自检 9：应看到 link_columns=2
-select
-  (select count(*) from information_schema.columns
-     where table_schema = 'public' and table_name = 'run_steps'
-       and column_name in ('link_run_id', 'link_note'))            as link_columns;

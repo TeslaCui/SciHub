@@ -14,8 +14,11 @@ index.html            页面骨架（登录视图 / 应用视图 / 模态框）
 style.css             样式
 app.js                认证、科研记录 CRUD、主页（进行中的实验 + 日历 + 待办）、路由、小工具入口
 experiment.js         实验模块：方案导入/编辑、按步执行、拍照、导出、关联实验、热解程序计算器
-supabase_schema.sql   数据库建表脚本（表 + RLS + 触发器 + Storage 策略 + Realtime 发布 + 自检）
+supabase_schema.sql   数据库结构参考（与 migrations 基线等价，含自检查询，可手工整段执行）
+supabase/migrations/  数据库迁移（结构以这里为准；push 后由 GitHub Actions 自动应用）
+supabase/config.toml  Supabase 项目标识 + 要部署的 Edge Functions 声明
 supabase/functions/   Edge Function（DeepSeek 代理）：parse-plan / match-params / check-link / todo-plan
+.github/workflows/    GitHub Actions：push 自动「应用迁移 + 部署 Edge Functions」
 manifest.json / sw.js / version.json   PWA 与版本标记
 tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 ```
@@ -23,6 +26,42 @@ tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 - 前端纯静态，**没有任何自建服务端**，可直接托管在 GitHub Pages / Vercel / Netlify。
 - Supabase 的 `publishable key` 写在 `app.js` 顶部：这类 key 本就是公开的，只用来标识项目；**真正的安全边界是 RLS**——每张表的策略都是 `auth.uid() = user_id`，任何账号都只能读写自己的行。
 - **绝不要把 `service_role` key 放进前端**，它会绕过 RLS。DeepSeek 的 API key 同样不进前端，只存在 Supabase 服务端（见「AI 能力」）。
+
+## Supabase 自动化（push 即同步）
+
+`.github/workflows/supabase.yml` 在 **push 到 `master` 且改动涉及 `supabase/`** 时自动执行：
+
+1. `supabase db push` —— 应用 `supabase/migrations/` 里还没跑过的迁移；
+2. `supabase functions deploy` —— 部署 `supabase/config.toml` 声明的 4 个 Edge Function。
+
+因此：**以后改数据库结构 = 新增一个迁移文件；改 Edge Function = 直接改代码**，push 即可，不必再进 Dashboard 手贴 SQL 或手动部署。
+
+### 一次性配置（3 个 GitHub Secret）
+
+仓库 **Settings → Secrets and variables → Actions → New repository secret**：
+
+| Secret | 取值位置 |
+| --- | --- |
+| `SUPABASE_ACCESS_TOKEN` | Supabase Dashboard → Account → **Access Tokens** → 新建令牌 |
+| `SUPABASE_PROJECT_ID` | 项目 ref（本项目：`ttjnxndmjwhwpamyeuva`） |
+| `SUPABASE_DB_PASSWORD` | Dashboard → Project Settings → **Database** → 数据库密码（忘了可在那里重置） |
+
+配好后：**Actions → Sync Supabase → Run workflow** 手动跑一次确认（workflow 会先校验三个 secret 是否齐全，缺了会直接报「缺少 GitHub Secret: …」）。
+
+### 以后怎么改结构
+
+```bash
+# 例：给 run_steps 加一列
+printf 'alter table public.run_steps add column if not exists foo text;\n' \
+  > supabase/migrations/$(date +%Y%m%d%H%M%S)_add_run_steps_foo.sql
+git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
+```
+
+约定：
+- 迁移文件名用**时间戳前缀**（`YYYYMMDDHHMMSS_说明.sql`），CLI 按名字排序执行；
+- 每份迁移都要**幂等**（`if not exists` / `drop … if exists`），这样基线在新环境重跑也安全；
+- 结构改完记得同步 `supabase_schema.sql`（它作为人读的参考，与迁移基线保持一致）；
+- **基线（`*_init.sql`）不要改**，新变更一律新增文件 —— 已应用过的迁移不会再执行，改了也不会生效。
 
 ## 功能一览
 
@@ -80,7 +119,9 @@ tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 ## 首次配置（必做，否则无法注册 / 写入数据）
 
 1. 打开 <https://supabase.com/dashboard>，进入本项目使用的 Supabase 项目。
-2. 左侧 **SQL Editor** → 新建查询 → 粘贴 `supabase_schema.sql` 全部内容 → **Run**。脚本幂等，可重复执行，只创建 `research_` / `experiment_` / `plan_` / `run_` 前缀的对象。执行完会依次输出 9 段自检，预期：
+2. 建库结构，二选一：
+   - **自动化（推荐）**：按上面「Supabase 自动化」配好 3 个 GitHub Secret，然后在 Actions 里手动跑一次 **Sync Supabase** —— 迁移会自动应用，不用手贴 SQL；Edge Functions 也一并部署。
+   - **手动**：左侧 **SQL Editor** → 新建查询 → 粘贴 `supabase_schema.sql` 全部内容 → **Run**（或按顺序粘贴 `supabase/migrations/*.sql`）。脚本幂等，可重复执行，只创建 `research_` / `experiment_` / `plan_` / `run_` 前缀的对象。执行完会依次输出 9 段自检，预期：
 
    | 自检 | 预期输出 |
    | --- | --- |

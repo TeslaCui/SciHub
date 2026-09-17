@@ -17,6 +17,9 @@ outputs/
 __pycache__/
 .pytest_cache/
 
+# Supabase CLI 本地临时状态（supabase link 生成，别提交）
+supabase/.temp/
+
 # 操作系统
 .DS_Store
 Thumbs.db
