@@ -809,7 +809,7 @@
           '  <div class="sub-block" data-fields-area="' + si + '">',
           '    <div class="sub-head"><span>数据字段</span><span class="sub-tools">',
           '      <button type="button" class="ghost tiny" data-add-field="' + si + '">＋ 加字段</button>',
-          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-fields">移除板块</button>',
+          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-fields" title="移除「数据字段」板块" aria-label="移除「数据字段」板块">×</button>',
           '    </span></div>',
           s.fields.map((f, fi) => [
             '    <div class="field-row" data-field-row="' + si + '-' + fi + '">',
@@ -829,7 +829,7 @@
           '  <div class="sub-block" data-notices-area="' + si + '">',
           '    <div class="sub-head"><span>⚠ 注意事项</span><span class="sub-tools">',
           '      <button type="button" class="ghost tiny" data-add-notice="' + si + '">＋ 加一条</button>',
-          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-notice">移除板块</button>',
+          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-notice" title="移除「注意事项」板块" aria-label="移除「注意事项」板块">×</button>',
           '    </span></div>',
           noticeLines(s).map((line, ni) => [
             '    <div class="line-row" data-line-row="' + si + '-' + ni + '">',
@@ -845,7 +845,7 @@
           '  <div class="sub-block" data-checklist-area="' + si + '">',
           '    <div class="sub-head"><span>☑ 已完成勾选</span><span class="sub-tools">',
           '      <button type="button" class="ghost tiny" data-add-check="' + si + '">＋ 加一条</button>',
-          '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-checklist">移除板块</button>',
+          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-checklist" title="移除「已完成勾选」板块" aria-label="移除「已完成勾选」板块">×</button>',
           '    </span></div>',
           (s.checklist || []).map((c, ci) => [
             '    <div class="line-row" data-line-row="' + si + '-' + ci + '">',
@@ -857,24 +857,26 @@
           '  </div>',
         ].join('\n') : '',
 
-        (s.pyro_seq || isPyroText(s)) ? [
+        // 热解程序板块：标题里提到热解相关工序时自动出现；点 × 移除（本次编辑内不再自动回来）
+        ((s.pyro_seq || isPyroText(s)) && !s.pyro_hidden) ? [
           '  <div class="sub-block">',
           '    <div class="sub-head"><span>🔥 热解程序</span><span class="sub-tools">',
-          s.pyro_seq ? '      <button type="button" class="ghost tiny" data-drop-block="' + si + '-pyro">移除板块</button>' : '',
+          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-pyro" title="移除「热解程序」板块" aria-label="移除「热解程序」板块">×</button>',
           '    </span></div>',
           // 生成/试算统一走右上角「小工具」里的热解计算器，这里只负责保存这一串程序
           '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="粘贴程序串，或用右上角小工具算好再粘过来">',
           '  </div>',
         ].join('\n') : '',
 
-        // 统一入口：加板块（已有的类型不再重复列出）
+        // 每个步骤只有这一个「＋ 添加板块」入口，点击下拉选择类型；
+        // 板块按固定顺序渲染（数据字段 → 注意事项 → 已完成勾选 → 热解程序），同类永远连在一起。
         '  <details class="add-block">',
         '    <summary>＋ 添加板块</summary>',
         '    <div class="add-block-menu">',
         s.fields.length ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-fields">数据字段</button>',
         s.notice ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-notice">注意事项</button>',
         (s.checklist || []).length ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-checklist">已完成勾选</button>',
-        s.pyro_seq ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-pyro">热解程序</button>',
+        ((s.pyro_seq || isPyroText(s)) && !s.pyro_hidden) ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-pyro">热解程序</button>',
         '    </div>',
         '  </details>',
 
@@ -1048,7 +1050,7 @@
       renderDraft();
     }));
 
-    // ── 板块：添加 / 移除 / 按温度生成热解程序 ──
+    // ── 板块：整步唯一的「＋ 添加板块」下拉，类型不再重复出现 ──
     host.querySelectorAll('[data-add-block]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
       const parts = String(b.dataset.addBlock).split('-');
@@ -1058,10 +1060,14 @@
       if (kind === 'fields' && !s.fields.length) s.fields = [{ label: '', unit: '', type: 'text' }];
       if (kind === 'notice' && !s.notice) s.notice = '；';   // 占位，渲染出来就是一行空输入
       if (kind === 'checklist' && !(s.checklist || []).length) s.checklist = [''];
-      if (kind === 'pyro' && !s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
+      if (kind === 'pyro') {
+        s.pyro_hidden = false;                               // 之前被 × 移除过，这里重新放出来
+        if (!s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
+      }
       renderDraft();
     }));
 
+    // 板块标题右侧的 × ：移除整个板块（行内的 × 只删那一行）
     host.querySelectorAll('[data-drop-block]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
       const parts = String(b.dataset.dropBlock).split('-');
@@ -1071,7 +1077,7 @@
       if (kind === 'fields') s.fields = [];
       if (kind === 'notice') s.notice = '';
       if (kind === 'checklist') s.checklist = [];
-      if (kind === 'pyro') s.pyro_seq = '';
+      if (kind === 'pyro') { s.pyro_seq = ''; s.pyro_hidden = true; }   // 标题含「热解」时别自动又冒出来
       renderDraft();
     }));
 
