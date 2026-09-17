@@ -7,6 +7,14 @@
 #
 # [functions.*] 里声明的函数 = 需要部署的 Edge Function；
 # push 到 master 后由 Supabase GitHub 集成执行 Migrate（migrations）→ Deploy（这些函数）。
+#
+# 集成状态：已连接 Supabase 官方 GitHub 集成
+#   · Repository：TeslaCui/SciHub
+#   · Working directory：.        （仓库根，其下有 supabase/）
+#   · Production branch：master   （只有 push 到 master 才会同步到生产库）
+#   · Deploy to production：开启
+# 想确认是否生效：Supabase Dashboard → Cloud → Database → Migrations 看迁移记录，
+# Edge Functions 页面看 4 个函数的最近部署时间。
 
 project_id = "ttjnxndmjwhwpamyeuva"
 
