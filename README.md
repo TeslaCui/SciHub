@@ -48,12 +48,20 @@ tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
 
 > 想给 PR 建预览环境需要 Pro 计划；只做「push 自动同步」用免费计划即可。
 
-### 备选：用 GitHub Actions 代替（需要 workflow scope）
+### 备选：用 GitHub Actions 代替（可选，仓库里默认没有）
 
-仓库里还留了一份等价的 workflow 参考实现（`.github/workflows/supabase.yml`，内容是 `supabase db push` + `supabase functions deploy`）。
-要用它的话需要：
+不想用官方集成的话，可以自己加一个 workflow（`.github/workflows/supabase.yml`），核心三步：
+
+```yaml
+- uses: supabase/setup-cli@v1
+- run: supabase link --project-ref "$SUPABASE_PROJECT_ID" -p "$SUPABASE_DB_PASSWORD"
+- run: supabase db push
+- run: supabase functions deploy parse-plan   # 其余函数同理
+```
+
 - 仓库 Settings → Secrets and variables → Actions 里加 `SUPABASE_ACCESS_TOKEN`、`SUPABASE_PROJECT_ID`、`SUPABASE_DB_PASSWORD`；
-- 推送 workflow 文件的凭据必须带 **`workflow` scope**（否则 GitHub 会拒绝，报 `refusing to allow an OAuth App to create or update workflow`）。
+- 推送 `.github/workflows/` 下文件的凭据必须带 **`workflow` scope**，否则 GitHub 会拒绝，报 `refusing to allow an OAuth App to create or update workflow`。
+（当前项目走的是官方集成，不需要这个文件。）
 
 ### 以后怎么改结构
 
