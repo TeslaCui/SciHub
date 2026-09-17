@@ -560,6 +560,101 @@
     }
   }
 
+  /* 上传新版本时的「智能合并」：新解析的步骤和现有方案逐项对齐，
+     用户改过的部分尽量保留，只有新文档里确实变了的才更新。
+
+     步骤对齐：标题归一化后互相包含 / 前 4 字相同 → 视为同一步。
+     对齐后的合并规则：
+       · 标题：沿用旧的（用户可能改过措辞）；新旧确实不像时才用新的
+       · instruction：用新文档的（操作要点以新版本为准）
+       · duration_hint / notice / pyro_seq / checklist：新的有就用新的，否则保留旧的（用户手填的不丢）
+       · fields：新旧字段按「同名 → 归一化同名 → AI 同义」搬家；新解析认不出的旧字段
+         （多为用户手工添加）保留在末尾，不丢
+     旧方案里用户自己加的步骤（新文档里没有）追加到最后 —— 用户删过的步骤不在旧方案里，
+     自然不会再出现。返回合并后的步骤数组（字段形如 {label,unit,type}）。 */
+  async function mergePlanVersions(oldSteps, newSteps) {
+    const tkey = (s) => String(s || '').replace(/[\s（）()【】\[\]：:、，,。.·—\-]/g, '');
+    const stem = 4;
+    const oldUsed = new Set();
+    const out = [];
+
+    for (const ns of newSteps) {
+      const nk = tkey(ns.title);
+      let old = null;
+      let oi = -1;
+      oldSteps.forEach((os, i) => {
+        if (oldUsed.has(i)) return;
+        const ok = tkey(os.title);
+        const related = (nk && ok && (nk.indexOf(ok) !== -1 || ok.indexOf(nk) !== -1))
+          || (nk.length >= stem && ok.length >= stem && nk.slice(0, stem) === ok.slice(0, stem));
+        if (related) { old = os; oi = i; }
+      });
+      if (old != null) oldUsed.add(oi);
+
+      const oldFields = (old && old.fields) || [];
+      const newFields = (ns.fields || []).map((f) => ({ label: String(f.label || '').trim(), unit: String(f.unit || '').trim(), type: String(f.type || '').trim() })).filter((f) => f.label);
+
+      // 字段对齐：先用名字匹配，匹配不上的交给 AI 判同义
+      const byNew = new Set();
+      const usedOldLabels = new Set();
+      const mergedFields = [];
+      for (const nf of newFields) {
+        const of = oldFields.find((x) => !usedOldLabels.has(x.label)
+          && (x.label === nf.label || fieldKey(x.label) === fieldKey(nf.label)));
+        if (of) {
+          usedOldLabels.add(of.label);
+          byNew.add(nf.label);
+          mergedFields.push({ label: of.label, unit: of.unit || nf.unit, type: of.type || nf.type });   // 用户改过的名称/单位保留
+        } else {
+          mergedFields.push(nf);
+        }
+      }
+      const unmatchedOld = oldFields.filter((x) => !usedOldLabels.has(x.label));
+      const unmatchedNew = newFields.filter((x) => !byNew.has(x.label));
+      const aiMap = await aiMatchFields(unmatchedOld.map((x) => x.label), unmatchedNew.map((x) => x.label));
+      if (aiMap) {
+        for (const nf of unmatchedNew) {
+          const from = Object.keys(aiMap).find((k) => aiMap[k] === nf.label && !usedOldLabels.has(k));
+          if (from == null) continue;
+          const of = unmatchedOld.find((x) => x.label === from);
+          if (!of) continue;
+          usedOldLabels.add(of.label);
+          byNew.add(nf.label);
+          mergedFields.push({ label: of.label, unit: of.unit || nf.unit, type: of.type || nf.type });
+        }
+      }
+      // 用户手工添加、新解析认不出的旧字段保留在末尾
+      const extras = oldFields.filter((x) => !usedOldLabels.has(x.label));
+      extras.forEach((x) => mergedFields.push({ label: x.label, unit: x.unit || '', type: x.type || '' }));
+
+      out.push({
+        title: old ? (old.title || ns.title) : ns.title,
+        instruction: ns.instruction || (old && old.instruction) || '',
+        duration_hint: ns.duration_hint || (old && old.duration_hint) || '',
+        notice: ns.notice || (old && old.notice) || '',
+        pyro_seq: ns.pyro_seq || (old && old.pyro_seq) || '',
+        checklist: (ns.checklist && ns.checklist.length) ? ns.checklist : ((old && old.checklist) || []),
+        fields: mergedFields,
+      });
+    }
+
+    // 用户自己加的步骤（新文档里没有）按原顺序追加到最后，不丢
+    oldSteps.forEach((os, i) => {
+      if (oldUsed.has(i)) return;
+      out.push({
+        title: os.title || '',
+        instruction: os.instruction || '',
+        duration_hint: os.duration_hint || '',
+        notice: os.notice || '',
+        pyro_seq: os.pyro_seq || '',
+        checklist: (os.checklist || []).slice(),
+        fields: (os.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
+      });
+    });
+
+    return out;
+  }
+
   /* 把方案的重建结果同步到正在进行的实验上（改别人的数据前先征得同意） */
   async function migrateRuns(planId, nextByPosition) {
     const { data: runs } = await client.from(RUN).select('id,status').eq('plan_id', planId);
@@ -1368,11 +1463,15 @@
         let parsed = await parsePlanSmart(text);
         if (!parsed) parsed = parsePlan(name, paras);
         parsed.title = parsed.title || plan.title || name;
+
+        // 智能合并：没改的部分和用户手动编辑过的部分（字段名/单位/类型/注意事项/
+        // 热解程序/勾选条目/自己加的步骤）都保留，只有新文档里确实变了的才更新。
+        const merged = await mergePlanVersions(steps || [], parsed.steps);
         draft = {
           id: plan.id,
           title: parsed.title,
           source: name,
-          steps: parsed.steps.map((s) => ({
+          steps: merged.map((s) => ({
             title: s.title || '',
             instruction: s.instruction || '',
             duration_hint: s.duration_hint || '',
@@ -1384,7 +1483,7 @@
         };
         renderDraft();
         showView('plan');
-        setStatus('已解析出新版本，请核对后保存（保存时会同步到进行中的实验）。', 'ok');
+        setStatus('已解析出新版本，并保留了你之前的手动修改；请核对后保存（保存时会同步到进行中的实验并迁移数据）。', 'ok');
       } catch (err) {
         console.error('[SciHub] 解析新版本失败：', err);
         setStatus('解析新版本失败：' + errorText(err), 'error');
