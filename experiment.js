@@ -1917,6 +1917,29 @@
       console.warn('[SciHub] 合并点检查失败：', err);
     }
 
+    // 关联组信息：合并点 linkAt + 组内可切换查看的实验 peers。
+    // 我发起的关联：linkAt 取我这边第一个 link_run_id 的 position；
+    // 别人 link 到我：linkAt 取 mergeCut。合并点之后的步骤在步骤条上标黄。
+    run.linkAt = null;
+    run.peers = [{ id: run.id, title: run.data.title }];
+    const selfLinkPos = (run.steps || []).filter((s) => s.link_run_id).map((s) => s.position);
+    if (selfLinkPos.length) {
+      run.linkAt = Math.min.apply(null, selfLinkPos);
+      Object.keys(run.linked || {}).forEach((k) => {
+        const id = Number(k);
+        if (run.peers.some((p) => p.id === id)) return;
+        run.peers.push({ id: id, title: run.linked[k] });
+      });
+    }
+    if (run.mergeCut != null) {
+      if (run.linkAt == null) run.linkAt = run.mergeCut;
+      const needTitles = (run.mergedFrom || []).filter((id) => !run.peers.some((p) => p.id === id));
+      if (needTitles.length) {
+        const { data: mergedRuns } = await client.from(RUN).select('id,title').in('id', needTitles);
+        (mergedRuns || []).forEach((x) => run.peers.push({ id: x.id, title: x.title }));
+      }
+    }
+
     // 与方案对齐检查：方案后来增/删/改过步骤就会记下差异，界面顶部实时提示
     try { run.drift = await planDiff(r); } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
 
@@ -2118,8 +2141,10 @@
         if (stepHasProgress(x)) cls.push('done');
         if (i === reached) cls.push('reached');
         if (i === run.pos) cls.push('cur');
+        if (run.linkAt != null && i >= run.linkAt) cls.push('linked');   // 合并点之后：共同做的步骤，标黄
         return '<button type="button" class="' + cls.join(' ') + '" data-goto="' + i + '"'
-          + ' title="第 ' + (i + 1) + ' 步：' + esc(x.title) + '">' + (i + 1) + '</button>';
+          + ' title="第 ' + (i + 1) + ' 步：' + esc(x.title)
+          + (run.linkAt != null && i >= run.linkAt ? '（合并后共同做）' : '') + '">' + (i + 1) + '</button>';
       }).join(''),
       '</div>',
 
@@ -2167,6 +2192,20 @@
       '<div class="run-step-card">',
       '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
+      // 合并点之前的步骤：可以切换查看同一步在其它关联实验里的数据
+      (run.linkAt != null && run.pos < run.linkAt && run.peers.length > 1
+        ? [
+            '  <div class="peer-bar">',
+            '    <label>🔍 查看这一步在其它实验的数据',
+            '      <select id="peer-select">',
+            '        <option value="">本实验（' + esc(run.data.title) + '）</option>',
+            run.peers.filter((p) => p.id !== run.id).map((p) => '        <option value="' + p.id + '">' + esc(p.title) + '</option>').join('\n'),
+            '      </select>',
+            '    </label>',
+            '    <div id="peer-view"></div>',
+            '  </div>',
+          ].join('\n')
+        : ''),
       // 这一步是不是和其它实验一起做的？比如「v5.1 第 7 步酸洗」和 v5 一起酸洗
       '  <div class="link-row">',
       s.link_run_id
@@ -2211,6 +2250,50 @@
     drawChecks(s);
     drawPhotos(s);
     bindPyro(s);
+
+    // 查看其它关联实验在同一步的数据（只读，只用于对照）
+    function drawPeerView() {
+      const host = $('peer-view');
+      const sel = $('peer-select');
+      if (!host || !sel) return;
+      const peerId = Number(sel.value || 0);
+      if (!peerId) { host.innerHTML = ''; return; }
+      host.innerHTML = '<span class="hint small">加载中…</span>';
+      client.from(RUN_STEP).select('*')
+        .eq('run_id', peerId).eq('position', run.pos).maybeSingle()
+        .then(({ data: peer }) => {
+          if (!peer) { host.innerHTML = '<span class="hint small">这个实验还没有这一步的数据。</span>'; return; }
+          const peerRun = (run.peers || []).find((p) => p.id === peerId);
+          const f = peer.fields || [];
+          const v = peer.values || {};
+          const checks = peer.checks || {};
+          const cKeys = Object.keys(checks);
+          const cDone = cKeys.filter((k) => !!checks[k]).length;
+          const rows = [];
+          f.forEach((fd) => {
+            rows.push('<div class="hc-meta">· ' + esc(fd.label) + '：'
+              + ((v[fd.label] == null || v[fd.label] === '') ? '（未填）' : esc(String(v[fd.label])))
+              + (fd.unit ? ' ' + esc(fd.unit) : '') + '</div>');
+          });
+          if (!f.length) rows.push('<div class="hc-meta">· 这一步没有预设字段</div>');
+          if (cKeys.length) rows.push('<div class="hc-meta">☑ 已完成勾选：' + cDone + '/' + cKeys.length + '</div>');
+          if (String(peer.note || '').trim()) rows.push('<div class="hc-meta">备注：' + esc(peer.note) + '</div>');
+          rows.push('<div class="hc-meta">照片 ' + ((peer.images || []).length) + ' 张</div>');
+          host.innerHTML = '<div class="peer-step"><b>' + esc((peerRun && peerRun.title) || ('实验 #' + peerId))
+            + ' · 第 ' + (run.pos + 1) + ' 步 ' + esc(peer.title || '') + '</b>'
+            + rows.join('') + '</div>';
+        })
+        .catch((err) => {
+          console.warn('[SciHub] 读取关联实验这一步失败：', err);
+          host.innerHTML = '<span class="hint small">读取失败：' + esc(errorText(err)) + '</span>';
+        });
+    }
+
+    const peerSel = $('peer-select');
+    if (peerSel) {
+      peerSel.addEventListener('change', drawPeerView);
+      drawPeerView();
+    }
 
     $('run-exit').addEventListener('click', () => route('home'));
 

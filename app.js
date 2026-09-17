@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '0.94.0';
+const APP_VERSION = '0.95.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1488,9 +1488,9 @@ async function renderHome() {
       ? todos.map((t) => {
           const isRun = t.kind === 'run';
           const multi = isRun && t.group && t.group.runs.length > 1;
-          // 关联实验合并成一条：标题用「A ⇄ B」
+          // 关联实验合并成一条：标题用「v5、v5.1 合并」
           const title = isRun
-            ? (multi ? t.group.runs.map((x) => x.title).join(' ⇄ ') : t.run.title)
+            ? (multi ? t.group.runs.map((x) => x.title).join('、') + ' 合并' : t.run.title)
             : t.title;
           const sub = isRun
             ? '第 ' + (((t.step && t.step.position) != null ? t.step.position : 0) + 1) + ' 步'
@@ -1587,7 +1587,7 @@ async function renderHome() {
             '<article class="home-card' + (multi ? ' linked' : '') + '">',
             '  <div class="hc-main">',
             '    <div class="hc-title">' + (multi
-              ? g.runs.map((x) => esc(x.title)).join(' ⇄ ') + ' <span class="link-tag">关联实验</span>'
+              ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
             '    <div class="hc-meta"' + (aiWhy[r.id] ? ' title="AI 判断依据：' + esc(aiWhy[r.id]) + '"' : '') + '>开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
