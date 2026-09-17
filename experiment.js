@@ -746,6 +746,7 @@
   const FIELD_TYPES = [
     { value: 'text', label: '文本' },
     { value: 'number', label: '数字' },
+    { value: 'check', label: '勾选已完成' },   // 执行时是一个勾选框：勾上=完成（存 '✓'，取消存空）
     { value: 'time', label: '时间' },
     { value: 'date', label: '日期' },
     { value: 'datetime', label: '日期 + 时间' },
@@ -2793,6 +2794,19 @@
           ].join('\n');
         }
 
+        // 勾选已完成：一个勾选框，勾上存 '✓'、取消存空 —— 让「非空即已填」的判定自然成立
+        if (type === 'check') {
+          const on = String(value).trim() !== '';
+          return [
+            '<div class="data-field">',
+            '  <label class="check-field">',
+            '    <input type="checkbox" data-key="' + i + '"' + (on ? ' checked' : '') + '>',
+            '    <span>' + esc(f.label) + (f.unit ? '<span class="unit">(' + esc(f.unit) + ')</span>' : '') + '</span>',
+            '  </label>',
+            '</div>',
+          ].join('\n');
+        }
+
         // 数字：用 number 控件，手机上会弹数字键盘，也能挡住非数字输入
         if (type === 'number') {
           return [
@@ -2819,11 +2833,14 @@
     host.appendChild(note);
 
     host.querySelectorAll('[data-key]').forEach((inp) => {
-      inp.addEventListener('input', () => {
+      const onVal = () => {
         const f = fields[Number(inp.dataset.key)];
         s.values = s.values || {};
 
-        if (inp.dataset.part) {
+        // 勾选框：勾上存 '✓'、取消存空串（空串＝没填，进度判定不会把它当成做过）
+        if (inp.type === 'checkbox') {
+          s.values[f.label] = inp.checked ? '✓' : '';
+        } else if (inp.dataset.part) {
           // 日期与时间分两个控件，合并成 "YYYY-MM-DD HH:mm" 存库
           let date = '';
           let time = '';
@@ -2837,7 +2854,11 @@
         }
 
         scheduleSave(s);
-      });
+      };
+
+      inp.addEventListener('input', onVal);
+      // 勾选框在部分浏览器只稳定触发 change，两个都接上（重复保存会自动防抖）
+      if (inp.type === 'checkbox') inp.addEventListener('change', onVal);
     });
     const nt = host.querySelector('[data-note]');
     nt.addEventListener('input', () => { s.note = nt.value; scheduleSave(s); });

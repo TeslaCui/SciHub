@@ -558,6 +558,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 .data-field { margin-bottom: 14px; }
 .data-field .unit { color: var(--muted); font-size: 12px; margin-left: 6px; }
+/* 「勾选已完成」型字段：整行可点，勾选框放大一点好按 */
+.data-field .check-field { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; }
+.data-field .check-field input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--brand); }
 
 /* 照片区：自适应网格 —— 一套规则覆盖手机（2 列）/ 平板 / 电脑（多列） */
 .photos {
