@@ -873,15 +873,17 @@
           '  </div>',
         ].join('\n') : '',
 
-        // 热解程序板块：标题里提到热解相关工序时自动出现；点 × 移除（本次编辑内不再自动回来）。
-        // 它是"单条"板块（没有多条可比），所以保留板块级 ×。
+        // 热解程序板块：标题里提到热解相关工序时自动出现；点右侧 × 移除。
+        // × 与其它类型一样放在内容行的最右侧（用 .line-row 布局对齐）。
         ((s.pyro_seq || isPyroText(s)) && !s.pyro_hidden) ? [
           '  <div class="sub-block">',
-          '    <div class="sub-head"><span>🔥 热解程序</span><span class="sub-tools">',
-          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-pyro" title="移除「热解程序」板块" aria-label="移除「热解程序」板块">×</button>',
-          '    </span></div>',
+          '    <div class="sub-head"><span>🔥 热解程序</span></div>',
+          '    <div class="line-row">',
+          '      <span></span>',
           // 生成/试算统一走右上角「小工具」里的热解计算器，这里只负责保存这一串程序
-          '    <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="粘贴程序串，或用右上角小工具算好再粘过来">',
+          '      <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="粘贴程序串，或用右上角小工具算好再粘过来">',
+          '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-pyro" title="移除「热解程序」板块" aria-label="移除「热解程序」板块">×</button>',
+          '    </div>',
           '  </div>',
         ].join('\n') : '',
 
@@ -1104,7 +1106,7 @@
       collectDraft();
       const parts = String(b.dataset.dropNotice).split('-');
       const s = draft.steps[Number(parts[0])];
-      const lines = noticeLines(s);
+      const lines = s.noticeRows || (s.noticeRows = noticeRowsOf(s));
       lines.splice(Number(parts[1]), 1);
       renderDraft();
     }));
@@ -1500,7 +1502,7 @@
         '  </div>',
         '  <div class="step-instruction">' + highlight(s.instruction) + '</div>',
         s.notice ? '  <div class="notice-mini"><em>⚠ 注意</em><div class="notice-items">'
-          + noticeLines(s).map((line) => '<span class="notice-item">' + highlight(line) + '</span>').join('')
+          + noticeLines(s).filter(Boolean).map((line) => '<span class="notice-item">' + highlight(line) + '</span>').join('')
           + '</div></div>' : '',
         (s.fields || []).length ? '  <div class="hc-meta" style="margin-top:8px">数据字段：' + (s.fields || []).map((f) => esc(f.label) + (f.unit ? '（' + esc(f.unit) + '）' : '')).join('、') + '</div>' : '',
         (s.checklist || []).length ? '  <div class="hc-meta" style="margin-top:8px">☑ 已完成勾选：' + (s.checklist || []).map((c) => esc(c)).join('、') + '</div>' : '',
@@ -2252,7 +2254,7 @@
         '    <span class="notice-icon" aria-hidden="true">⚠</span>',
         '    <div class="notice-body"><b>注意事项</b>',
         // 一条一行、带圆点 —— 之前用「；」连成一整句，扫读时容易串行
-        noticeLines(s).map((line) => '      <span class="notice-item">' + highlight(line) + '</span>').join('\n'),
+        noticeLines(s).filter(Boolean).map((line) => '      <span class="notice-item">' + highlight(line) + '</span>').join('\n'),
         '    </div>',
         '  </div>',
       ].join('\n') : '',
