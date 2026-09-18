@@ -733,6 +733,8 @@
       // 解析常把同一工序拆成多步（例如「950℃热解」+「热解后冷却称量」），这里自动合并一次，
       // 合并结果仍会展示在校对页，可以手动再调。
       draft.steps = mergeAdjacentSteps(draft.steps);
+      // 编辑器用「行数组」表示注意事项，这里把解析出来的字符串转一次
+      draft.steps.forEach((s) => { s.noticeRows = noticeRowsOf(s); });
       draft.source = file.name;
       renderDraft();
       route('plan');
@@ -768,6 +770,27 @@
     if (!raw) return [''];
     const lines = raw.split(/[；;]\s*/).map((x) => x.trim()).filter(Boolean);
     return lines.length ? lines : [''];
+  }
+
+  /* 编辑器内部用「行数组」表示注意事项：保留空白行（刚点「＋ 注意事项」还没填内容时就是一行空）。
+     渲染 / 拖动 / 删除都基于它；保存时再用 noticeText() 去掉空白行写库。 */
+  function noticeRowsOf(s) {
+    const raw = String((s && s.notice) || '');
+    if (!raw) return (s && s.noticeRows) ? s.noticeRows.slice() : [];
+    return raw.split(/[；;]/).map((x) => x.trim());
+  }
+  function noticeText(rows) {
+    return (rows || []).map((x) => String(x == null ? '' : x).trim()).filter(Boolean).join('；');
+  }
+  /* 空白行统计：没填内容的字段 / 注意事项 / 勾选条目（保存前提示用） */
+  function countBlankRows(steps) {
+    let n = 0;
+    (steps || []).forEach((s) => {
+      (s.fields || []).forEach((f) => { if (!String((f && f.label) || '').trim()) n += 1; });
+      (s.noticeRows || []).forEach((x) => { if (!String(x || '').trim()) n += 1; });
+      (s.checklist || []).forEach((x) => { if (!String(x || '').trim()) n += 1; });
+    });
+    return n;
   }
 
   /* 这一步的文字里是否提到热解相关工序 —— 用来决定要不要显示「热解程序」板块 */
@@ -824,10 +847,10 @@
           '  </div>',
         ].join('\n') : '',
 
-        s.notice ? [
+        (s.noticeRows || []).length ? [
           '  <div class="sub-block" data-notices-area="' + si + '">',
           '    <div class="sub-head"><span>⚠ 注意事项</span></div>',
-          noticeLines(s).map((line, ni) => [
+          (s.noticeRows || []).map((line, ni) => [
             '    <div class="line-row" data-line-row="' + si + '-' + ni + '">',
             '      <span class="drag-handle" draggable="true" data-drag-notice="' + si + '-' + ni + '" title="拖动调整顺序">⠿</span>',
             '      <input data-notice="' + si + '-' + ni + '" value="' + esc(line) + '" placeholder="如：出现沉淀即为异常">',
@@ -864,7 +887,8 @@
 
         // 每个步骤只有这一个「＋ 添加板块」入口：点某个类型 = 追加一条该类型的内容
         // （没有该类型就先建板块）。类型顺序固定，所以同类永远连在一起。
-        '  <details class="add-block">',
+        // 下拉展开状态存在草稿里：点「＋ 某类型」后不自动收起，可以连着点；想收起点一下标题。
+        '  <details class="add-block"' + (s._addOpen ? ' open' : '') + '>',
         '    <summary>＋ 添加板块</summary>',
         '    <div class="add-block-menu">',
         '      <button type="button" class="ghost tiny" data-add-block="' + si + '-fields">＋ 数据字段</button>',
@@ -896,23 +920,20 @@
       if (d) s.duration_hint = d.value.trim();
       if (ins) s.instruction = ins.value;
 
-      // 注意事项：多行合并回一个「；」分隔的字符串；板块被移除时这里自然清空
-      const rows = host.querySelectorAll('[data-notice^="' + si + '-"]');
-      const lines = [];
-      rows.forEach((inp) => { const v = inp.value.trim(); if (v) lines.push(v); });
-      s.notice = lines.join('；');
+      // 注意事项：编辑器按「行数组」收集（**保留空白行**），保存时再用 noticeText() 去空写库。
+      // 保留空白行，是为了"点了添加还没填内容"的行不被下一次 collect 吃掉。
+      const noticeRows = [];
+      host.querySelectorAll('[data-notice^="' + si + '-"]').forEach((inp) => { noticeRows.push(inp.value.trim()); });
+      if (noticeRows.length || !(s.noticeRows || []).length) s.noticeRows = noticeRows;
 
       // 热解程序（方案里显式填的那一串；板块被移除时为 ''）
       const pyro = document.querySelector('[data-pyro="' + si + '"]');
       s.pyro_seq = pyro ? pyro.value.trim() : '';
 
-      // 已完成勾选：按输入顺序收成条目数组；板块被移除时清空
+      // 已完成勾选：按输入顺序收成条目数组（同样保留空白行）
       const checks = [];
-      host.querySelectorAll('[data-check^="' + si + '-"]').forEach((inp) => {
-        const v = inp.value.trim();
-        if (v && checks.indexOf(v) === -1) checks.push(v);
-      });
-      s.checklist = checks;
+      host.querySelectorAll('[data-check^="' + si + '-"]').forEach((inp) => { checks.push(inp.value.trim()); });
+      if (checks.length || !(s.checklist || []).length) s.checklist = checks;
 
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
@@ -922,7 +943,7 @@
         if (u) f.unit = u.value.trim();
         if (ty) f.type = ty.value;
       });
-      s.fields = s.fields.filter((f) => f.label);
+      // 字段行也保留空白行（不在这里过滤，保存前统一提示清理）
     });
     draft.steps = draft.steps.filter((s) => s.title || s.instruction);
   }
@@ -1009,11 +1030,10 @@
 
       const s = draft.steps[ai];
       if (!s) return;
-      const lines = noticeLines(s);
+      const lines = s.noticeRows || (s.noticeRows = noticeRowsOf(s));
       const moved = lines.splice(an, 1)[0];
       if (moved == null) return;
       lines.splice(bn, 0, moved);
-      s.notice = lines.filter(Boolean).join('；');
     });
 
     // 已完成勾选条目排序（只允许同一步骤内排序）
@@ -1047,12 +1067,13 @@
 
       // 已有该类型就再追加一条，没有就先建板块（板块按类型聚合渲染，两条会连在一起）
       if (kind === 'fields') s.fields = (s.fields || []).concat([{ label: '', unit: '', type: 'text' }]);
-      if (kind === 'notice') s.notice = noticeLines(s).concat(['']).join('；');
+      if (kind === 'notice') s.noticeRows = (s.noticeRows || noticeRowsOf(s)).concat(['']);
       if (kind === 'checklist') s.checklist = (s.checklist || []).concat(['']);
       if (kind === 'pyro') {
         s.pyro_hidden = false;                               // 之前被 × 移除过，这里重新放出来
         if (!s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
       }
+      s._addOpen = true;    // 下拉保持展开，方便接着加下一条（想收起点一下标题）
       renderDraft();
     }));
 
@@ -1064,7 +1085,7 @@
       const kind = parts[1];
 
       if (kind === 'fields') s.fields = [];
-      if (kind === 'notice') s.notice = '';
+      if (kind === 'notice') s.noticeRows = [];
       if (kind === 'checklist') s.checklist = [];
       if (kind === 'pyro') { s.pyro_seq = ''; s.pyro_hidden = true; }   // 标题含「热解」时别自动又冒出来
       renderDraft();
@@ -1085,9 +1106,16 @@
       const s = draft.steps[Number(parts[0])];
       const lines = noticeLines(s);
       lines.splice(Number(parts[1]), 1);
-      s.notice = lines.filter(Boolean).join('；');
       renderDraft();
     }));
+
+    // 「＋ 添加板块」下拉的手动展开 / 收起也记进草稿，重绘后保持原状态
+    host.querySelectorAll('.add-block').forEach((d, i) => {
+      d.addEventListener('toggle', () => {
+        const st = draft.steps[i];
+        if (st) st._addOpen = d.open;
+      });
+    });
 
     // 已完成勾选：删除一条（添加走底部的「＋ 添加板块」）
     host.querySelectorAll('[data-drop-check]').forEach((b) => b.addEventListener('click', () => {
@@ -1100,7 +1128,10 @@
 
     $('draft-add-step').addEventListener('click', () => {
       collectDraft();
-      draft.steps.push({ title: '新步骤', instruction: '', duration_hint: '', notice: '', checklist: [], fields: [] });
+      draft.steps.push({
+        title: '新步骤', instruction: '', duration_hint: '',
+        notice: '', noticeRows: [], checklist: [], fields: [],
+      });
       renderDraft();
     });
 
@@ -1150,6 +1181,19 @@
   async function saveDraft() {
     collectDraft();
     if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
+
+    // 保存前检查空白行（没填内容的字段 / 注意事项 / 勾选条目）：
+    // 有就提示「默认删除」，让用户确认是否继续（取消则什么都不做，方便回去补内容）。
+    const blanks = countBlankRows(draft.steps);
+    if (blanks) {
+      const ok = window.confirm(
+        '检测到 ' + blanks + ' 处空白行（只有输入框、没填内容）。\n\n'
+        + '继续保存会自动删除这些空白行；\n'
+        + '点「取消」则返回编辑，把它们补上内容或删掉。'
+      );
+      if (!ok) { setStatus('已取消保存：请先补上空白行的内容，或删掉这些行。', 'warn'); return; }
+    }
+
     // 缺时长的步骤先补齐（规则 → AI 兜底），这样待办不必每次再调 AI
     const filled = await fillStepDurations(draft.steps);
     if (filled) console.info('[SciHub] 已用 AI 补上 ' + filled + ' 个步骤的时长提示');
@@ -1185,17 +1229,19 @@
         planId = plan.id;
       }
 
+      // 落库前清理空白行：注意事项拼回「；」分隔（noticeText 去掉空行）、
+      // 字段要求有名字、勾选条目要求非空 —— 空行不写进数据库。
       const rows = draft.steps.map((s, i) => ({
         user_id: state.user.id,
         plan_id: planId,
         position: i,
         title: s.title || ('步骤 ' + (i + 1)),
         instruction: s.instruction || '',
-        notice: s.notice || '',
+        notice: noticeText(s.noticeRows && s.noticeRows.length ? s.noticeRows : noticeRowsOf(s)),
         pyro_seq: s.pyro_seq || '',
-        fields: s.fields,
+        fields: (s.fields || []).filter((f) => String((f && f.label) || '').trim()),
         duration_hint: s.duration_hint || '',
-        checklist: s.checklist || [],
+        checklist: (s.checklist || []).map((x) => String(x || '').trim()).filter(Boolean),
       }));
       const { error: stepErr } = await client.from(STEP).insert(rows);
       if (stepErr) throw stepErr;
@@ -1392,6 +1438,7 @@
         instruction: s.instruction || '',
         duration_hint: s.duration_hint || '',
         notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
+        noticeRows: noticeRowsOf(s),  // 编辑器用的行数组（保留空白行）
         pyro_seq: s.pyro_seq || '',
         checklist: (s.checklist || []).slice(),
         fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
@@ -1500,6 +1547,7 @@
             instruction: s.instruction || '',
             duration_hint: s.duration_hint || '',
             notice: s.notice || '',
+            noticeRows: noticeRowsOf(s),   // 编辑器用的行数组（保留空白行）
             pyro_seq: s.pyro_seq || '',
             checklist: s.checklist || [],
             fields: (s.fields || []).map((fl) => ({ label: fl.label, unit: fl.unit || '', type: fl.type || '' })),
