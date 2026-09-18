@@ -118,13 +118,13 @@
           position: i,
           title: s.title,
           instruction: text,
-          fields: detectFields(text),
+          fields: withChecklistFields(detectFields(text), guessDuration(text) ? [] : checklistOf(null, text)),
           duration_hint: guessDuration(text),
           notice: extractNotice(text),
           // 只有真的写了热解程序的步骤才会带上「热解板块」（马弗炉/管式炉的升温曲线）
           pyro_seq: detectPyroSeq(text),
-          // 没有时间要求的步骤，尽量把「第 N 次抽滤」这类事项拆成勾选条目
-          checklist: guessDuration(text) ? [] : checklistOf(null, text),
+          // 「已完成勾选」已并入数据字段：上面用 withChecklistFields 转成 check 字段了
+          checklist: [],
         };
       }),
     };
@@ -217,6 +217,35 @@
     return out.slice(0, 20);
   }
 
+  /* 「已完成勾选」已并入「数据字段」：勾选条目统一变成 type='check' 的字段。
+     解析结果 / 旧方案里的 checklist 都用它转成字段，之后编辑器只认字段。 */
+  function checklistAsFields(list) {
+    return (list || [])
+      .map((c) => ({ label: String(c == null ? '' : c).trim(), unit: '', type: 'check' }))
+      .filter((f) => f.label);
+  }
+  /* 把勾选条目并进字段列表，同名的不重复加 */
+  function withChecklistFields(fields, checklist) {
+    const out = (fields || []).slice();
+    const have = new Set(out.map((f) => String((f && f.label) || '').trim()));
+    checklistAsFields(checklist).forEach((f) => {
+      if (have.has(f.label)) return;
+      have.add(f.label);
+      out.push(f);
+    });
+    return out;
+  }
+  /* 这一步是否还有任何内容（空白行清完后，用来决定要不要保留这个步骤） */
+  function stepHasContent(s) {
+    if (!s) return false;
+    if (String(s.title || '').trim() || String(s.instruction || '').trim()) return true;
+    if (String(s.duration_hint || '').trim() || String(s.pyro_seq || '').trim()) return true;
+    if ((s.fields || []).some((f) => String((f && f.label) || '').trim())) return true;
+    if ((s.noticeRows || []).some((x) => String(x || '').trim())) return true;
+    if ((s.checklist || []).some((x) => String(x || '').trim())) return true;
+    return false;
+  }
+
   async function readDocx(file) {
     const JSZip = await loadJSZip();
     const zip = await JSZip.loadAsync(file);
@@ -275,9 +304,9 @@
         notice: String((s && s.notice) || '').trim() || extractNotice(s && s.instruction),
         // 热解程序：AI 给了就用，否则从说明里识别；都没有就留空（不显示热解板块）
         pyro_seq: String((s && s.pyro_seq) || '').trim() || detectPyroSeq(s && s.instruction),
-        // 已完成勾选：AI 给的条目数组；没给就按规则从说明里识别（如「第一次抽滤（）」）
-        checklist: checklistOf(s && s.checklist, s && s.instruction),
-        fields: fields,
+        // 已完成勾选已并入数据字段：AI 给的 checklist / 规则识别出的条目都转成 check 字段
+        fields: withChecklistFields(fields, checklistOf(s && s.checklist, s && s.instruction)),
+        checklist: [],
       };
     });
 
@@ -327,19 +356,19 @@
             prev.fields = (prev.fields || []).concat([f]);
           });
 
-          const cHave = new Set((prev.checklist || []).map(String));
+          // 勾选条目已并入字段（check 类型）：旧数据里的 checklist 也一并并进 fields
           (s.checklist || []).forEach((c) => {
-            const k = String(c);
-            if (cHave.has(k)) return;
-            cHave.add(k);
-            prev.checklist = (prev.checklist || []).concat([k]);
+            const k = String(c || '').trim();
+            if (!k || have.has(k)) return;
+            have.add(k);
+            prev.fields = (prev.fields || []).concat([{ label: k, unit: '', type: 'check' }]);
           });
           return;
         }
       }
       out.push(Object.assign({}, s, {
         fields: (s.fields || []).slice(),
-        checklist: (s.checklist || []).slice(),
+        checklist: [],
       }));
     });
 
@@ -635,8 +664,8 @@
         duration_hint: ns.duration_hint || (old && old.duration_hint) || '',
         notice: ns.notice || (old && old.notice) || '',
         pyro_seq: ns.pyro_seq || (old && old.pyro_seq) || '',
-        checklist: (ns.checklist && ns.checklist.length) ? ns.checklist : ((old && old.checklist) || []),
-        fields: mergedFields,
+        checklist: [],
+        fields: withChecklistFields(mergedFields, (ns.checklist && ns.checklist.length) ? ns.checklist : (old && old.checklist)),
         _mark: old ? 'kept' : 'new',
       });
     }
@@ -650,8 +679,8 @@
         duration_hint: os.duration_hint || '',
         notice: os.notice || '',
         pyro_seq: os.pyro_seq || '',
-        checklist: (os.checklist || []).slice(),
-        fields: (os.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
+        checklist: [],
+        fields: withChecklistFields((os.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })), os.checklist),
         _mark: 'user',
       });
     });
@@ -782,13 +811,12 @@
   function noticeText(rows) {
     return (rows || []).map((x) => String(x == null ? '' : x).trim()).filter(Boolean).join('；');
   }
-  /* 空白行统计：没填内容的字段 / 注意事项 / 勾选条目（保存前提示用） */
+  /* 空白行统计：没填内容的字段 / 注意事项（保存前提示用） */
   function countBlankRows(steps) {
     let n = 0;
     (steps || []).forEach((s) => {
       (s.fields || []).forEach((f) => { if (!String((f && f.label) || '').trim()) n += 1; });
       (s.noticeRows || []).forEach((x) => { if (!String(x || '').trim()) n += 1; });
-      (s.checklist || []).forEach((x) => { if (!String(x || '').trim()) n += 1; });
     });
     return n;
   }
@@ -860,18 +888,7 @@
           '  </div>',
         ].join('\n') : '',
 
-        (s.checklist || []).length ? [
-          '  <div class="sub-block" data-checklist-area="' + si + '">',
-          '    <div class="sub-head"><span>☑ 已完成勾选</span></div>',
-          (s.checklist || []).map((c, ci) => [
-            '    <div class="line-row" data-line-row="' + si + '-' + ci + '">',
-            '      <span class="drag-handle" draggable="true" data-drag-check="' + si + '-' + ci + '" title="拖动调整顺序">⠿</span>',
-            '      <input data-check="' + si + '-' + ci + '" value="' + esc(c || '') + '" placeholder="如：第一次抽滤">',
-            '      <button type="button" class="icon-btn del" data-drop-check="' + si + '-' + ci + '" title="删除这条" aria-label="删除这条">×</button>',
-            '    </div>',
-          ].join('\n')).join(''),
-          '  </div>',
-        ].join('\n') : '',
+        // （「已完成勾选」已并入「数据字段」：在字段行的填写方式里选「勾选已完成」即可）
 
         // 热解程序板块：标题里提到热解相关工序时自动出现；点右侧 × 移除。
         // × 与其它类型一样放在内容行的最右侧（用 .line-row 布局对齐）。
@@ -895,7 +912,6 @@
         '    <div class="add-block-menu">',
         '      <button type="button" class="ghost tiny" data-add-block="' + si + '-fields">＋ 数据字段</button>',
         '      <button type="button" class="ghost tiny" data-add-block="' + si + '-notice">＋ 注意事项</button>',
-        '      <button type="button" class="ghost tiny" data-add-block="' + si + '-checklist">＋ 已完成勾选</button>',
         ((s.pyro_seq || isPyroText(s)) && !s.pyro_hidden) ? '' : '      <button type="button" class="ghost tiny" data-add-block="' + si + '-pyro">＋ 热解程序</button>',
         '    </div>',
         '  </details>',
@@ -932,10 +948,9 @@
       const pyro = document.querySelector('[data-pyro="' + si + '"]');
       s.pyro_seq = pyro ? pyro.value.trim() : '';
 
-      // 已完成勾选：按输入顺序收成条目数组（同样保留空白行）
-      const checks = [];
-      host.querySelectorAll('[data-check^="' + si + '-"]').forEach((inp) => { checks.push(inp.value.trim()); });
-      if (checks.length || !(s.checklist || []).length) s.checklist = checks;
+      // 字段行保留空白行（不在这里过滤，保存前统一提示清理）；
+      // 「勾选已完成」现在是字段的一种填写方式，不再有独立板块
+      s.checklist = [];
 
       s.fields.forEach((f, fi) => {
         const n = document.querySelector('[data-field-name="' + si + '-' + fi + '"]');
@@ -947,7 +962,8 @@
       });
       // 字段行也保留空白行（不在这里过滤，保存前统一提示清理）
     });
-    draft.steps = draft.steps.filter((s) => s.title || s.instruction);
+    // 只丢掉「真的一点内容都没有」的步骤：标题/说明/字段/注意事项/勾选/热解任一有内容都保留
+    draft.steps = draft.steps.filter(stepHasContent);
   }
 
   /* 通用拖动排序：只有手柄可拖（避免在输入框里选文字时误触发）。
@@ -1038,22 +1054,6 @@
       lines.splice(bn, 0, moved);
     });
 
-    // 已完成勾选条目排序（只允许同一步骤内排序）
-    bindDragSort(host, 'data-drag-check', (a, b) => {
-      const ai = Number(String(a).split('-')[0]);
-      const an = Number(String(a).split('-')[1]);
-      const bi = Number(String(b).split('-')[0]);
-      const bn = Number(String(b).split('-')[1]);
-      if (ai !== bi) return;
-
-      const s = draft.steps[ai];
-      if (!s) return;
-      const list = s.checklist || (s.checklist = []);
-      const moved = list.splice(an, 1)[0];
-      if (moved == null) return;
-      list.splice(bn, 0, moved);
-    });
-
     host.querySelectorAll('[data-drop-step]').forEach((b) => b.addEventListener('click', () => {
       collectDraft();
       draft.steps.splice(Number(b.dataset.dropStep), 1);
@@ -1070,7 +1070,6 @@
       // 已有该类型就再追加一条，没有就先建板块（板块按类型聚合渲染，两条会连在一起）
       if (kind === 'fields') s.fields = (s.fields || []).concat([{ label: '', unit: '', type: 'text' }]);
       if (kind === 'notice') s.noticeRows = (s.noticeRows || noticeRowsOf(s)).concat(['']);
-      if (kind === 'checklist') s.checklist = (s.checklist || []).concat(['']);
       if (kind === 'pyro') {
         s.pyro_hidden = false;                               // 之前被 × 移除过，这里重新放出来
         if (!s.pyro_seq) s.pyro_seq = 'C30-T60-C30-T184-C950-T60-C950--121';
@@ -1088,7 +1087,6 @@
 
       if (kind === 'fields') s.fields = [];
       if (kind === 'notice') s.noticeRows = [];
-      if (kind === 'checklist') s.checklist = [];
       if (kind === 'pyro') { s.pyro_seq = ''; s.pyro_hidden = true; }   // 标题含「热解」时别自动又冒出来
       renderDraft();
     }));
@@ -1118,15 +1116,6 @@
         if (st) st._addOpen = d.open;
       });
     });
-
-    // 已完成勾选：删除一条（添加走底部的「＋ 添加板块」）
-    host.querySelectorAll('[data-drop-check]').forEach((b) => b.addEventListener('click', () => {
-      collectDraft();
-      const parts = String(b.dataset.dropCheck).split('-');
-      const s = draft.steps[Number(parts[0])];
-      (s.checklist || (s.checklist = [])).splice(Number(parts[1]), 1);
-      renderDraft();
-    }));
 
     $('draft-add-step').addEventListener('click', () => {
       collectDraft();
@@ -1243,7 +1232,7 @@
         pyro_seq: s.pyro_seq || '',
         fields: (s.fields || []).filter((f) => String((f && f.label) || '').trim()),
         duration_hint: s.duration_hint || '',
-        checklist: (s.checklist || []).map((x) => String(x || '').trim()).filter(Boolean),
+        checklist: [],   // 勾选已并入字段（type='check'），旧列保留但不再写内容
       }));
       const { error: stepErr } = await client.from(STEP).insert(rows);
       if (stepErr) throw stepErr;
@@ -1363,11 +1352,13 @@
         }
 
         // 已存在的步骤：值以字段名为键，字段改名/新增时按含义搬家，搬不走的旧值原样保留。
-        // 勾选条目同名保留原勾选状态，新条目默认未勾选。
+        // 旧方案把「勾选」存在 checks 里，现在勾选是字段（type='check'）——
+        // 这里把已勾过的状态搬成字段值 '✓'，用户之前的进度不会丢。
         const oldChecks = rs.checks || {};
-        const nextChecks = Object.fromEntries((ps.checklist || []).map((c) => [String(c), !!oldChecks[String(c)]]));
+        const seed = {};
+        Object.keys(oldChecks).forEach((k) => { if (oldChecks[k]) seed[k] = '✓'; });
         const oldFields = rs.fields || [];
-        const values = migrateStepValues(oldFields, newFields, rs.values, null);
+        const values = migrateStepValues(oldFields, newFields, Object.assign({}, seed, rs.values), null);
         const next = {
           title: ps.title || rs.title,
           instruction: ps.instruction || '',
@@ -1375,11 +1366,11 @@
           pyro_seq: ps.pyro_seq || '',
           fields: newFields,
           values: values,
-          checks: nextChecks,
+          checks: {},        // 勾选状态已迁移进字段值
         };
 
         const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values, oldChecks]);
-        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values, nextChecks]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values, next.checks]);
         if (before === after) continue;    // 没有实质变化就不写库
 
         let { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
@@ -1442,8 +1433,8 @@
         notice: s.notice || '',     // 少了这一行，编辑保存后注意事项会被清空
         noticeRows: noticeRowsOf(s),  // 编辑器用的行数组（保留空白行）
         pyro_seq: s.pyro_seq || '',
-        checklist: (s.checklist || []).slice(),
-        fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
+        checklist: [],   // 「已完成勾选」已并入数据字段：把旧条目转成 check 类型字段
+        fields: withChecklistFields((s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })), s.checklist),
       })),
     };
     renderDraft();
