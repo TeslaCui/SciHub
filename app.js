@@ -663,7 +663,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 async function checkVersion() {
   const label = $('app-version');

@@ -1169,6 +1169,64 @@
     }
   }
 
+  /* 非破坏性替换方案步骤。
+     旧写法是「先把旧行全 delete、再 insert 新行」：插入一旦失败（或被刷新页面 / 断网 /
+     登录过期打断），方案就只剩 0 个步骤，而方案上的更新日志已经先写了一条「已保存」，
+     表面上毫无异常 —— 2026-09-18 那次方案步骤全丢就是这个原因（见 README）。
+     现在分三步，任何一步失败都不会动到原有步骤：
+       ① 新行先用「偏移位号」插入，避开 plan_steps 的 unique(plan_id, position)，旧行原样不动；
+       ② 插入成功后，再按 id 删掉旧行；
+       ③ 旧行删完，把新行的位号归位成 0..n-1（顺序不变）。
+     ② 失败 → 撤掉刚插入的那批新行，退回原来的版本（宁可回退，也不留空方案或两份）。 */
+  async function replacePlanSteps(planId, rows) {
+    if (!rows.length) throw new Error('没有可写入的步骤');
+
+    const { data: oldRows, error: oldErr } = await client
+      .from(STEP).select('id, position').eq('plan_id', planId);
+    if (oldErr) throw oldErr;
+
+    const oldIds = (oldRows || []).map((r) => r.id);
+    // 偏移基数比任何旧位号都大 —— 新行绝不会撞上还没删掉的旧行
+    const oldMax = (oldRows || []).reduce((m, r) => Math.max(m, Number(r.position) || 0), -1);
+    const base = oldMax + rows.length + 1;
+
+    const { data: inserted, error: insErr } = await client
+      .from(STEP)
+      .insert(rows.map((r, i) => Object.assign({}, r, { position: base + i })))
+      .select('id, position');
+    if (insErr) throw insErr;   // 旧行一步都没动，方案没丢
+
+    const fresh = (inserted || []).slice().sort((a, b) => a.position - b.position);
+
+    // 没拿到写入回执时绝不能往下走（否则删了旧行、新行又认不出来 = 空方案）。
+    // 这里用位号范围把刚插入的偏移行清掉，保持原样。
+    if (!fresh.length) {
+      const { error: undoErr } = await client.from(STEP).delete().eq('plan_id', planId).gte('position', base);
+      if (undoErr) console.error('[SciHub] 清理未确认的步骤失败，请打开方案确认步骤：', undoErr);
+      throw new Error('写入步骤后没有拿到回执，已恢复原样');
+    }
+
+    if (oldIds.length) {
+      const { error: delErr } = await client.from(STEP).delete().in('id', oldIds);
+      if (delErr) {
+        // 旧行没删掉 → 把这批新行撤掉，恢复成原来那一版
+        const { error: undoErr } = await client.from(STEP).delete().in('id', fresh.map((r) => r.id));
+        if (undoErr) console.error('[SciHub] 撤销新步骤也失败了，请打开方案确认步骤：', undoErr);
+        throw delErr;
+      }
+    }
+
+    // 归位：旧行已删，0..n-1 空出来了，按原顺序写回
+    for (let i = 0; i < fresh.length; i++) {
+      if (fresh[i].position === i) continue;
+      const { error: posErr } = await client.from(STEP).update({ position: i }).eq('id', fresh[i].id);
+      if (posErr) {
+        console.warn('[SciHub] 步骤位号归位失败（步骤内容都在，只是显示序号可能不对）：', posErr);
+        break;
+      }
+    }
+  }
+
   async function saveDraft() {
     collectDraft();
     if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
@@ -1196,21 +1254,43 @@
     btn.disabled = true;
     try {
       let planId = draft.id;
+      let metaWarn = '';   // 步骤写成功、但方案那一行（标题/更新日志）没写成功时的提示
+
+      // 落库前清理空白行：注意事项拼回「；」分隔（noticeText 去掉空行）、
+      // 字段要求有名字、勾选条目要求非空 —— 空行不写进数据库。
+      // 标题兜底成「步骤 N」只是保险（plan_steps.title 允许空串），
+      // 真正会因为空标题报错的是 experiment_plans.title。
+      const buildRows = (pid) => draft.steps.map((s, i) => ({
+        user_id: state.user.id,
+        plan_id: pid,
+        position: i,
+        title: String(s.title || '').trim() || ('步骤 ' + (i + 1)),
+        instruction: String(s.instruction || ''),
+        notice: noticeText(s.noticeRows && s.noticeRows.length ? s.noticeRows : noticeRowsOf(s)),
+        pyro_seq: s.pyro_seq || '',
+        fields: (s.fields || []).filter((f) => String((f && f.label) || '').trim()),
+        duration_hint: s.duration_hint || '',
+        checklist: [],   // 勾选已并入字段（type='check'），旧列保留但不再写内容
+      }));
 
       if (planId) {
-        // 保存后内容就是「当前解析规则 + 手工改动」，因此标记为当前版本
+        // 先写步骤（非破坏性：失败也不会动到旧行），写成功了才记「更新日志」。
+        // 顺序反过来就会出现「日志写着已保存、步骤却是空的」这种假象 —— 09-18 那次就是这样。
+        await replacePlanSteps(planId, buildRows(planId));
+
         const versionLog = (draft.versionLog || []).concat([draft.versionEntry || {
           at: new Date().toISOString(),
           type: '编辑',
           source: draft.source || '',
           summary: '手工编辑保存',
         }]);
-        const { error } = await client.from(PLAN)
+        const { error: metaErr } = await client.from(PLAN)
           .update({ title: title, parse_version: PARSE_VERSION, version_log: versionLog })
           .eq('id', planId);
-        if (error) throw error;
-        const { error: delErr } = await client.from(STEP).delete().eq('plan_id', planId);
-        if (delErr) throw delErr;
+        if (metaErr) {
+          console.warn('[SciHub] 步骤已保存，但方案信息/更新日志没写成功：', metaErr);
+          metaWarn = '（步骤已保存，只是方案的标题/更新日志没写成功：' + errorText(metaErr) + '）';
+        }
       } else {
         const { data: plan, error } = await client.from(PLAN).insert({
           title: title, source: draft.source || '', user_id: state.user.id,
@@ -1218,28 +1298,18 @@
         }).select().single();
         if (error) throw error;
         planId = plan.id;
+        const { error: stepErr } = await client.from(STEP).insert(buildRows(planId));
+        if (stepErr) {
+          // 新方案的步骤没写进去 → 把刚建的空方案删掉，别在列表里留一个「共 0 个步骤」的壳
+          const { error: undoErr } = await client.from(PLAN).delete().eq('id', planId);
+          if (undoErr) console.warn('[SciHub] 清理空方案失败，列表里会多一个 0 步方案：', undoErr);
+          throw stepErr;
+        }
       }
 
-      // 落库前清理空白行：注意事项拼回「；」分隔（noticeText 去掉空行）、
-      // 字段要求有名字、勾选条目要求非空 —— 空行不写进数据库。
-      const rows = draft.steps.map((s, i) => ({
-        user_id: state.user.id,
-        plan_id: planId,
-        position: i,
-        title: s.title || ('步骤 ' + (i + 1)),
-        instruction: s.instruction || '',
-        notice: noticeText(s.noticeRows && s.noticeRows.length ? s.noticeRows : noticeRowsOf(s)),
-        pyro_seq: s.pyro_seq || '',
-        fields: (s.fields || []).filter((f) => String((f && f.label) || '').trim()),
-        duration_hint: s.duration_hint || '',
-        checklist: [],   // 勾选已并入字段（type='check'），旧列保留但不再写内容
-      }));
-      const { error: stepErr } = await client.from(STEP).insert(rows);
-      if (stepErr) throw stepErr;
-
       draft = null;
-      const doneMsg = wasEdit ? '方案已更新。' : '方案已保存。';
-      setStatus(doneMsg, 'ok');
+      const doneMsg = (wasEdit ? '方案已更新。' : '方案已保存。') + metaWarn;
+      setStatus(doneMsg, metaWarn ? 'warn' : 'ok');
 
       // 方案改完后，把最新结构同步给正在做这个方案的实验：
       // 改过的更新、新增的补上、方案里删掉的也从实验里删掉
@@ -1249,7 +1319,7 @@
         if (r.updated) bits.push('更新 ' + r.updated + ' 步');
         if (r.added) bits.push('补上 ' + r.added + ' 步');
         if (r.removed) bits.push('删除 ' + r.removed + ' 步');
-        if (bits.length) setStatus(doneMsg + '进行中的实验已同步：' + bits.join('、') + '。', 'ok');
+        if (bits.length) setStatus(doneMsg + '进行中的实验已同步：' + bits.join('、') + '。', metaWarn ? 'warn' : 'ok');
 
         // 同步失败的实验逐条报出原因，别让失败被"成功提示"盖过去
         const fails = r.failed || [];
@@ -1266,7 +1336,8 @@
       route('plans');
     } catch (err) {
       console.error('[SciHub] 保存方案失败：', err);
-      setStatus('保存失败，请稍后重试。', 'error');
+      // 显示真实原因（否则只能猜），并明确说明旧步骤没被清空 —— 这是这版保存路径的保证
+      setStatus('保存失败：' + errorText(err) + ' —— 方案原有步骤没有被清空，可以再试一次。', 'error');
     } finally {
       btn.disabled = false;
     }
@@ -1441,6 +1512,74 @@
     showView('plan');
   }
 
+  /* 抢救：方案步骤被清空后，从「用这个方案开过的实验」里把步骤快照搬回编辑器。
+     实验的 run_steps 是起跑时的快照（之后改方案也会同步更新），标题 / 说明 / 字段 /
+     注意事项 / 热解程序 / 时长都在，所以能照着重建一份。
+     只把内容填进编辑器、不直接写库 —— 你核对无误后自己点「保存方案」，
+     走的是非破坏性保存，不会再出现「一保存就清空」。 */
+  async function restorePlanFromRun(planId) {
+    setStatus('正在找这个方案的实验快照…');
+    try {
+      const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
+      if (!plan) { setStatus('方案不存在。', 'error'); return; }
+
+      const { data: runs } = await client.from(RUN)
+        .select('id, title, started_at').eq('plan_id', planId)
+        .order('started_at', { ascending: false });
+      if (!runs || !runs.length) {
+        setStatus('这个方案还没有开过实验，没有可用的快照 —— 请用「上传新版本」重新导入原来的 docx。', 'warn');
+        return;
+      }
+
+      // 取步骤最多的那个实验：同一方案做过多次时它最完整
+      let best = null;
+      for (const r of runs) {
+        const { count } = await client.from(RUN_STEP)
+          .select('id', { count: 'exact', head: true }).eq('run_id', r.id);
+        const n = count || 0;
+        if (!best || n > best.count) best = { run: r, count: n };
+      }
+      if (!best.count) {
+        setStatus('这个方案名下的实验里也没有步骤快照，无法恢复 —— 请用「上传新版本」重新导入原来的 docx。', 'warn');
+        return;
+      }
+
+      const { data: steps } = await client.from(RUN_STEP)
+        .select('*').eq('run_id', best.run.id).order('position');
+      if (!steps || !steps.length) { setStatus('没读到实验快照里的步骤。', 'warn'); return; }
+
+      draft = {
+        id: plan.id,
+        title: plan.title,
+        source: plan.source || '',
+        versionLog: (plan.version_log || []).slice(),
+        versionEntry: {
+          at: new Date().toISOString(),
+          type: '恢复',
+          source: best.run.title || '',
+          summary: '从实验快照恢复 ' + steps.length + ' 个步骤',
+        },
+        steps: steps.map((s) => ({
+          title: s.title || '',
+          instruction: s.instruction || '',
+          duration_hint: s.duration_hint || '',
+          notice: s.notice || '',
+          noticeRows: noticeRowsOf(s),
+          pyro_seq: s.pyro_seq || '',
+          checklist: [],   // 勾选已是字段（type='check'），run_steps 的勾选状态不搬回方案
+          fields: (s.fields || []).map((f) => ({ label: f.label, unit: f.unit || '', type: f.type || '' })),
+        })),
+      };
+      renderDraft();
+      showView('plan');
+      setStatus('已从实验「' + (best.run.title || '未命名实验') + '」搬回 ' + steps.length
+        + ' 个步骤（步骤内容，不含当时填的数据）。请核对后点「保存方案」。', 'ok');
+    } catch (err) {
+      console.error('[SciHub] 从实验快照恢复方案失败：', err);
+      setStatus('恢复失败：' + errorText(err), 'error');
+    }
+  }
+
   /* ══ 方案查看 / 编辑 ════════════════════════════════════ */
 
   async function renderEditor(planId) {
@@ -1472,12 +1611,22 @@
     host.innerHTML = [
       '<div class="section-title">' + esc(plan.title) + '</div>',
       '  <p class="hint small" style="margin-bottom:12px">' + (plan.source ? '来源：' + esc(plan.source) + ' · ' : '') + '共 ' + (steps || []).length + ' 个步骤</p>',
+
+      // 步骤被清空时（v1.0.1 及更早的保存会「先删后写」，写入失败就清空）给一条明路
+      (steps || []).length ? '' : [
+        '<div class="card" style="margin-bottom:14px;border-left:3px solid #d97706">',
+        '  <div class="sub-head"><span>⚠ 这个方案现在有 0 个步骤</span></div>',
+        '  <p class="hint small">v1.0.1 及更早版本的保存是「先把旧步骤删掉、再写新步骤」，写入失败或被刷新打断就会清空步骤，而更新日志仍会记一条「已保存」。现已改成先写新步骤、成功后再删旧步骤。</p>',
+        '  <p class="hint small">恢复：这个方案开过实验 → 点「从实验快照恢复步骤」核对后保存；没开过实验 → 用「上传新版本」重新导入原来的 docx。</p>',
+        '</div>',
+      ].join('\n'),
       versionLogHtml,
 
       // 操作按钮放在标题下方（原来在页面最底部，要滚到底才点得到）
       '<div class="run-actions" style="margin-top:0;margin-bottom:16px;flex-wrap:wrap">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
+      (steps || []).length ? '' : '  <button type="button" class="fresh-btn" id="plan-restore" title="从用这个方案开过的实验里，把步骤快照搬回编辑器">从实验快照恢复步骤</button>',
       '  <button type="button" class="ghost" id="plan-upload-ver">上传新版本</button>',
       '  <input type="file" id="ver-input" accept=".docx" hidden>',
       canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
@@ -1504,6 +1653,7 @@
     $('plan-back').addEventListener('click', () => route('plans'));
     $('plan-start').addEventListener('click', () => startRun(planId));
     $('plan-edit').addEventListener('click', () => editPlan(planId));
+    if ($('plan-restore')) $('plan-restore').addEventListener('click', () => restorePlanFromRun(planId));
 
     // 「上传新版本」：选一份新 .docx → AI 解析（失败回退规则）→ 打开「核对导入结果」
     // 界面让你确认；保存时会把变化同步到进行中的实验并迁移数据（见 saveDraft）。
