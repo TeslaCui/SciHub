@@ -53,10 +53,11 @@
   }
 
   function stepSignature(step) {
-    const normalize = (value) => String(value || '').replace(/\s+/g, '').toLowerCase();
+    const normalize = (value) => String(value || '').replace(/\s+/g, '');
     return JSON.stringify([normalize(step.title), normalize(step.instruction), normalize(step.notice),
       normalize(step.pyro_seq), normalize(step.duration_hint),
-      (step.fields || []).map((field) => [normalize(field.label), normalize(field.unit), field.type || 'text'])]);
+      (step.fields || []).map((field) => [normalize(field.label), normalize(field.unit), field.type || 'text']),
+      step.checklist || []]);
   }
 
   function groupsOf(runs, stepMap) {

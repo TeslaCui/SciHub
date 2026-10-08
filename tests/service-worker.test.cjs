@@ -7,7 +7,7 @@ function worker(fetch) {
   vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../sw.js'), 'utf8'), {
     Request, Response, URL, fetch,
     self: { location: { origin: 'https://example.test' }, skipWaiting() {}, clients: { claim() {} }, addEventListener: (name, fn) => { handlers[name] = fn; } },
-    caches: { keys: async () => ['scihub-research-v0.9.9', 'other-app-v1', 'scihub-research-v1.0.3'], delete: async (key) => removed.push(key),
+    caches: { keys: async () => ['scihub-research-v0.9.9', 'other-app-v1', 'scihub-research-v' + JSON.parse(fs.readFileSync(require('node:path').join(__dirname, '../version.json'), 'utf8')).version], delete: async (key) => removed.push(key),
       open: async () => ({ put: async (...args) => writes.push(args), addAll: async () => {} }),
       match: async (request) => request === './index.html' ? new Response('<html>cached</html>') : undefined },
   });

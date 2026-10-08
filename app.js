@@ -669,7 +669,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.3';
+const APP_VERSION = '1.0.4';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -861,7 +861,7 @@ async function renderHome() {
       .lt('started_at', monthEnd.toISOString())
       .or('finished_at.is.null,finished_at.gte.' + monthStart.toISOString())
       .order('started_at', { ascending: true });
-    monthRuns = data || [];
+    monthRuns = window.Merges ? window.Merges.decorate(data || []) : (data || []);
   } catch (error) {
     console.warn('[SciHub] 实验日历数据读取失败：', error);
   }
@@ -925,7 +925,7 @@ async function renderHome() {
 
   const byDay = {};
   monthRuns.forEach((r) => {
-    const end = r.finished_at ? new Date(r.finished_at) : new Date();
+    const end = r._mergedInto ? new Date(r._merge.created_at) : r.finished_at ? new Date(r.finished_at) : new Date();
     const mins = Math.max(0, Math.round((end - new Date(r.started_at)) / 60000));
     const k = dayKey(r.started_at);
     if (!byDay[k]) byDay[k] = { runs: [], minutes: 0 };
@@ -946,7 +946,7 @@ async function renderHome() {
       if (!activityByDay[k]) activityByDay[k] = [];
       activityByDay[k].push({
         runTitle: (run && run.title) || ('实验 #' + runId),
-        pos: st.position + 1,
+        pos: window.Merges ? window.Merges.number(run, st.position) : st.position + 1,
         title: st.title || '',
       });
     });
@@ -987,11 +987,11 @@ async function renderHome() {
         + info.runs.map((r) => {
           const all = stepMap[r.id] || [];
           const steps = all.slice(0, 8)
-            .map((x) => '<div class="cal-tip-step">' + (x.position + 1) + '. ' + esc(x.title || '')
+            .map((x) => '<div class="cal-tip-step">' + (window.Merges ? window.Merges.number(r, x.position) : x.position + 1) + '. ' + esc(x.title || '')
               + (stepTouchedAny(x) ? '<i>✓</i>' : '') + '</div>')
             .join('');
           return '<div class="cal-tip-run"><b>' + esc(r.title) + '</b>'
-            + '<em>' + (r.finished_at ? '已完成' : '进行中') + ' · ' + Math.round(r.minutes) + ' 分钟</em>'
+            + '<em>' + (r._mergedInto ? '已汇入共同阶段' : r.finished_at ? '已完成' : '进行中') + ' · ' + Math.round(r.minutes) + ' 分钟</em>'
             + (steps ? '<div class="cal-tip-steps">' + steps + (all.length > 8 ? '<div class="cal-tip-step">…</div>' : '') + '</div>' : '')
             + '</div>';
         }).join('')
@@ -1266,8 +1266,8 @@ async function renderHome() {
       // 待办文案统一用本地格式：无时间要求时一律「已完成第 X 步…，等待进行第 Y 步…」；
       // AI（todo-plan）只保留作后台参考，不再覆盖这句文案，避免出现和 v5 不一致的写法。
       aiTxt: (lastDoneStep && nextOfDone
-        ? '已完成第 ' + (lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
-          + '，等待进行第 ' + (nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
+        ? '已完成第 ' + (window.Merges ? window.Merges.number(r, lastDoneStep.position) : lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
+          + '，等待进行第 ' + (window.Merges ? window.Merges.number(r, nextOfDone.position) : nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
         : (isNext ? '等待下一步：' + ((cur && cur.title) || '') : '')),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
@@ -1317,7 +1317,7 @@ async function renderHome() {
             ? (multi ? t.group.runs.map((x) => x.title).join('、') + ' 合并' : t.run.title)
             : t.title;
           const sub = isRun
-            ? '第 ' + (((t.step && t.step.position) != null ? t.step.position : 0) + 1) + ' 步'
+            ? '第 ' + (window.Merges ? window.Merges.number(t.run, t.step ? t.step.position : 0) : (t.step ? t.step.position : 0) + 1) + ' 步'
               + (t.step && t.step.title ? ' · ' + esc(t.step.title) : '')
               + (t.dur ? ' · ' + esc(t.dur) : '')
             : (t.due ? '手动待办' : '手动待办 · 未设时间');
@@ -1376,6 +1376,9 @@ async function renderHome() {
     + '<circle class="ring-fg" cx="18" cy="18" r="15.9155" stroke-dasharray="' + Math.max(0, Math.min(100, pct)) + ', 100"/>'
     + '</svg>';
 
+  let completedMerges = [];
+  try { if (window.Merges) completedMerges = await window.Merges.completed(); }
+  catch (error) { console.warn('[SciHub] 读取已完成合并实验失败：', error); }
   if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
   host.innerHTML = [
     '<div class="home-top">' + calendar + todoCard + '</div>',
@@ -1414,8 +1417,10 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (window.Merges ? window.Merges.number(r, runProgressPos(r)) : runProgressPos(r) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
+
+            window.Merges ? window.Merges.card(r) : '',
 
             // 合并后只保留这一栏；子实验收在下拉里，提示直接挂在下拉标题上
             multi ? [
@@ -1458,16 +1463,20 @@ async function renderHome() {
             // 合并后的卡片多一个「取消关联」：点一下整组撤回成多个独立实验
             multi ? '    <button type="button" class="ghost" data-run-unlink="' + r.id + '" title="取消关联，拆回多个独立实验">取消关联</button>' : '',
             // 关联入口就在卡片上：选本实验的哪一步 + 对方实验的哪一步，再校验后续步骤是否一致
-            '    <button type="button" class="icon-btn" data-run-link="' + r.id + '" title="关联其它实验" aria-label="关联其它实验">' + ICON_LINK + '</button>',
+            !r._merge ? '    <button type="button" class="icon-btn" data-run-link="' + r.id + '" title="合并平行实验" aria-label="合并平行实验">' + ICON_LINK + '</button>' : '',
             '    <button type="button" class="icon-btn" data-run-export="' + r.id + '" title="导出为 Word 文档" aria-label="导出">' + ICON_DOC + '</button>',
             '    <button type="button" class="icon-btn" data-run-rename="' + r.id + '" data-name="' + esc(r.title) + '" title="重命名" aria-label="重命名">' + ICON_TAG + '</button>',
-            '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>',
+            !r._merge ? '    <button type="button" class="icon-btn del" data-run-del="' + r.id + '" title="删除这次实验" aria-label="删除这次实验">' + ICON_TRASH + '</button>' : '',
             '  </div>',
             '</article>',
           ].join('\n');
         }).join('\n')
       : '<div class="empty">当前没有进行中的实验。上轮没做完的实验会一直留在这里，点「继续」就能接着做。</div>',
 
+    completedMerges.length ? '<div class="section-title">最近完成的合并实验</div>' + completedMerges.map((item) =>
+      '<article class="home-card"><div class="hc-main"><b>' + esc(item.title) + '</b><div class="hc-meta">已完成 · 各支路与共同阶段均只读</div></div>'
+      + '<div class="hc-actions"><button type="button" class="ghost" data-run="' + item.id + '">查看流程与完整记录</button>'
+      + '<button type="button" class="ghost" data-run-export="' + item.id + '">导出 Word</button></div></article>').join('') : '',
     '<div class="section-title">开始新的实验</div>',
     (plans && plans.length)
       ? plans.map((p) => [
@@ -1500,6 +1509,7 @@ async function renderHome() {
       : '<div class="empty">还没有记录。</div>',
   ].join('\n');
 
+  if (window.Merges) window.Merges.bind(host);
   host.querySelectorAll('[data-run]').forEach((btn) => {
     btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
   });

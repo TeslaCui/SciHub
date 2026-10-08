@@ -1,6 +1,7 @@
 /* Local preview only. Fictional data; never contacts Supabase. */
 (function () {
-  const key = 'scihub-audit-fixtures-v1';
+  const parallelFixture = typeof document !== 'undefined' && /parallel=1/.test(document.currentScript && document.currentScript.src || '');
+  const key = parallelFixture ? 'scihub-parallel-fixtures-v1' : 'scihub-audit-fixtures-v1';
   const userId = '00000000-0000-0000-0000-000000000001';
   const stamp = () => new Date().toISOString();
   const load = () => JSON.parse(localStorage.getItem(key) || 'null');
@@ -11,6 +12,25 @@
     plan_steps: [0, 1].map((position) => ({ id: position + 1, user_id: userId, plan_id: 1, position, title: position ? '干燥' : '称量', instruction: position ? '80 ℃ 干燥 12 h' : '记录实际质量', fields: [{ label: position ? '结束时间' : '质量', unit: position ? '' : 'g', type: position ? 'datetime' : 'number' }], duration_hint: position ? '12 h' : '', notice: '', pyro_seq: '', checklist: [] })),
     experiment_runs: [], run_steps: [],
   } };
+  store.tables.experiment_merge_groups ||= [];
+  store.tables.experiment_merge_members ||= [];
+  for (const group of store.tables.experiment_merge_groups) {
+    const member = store.tables.experiment_merge_members.find((row) => row.group_id === group.id);
+    group.schema_snapshot ||= store.tables.run_steps.filter((step) => member && step.run_id === member.parent_run_id);
+  }
+  if (parallelFixture && !saved) {
+    store.session = { user: { id: userId, email: 'parallel@example.test' } };
+    store.tables.research_profiles = [{ user_id: userId, username: '平行实验测试', email: 'parallel@example.test' }];
+    store.tables.experiment_plans[0].title = '六步平行实验方案';
+    store.tables.plan_steps = Array.from({ length: 6 }, (_, position) => ({ id: position + 1, user_id: userId, plan_id: 1, position,
+      title: ['称量','溶解','反应','混合后洗涤','干燥','表征'][position], instruction: position === 4 ? '80 ℃ 干燥 12 h' : '记录实际操作',
+      fields: [{ label: '质量', unit: 'g', type: 'number' }], duration_hint: '', notice: '', pyro_seq: '', checklist: [] }));
+    store.tables.experiment_runs = ['平行实验 A','平行实验 B'].map((title,index) => ({ id: 100+index, title, user_id: userId, plan_id: 1,
+      status: 'running', current_step: 2, started_at: stamp(), created_at: stamp(), updated_at: stamp() }));
+    store.tables.run_steps = store.tables.experiment_runs.flatMap((run,index) => store.tables.plan_steps.map((step) => ({ ...step,
+      id: 1000+index*10+step.position, run_id: run.id, status: step.position<3 ? 'done' : 'pending',
+      values: step.position<3 ? { 质量: index ? '5' : '3' } : {}, images: [], note: '', updated_at: stamp() })));
+  }
   const persist = () => localStorage.setItem(key, JSON.stringify(store));
   const newId = (table) => Math.max(0, ...store.tables[table].map((row) => Number(row.id) || 0)) + 1;
   let revision = Date.now();
@@ -74,6 +94,32 @@
       updateUser: () => result(),
     },
     async rpc(name, args) {
+      if (name === 'research_review_merge') {
+        const runs = store.tables.experiment_runs.filter((row) => args.p_run_ids.includes(row.id));
+        const steps = Object.fromEntries(runs.map((row) => [row.id, store.tables.run_steps.filter((step) => step.run_id === row.id)]));
+        try {
+          window.Merges.reviewLocal(window.Merges.decorate(runs), steps, args.p_after_position);
+          return { data: { allowed: true, after_position: args.p_after_position, run_ids: args.p_run_ids,
+            versions: Object.fromEntries(runs.map((run) => [run.id, { updated_at: run.updated_at, steps: steps[run.id].map((step) => ({ id: step.id, updated_at: step.updated_at })) }])) }, error: null };
+        } catch (error) { return { error: { message: error.message } }; }
+      }
+      if (name === 'research_merge_runs') {
+        const checked = await client.rpc('research_review_merge', args);
+        if (checked.error) return checked;
+        if (JSON.stringify(checked.data.versions) !== JSON.stringify(args.p_expected_versions)) return { error: { message: '审核后数据已变化' } };
+        const first = store.tables.experiment_runs.find((row) => row.id === args.p_run_ids[0]);
+        const shared = { id: newId('experiment_runs'), user_id: userId, title: first.title + ' · 共同阶段', plan_id: null,
+          status: 'running', current_step: 0, started_at: timestamp(), updated_at: timestamp() };
+        store.tables.experiment_runs.push(shared);
+        const copies = store.tables.run_steps.filter((step) => step.run_id === first.id && step.position > args.p_after_position);
+        for (const step of copies) store.tables.run_steps.push({ ...step, id: newId('run_steps'), run_id: shared.id,
+          position: step.position-args.p_after_position-1, values: {}, status: 'pending', images: [], note: '', updated_at: timestamp() });
+        const group = { id: newId('experiment_merge_groups'), user_id: userId, result_run_id: shared.id, after_position: args.p_after_position,
+          schema_snapshot: store.tables.run_steps.filter((step) => step.run_id === first.id), note: args.p_note, created_at: timestamp() };
+        store.tables.experiment_merge_groups.push(group);
+        for (const id of args.p_run_ids) store.tables.experiment_merge_members.push({ user_id: userId, group_id: group.id, parent_run_id: id });
+        persist(); return { data: shared.id, error: null };
+      }
       if (name === 'research_check_signup') return { data: '', error: null };
       if (name === 'research_lookup_login_email') return { data: 'audit@example.test', error: null };
       if (name === 'research_save_plan') {

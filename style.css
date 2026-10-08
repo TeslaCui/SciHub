@@ -1034,3 +1034,29 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 /* 校验不通过时把「确认关联」置灰，避免误点 */
 .modal-card .actions .primary:disabled { opacity: .45; cursor: not-allowed; }
+/* Parallel branches converge into a single shared continuation. */
+.merge-flow { padding: 16px; margin: 16px 0; border: 1px solid #d7e5e1; border-radius: 14px; background: #f5faf8; }
+.merge-flow-scroll { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; padding-bottom: 5px; }
+.merge-flow-scroll:focus-visible { outline: 2px solid #0f766e; outline-offset: 3px; }
+.merge-flow-track { display: grid; grid-template-columns: minmax(160px,1fr) 92px minmax(160px,1fr); gap: 12px; align-items: center; }
+.merge-scroll-hint { display: none; }
+.merge-lanes { display: grid; gap: 10px; }
+.merge-lane { display: grid; gap: 6px; width: 100%; text-align: left; padding: 12px; border: 1px solid #cad9d4; border-radius: 10px; background: white; color: #16382f; overflow-wrap: anywhere; cursor: pointer; }
+.merge-lane.selected { border: 2px solid #0f766e; }
+.merge-lane span,.merge-lane em { font-size: 12px; font-style: normal; color: #51675f; }
+.merge-common { background: #e8f6ef; }
+.merge-nodes { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 4px 0; }
+.merge-node { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border: 1px solid #87b9a5; border-radius: 50%; background: #fff; color: #16382f; font-weight: 600; }
+.merge-nodes i { font-style: normal; }
+.merge-join { display: grid; gap: 4px; text-align: center; font-size: 12px; color: #0f766e; }
+.merge-join > span:first-child { font-size: 32px; }
+.merge-audit { font-size: 12px; color: #51675f; margin: 8px 0 0; overflow-wrap: anywhere; }
+.merge-choices { display: grid; gap: 8px; border: 1px solid #d7e5e1; border-radius: 8px; padding: 12px; margin: 12px 0; }
+.merge-choices label,.merge-confirm { display: flex; align-items: flex-start; gap: 8px; }
+.merge-choices input,.merge-confirm input { width: auto; margin: 3px 0; }
+.merge-review { padding: 12px; margin: 12px 0; border-radius: 8px; background: #eef4f1; line-height: 1.6; }
+@media (max-width: 600px) {
+  .merge-flow { padding: 12px; min-width: 0; }
+  .merge-flow-track { min-width: 650px; }
+  .merge-scroll-hint { display: block; font-size: 12px; color: #51675f; margin: 0 0 10px; }
+}

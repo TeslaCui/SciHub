@@ -1981,6 +1981,10 @@
     if (runError || stepsError) { host.innerHTML = '<div class="empty">实验加载失败，请稍后重试。</div>'; return; }
     if (!r) { host.innerHTML = '<div class="empty">实验记录不存在。</div>'; return; }
 
+    const mergeInfo = window.Merges ? await window.Merges.context(runId) : null;
+    if (!isCurrent()) return;
+    if (window.Merges) window.Merges.decorate([r]);
+    run.mergeInfo = mergeInfo;
     run.id = runId;
     run.data = r;
     run.steps = steps || [];
@@ -2056,16 +2060,18 @@
       }
     }
 
+    if (mergeInfo && mergeInfo.isParent) run.mergeCut = mergeInfo.group.after_position + 1;
+
     // 与方案对齐检查：方案后来增/删/改过步骤就会记下差异，界面顶部实时提示
     try {
-      const drift = await planDiff(r);
+      const drift = mergeInfo ? run.drift : await planDiff(r);
       if (!isCurrent()) return;
       run.drift = drift;
     } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
     if (!isCurrent()) return;
 
     subscribeRun(runId);          // 多端实时同步（本实验的填写内容）
-    subscribePlan(r.plan_id);     // 方案被改动时，立刻重新做一次对齐检查
+    subscribePlan(mergeInfo ? null : r.plan_id); // 合并后只使用已审核并锁定的快照
     drawRun();
     // 方案里删掉的字段、而实验里已经填过值 → 弹一次提醒（点过「知道了」就不再弹）
     maybeWarnRemovedFields();
@@ -2200,6 +2206,11 @@
 
   function drawRun() {
     const host = $('view-run');
+    const stepNumber = (position) => window.Merges ? window.Merges.number(run.data, position) : position + 1;
+    if (run.mergeInfo) {
+      const member = run.mergeInfo.runs.find((item) => item.id === run.data.id);
+      if (member) Object.assign(member, run.data);
+    }
 
     // 关联子实验：只看合并点之前的步骤（合并点之后是和大家一起做的，不该各看各的）
     const cut = run.mergeCut;
@@ -2209,7 +2220,7 @@
     const s = run.steps[run.pos];
     if (!s) { host.innerHTML = '<div class="empty">没有可执行的步骤。</div>'; return; }
 
-    const readOnly = run.data.status !== 'running';
+    const readOnly = (run.data.status !== 'running' || !!run.data._mergedInto);
     const done = run.steps.slice(0, total).filter((x) => x.status === 'done').length;
 
     // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤（只在可见范围内看）。
@@ -2241,7 +2252,7 @@
     host.innerHTML = [
       '<div class="run-head">',
       '  <div><b>' + esc(run.data.title) + '</b>',
-      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + ' · 已进行 ' + sinceText(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成（只读）' : '') + '</div>',
+      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + (run.data._mergedInto ? ' · 已合并（支路只读）' : ' · 已进行 ' + sinceText(run.data.started_at)) + (run.data.status === 'done' ? ' · 已完成（只读）' : '') + '</div>',
       '  </div>',
       '  <div class="hc-actions">',
       // 导出统一放在主页的「进行中的实验」卡片上，这里不再重复一个入口
@@ -2250,11 +2261,13 @@
       '  </div>',
       '</div>',
 
+      window.Merges ? window.Merges.diagram(run.mergeInfo, run.id) : '',
+
       // 进度条：绿色实心＝实验进行到的位置（按数据算）；空心圆环＝当前正在浏览的位置
       '<div class="progress">',
       '  <i style="width:' + reachedPct + '%"></i>',
-      '  <span class="prog-mark prog-reached" style="left:' + reachedPct + '%" title="已进行到第 ' + (reached + 1) + ' 步"></span>',
-      '  <span class="prog-mark prog-pos" style="left:' + posPct + '%" title="正在浏览第 ' + (run.pos + 1) + ' 步"></span>',
+      '  <span class="prog-mark prog-reached" style="left:' + reachedPct + '%" title="已进行到第 ' + stepNumber(reached) + ' 步"></span>',
+      '  <span class="prog-mark prog-pos" style="left:' + posPct + '%" title="正在浏览第 ' + stepNumber(run.pos) + ' 步"></span>',
       '</div>',
 
       // 步骤节点：点任意一个直接跳过去，只是浏览，不会改变实验进度
@@ -2267,12 +2280,12 @@
         if (i === run.pos) cls.push('cur');
         if (run.linkAt != null && i >= run.linkAt) cls.push('linked');   // 合并点之后：共同做的步骤，标黄
         return '<button type="button" class="' + cls.join(' ') + '" data-goto="' + i + '"'
-          + ' title="第 ' + (i + 1) + ' 步：' + esc(x.title)
-          + (run.linkAt != null && i >= run.linkAt ? '（合并后共同做）' : '') + '">' + (i + 1) + '</button>';
+          + ' title="第 ' + stepNumber(i) + ' 步：' + esc(x.title)
+          + (run.linkAt != null && i >= run.linkAt ? '（合并后共同做）' : '') + '">' + stepNumber(i) + '</button>';
       }).join(''),
       '</div>',
 
-      '<div class="hc-meta run-status">已进行到 <b>第 ' + (reached + 1) + ' 步</b> · 正在浏览 第 ' + (run.pos + 1) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
+      '<div class="hc-meta run-status">已进行到 <b>第 ' + stepNumber(reached) + ' 步</b> · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
 
@@ -2281,20 +2294,20 @@
       // 待办跟着显示错（v5 显示到第 9 步就是这么来的）。
       run.pos !== (run.data.current_step || 0)
         ? '<div class="run-status"><button type="button" class="ghost tiny" id="set-progress"'
-            + ' title="把「进行到这里」改成你现在浏览的这一步">记为我做到这里（第 ' + (run.pos + 1) + ' 步）</button></div>'
+            + ' title="把「进行到这里」改成你现在浏览的这一步">记为我做到这里（第 ' + stepNumber(run.pos) + ' 步）</button></div>'
         : '',
       // 关联子实验：说清楚为什么只看到这里
       cut != null
         ? [
             '<div class="merge-note">',
-            '  <b>⇄ 这是关联实验（合并点：第 ' + (cut + 1) + ' 步）</b>',
-            '  <span>第 ' + (cut + 1) + ' 步及之后是和关联的实验一起做的，所以这次实验只显示前 ' + total + ' 步；合并后的完整数据在主页那一栏查看 / 导出。</span>',
+            '  <b>⇄ 独立支路（共同阶段从第 ' + (cut + 1) + ' 步）</b>',
+            '  <span>第 ' + (cut + 1) + ' 步及之后只在共同阶段记录，这条支路显示前 ' + total + ' 步；合并后的完整数据在主页那一栏查看 / 导出。</span>',
             '</div>',
           ].join('\n')
         : '',
       // 实时同步状态：一致 → 一行淡字；不一致 → 提示条 + 逐条差异 + 「立即同步」
       d.same
-        ? '<div class="sync-ok">✓ 与方案一致</div>'
+        ? '<div class="sync-ok">' + (run.mergeInfo ? '✓ 合并时的步骤快照已锁定' : '✓ 与方案一致') + '</div>'
         : [
             '<div class="sync-diff">',
             '  <div class="sync-body">',
@@ -2314,7 +2327,7 @@
             '</div>',
           ].join('\n'),
       '<div class="run-step-card">',
-      '  <h2>第 ' + (run.pos + 1) + ' 步：' + esc(s.title) + '</h2>',
+      '  <h2>第 ' + stepNumber(run.pos) + ' 步：' + esc(s.title) + '</h2>',
       s.duration_hint ? '  <span class="dur">时长提示：' + highlight(s.duration_hint) + '</span>' : '',
       // 合并点之前的步骤：可以切换查看同一步在其它关联实验里的数据
       (run.linkAt != null && run.pos < run.linkAt && run.peers.length > 1
@@ -2331,7 +2344,7 @@
           ].join('\n')
         : ''),
       // 这一步是不是和其它实验一起做的？比如「v5.1 第 7 步酸洗」和 v5 一起酸洗
-      '  <div class="link-row">',
+      '  <div class="link-row"' + (run.mergeInfo ? ' hidden' : '') + '>',
       s.link_run_id
         ? [
             '<span class="link-chip">⇄ 已关联：<b>' + esc(run.linked[s.link_run_id] || ('实验 #' + s.link_run_id)) + '</b>'
@@ -2339,7 +2352,7 @@
             '<button type="button" class="ghost tiny" id="link-edit">改说明</button>',
             '<button type="button" class="ghost tiny" id="link-del">取消关联</button>',
           ].join('')
-        : '<button type="button" class="ghost tiny" id="link-add">＋ 关联其它实验</button>',
+        : '<button type="button" class="ghost tiny" id="link-add">＋ 合并平行实验</button>',
       '  </div>',
       s.notice ? [
         '  <div class="notice">',
@@ -2370,6 +2383,7 @@
       '</div>',
     ].join('\n');
 
+    if (window.Merges) window.Merges.bind(host);
     drawFields(s);
     drawChecks(s);
     drawPhotos(s);
@@ -2404,7 +2418,7 @@
           if (String(peer.note || '').trim()) rows.push('<div class="hc-meta">备注：' + esc(peer.note) + '</div>');
           rows.push('<div class="hc-meta">照片 ' + ((peer.images || []).length) + ' 张</div>');
           host.innerHTML = '<div class="peer-step"><b>' + esc((peerRun && peerRun.title) || ('实验 #' + peerId))
-            + ' · 第 ' + (run.pos + 1) + ' 步 ' + esc(peer.title || '') + '</b>'
+            + ' · 第 ' + stepNumber(run.pos) + ' 步 ' + esc(peer.title || '') + '</b>'
             + rows.join('') + '</div>';
         })
         .catch((err) => {
@@ -2488,7 +2502,7 @@
       }
       run.data.current_step = run.pos;
       run.data.updated_at = new Date().toISOString();
-      setStatus('已把「进行到这里」记为第 ' + (run.pos + 1) + ' 步。', 'ok');
+      setStatus('已把「进行到这里」记为第 ' + stepNumber(run.pos) + ' 步。', 'ok');
       drawRun();
     });
 
@@ -2975,7 +2989,7 @@
       }
 
       return [
-        '<figure class="photo" data-path="' + esc(img.path) + '" data-media="' + idx + '" draggable="' + (run.data.status === 'running') + '" title="照片 / 视频">',
+        '<figure class="photo" data-path="' + esc(img.path) + '" data-media="' + idx + '" draggable="' + (run.data.status === 'running' && !run.data._mergedInto) + '" title="照片 / 视频">',
         '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="' + (video ? '点击播放' : '点击放大查看') + '">',
         '    ' + inner,
         '  </button>',
@@ -3002,7 +3016,7 @@
       });
     });
 
-    if (run.data.status !== 'running') {
+    if ((run.data.status !== 'running' || !!run.data._mergedInto)) {
       host.querySelectorAll('input, .photo-drop, .photo-add').forEach((node) => { node.disabled = true; });
       return;
     }
@@ -3292,6 +3306,14 @@
      导出时用它把整组的记录写进同一份文档，保证导出内容和关联信息对得上。 */
   async function collectMergeInfo(runId) {
     if (!runId) return null;
+    const parallel = window.Merges ? await window.Merges.context(runId) : null;
+    if (parallel) {
+      const { data: steps, error } = await client.from(RUN_STEP).select('*').in('run_id', parallel.runs.map((member) => member.id)).order('position');
+      if (error) throw error;
+      const stepsById = {};
+      for (const step of steps || []) (stepsById[step.run_id] ||= []).push(step);
+      return { ...parallel, parallel: true, stepsById, links: parallel.parentIds.map((id) => ({ from: id, to: parallel.resultId, position: parallel.group.after_position + 1, note: parallel.group.note })) };
+    }
     const { data: linkedSteps, error: linksError } = await client.from(RUN_STEP)
       .select('run_id,position,link_run_id,link_note').not('link_run_id', 'is', null);
     if (linksError) throw linksError;
@@ -3336,23 +3358,23 @@
         for (const item of signed || []) if (item.signedUrl) urls[item.path] = item.signedUrl;
       }
       setStatus('正在生成 Word 文档…');
-      const paragraphs = [{ text: '实验记录' + (merge ? '（关联实验）' : '') + ' · ' + current.title, bold: true, size: 16, align: 'center' }];
+      const paragraphs = [{ text: '实验记录' + (merge ? (merge.parallel ? '（平行实验合并）' : '（旧关联实验）') : '') + ' · ' + current.title, bold: true, size: 16, align: 'center' }];
       if (merge) {
-        paragraphs.push({ text: '关联信息', bold: true, size: 13 });
+        paragraphs.push({ text: merge.parallel ? '平行支路与共同阶段' : '旧关联信息', bold: true, size: 13 });
         for (const link of merge.links) {
           const title = (memberId) => (members.find((member) => Number(member.id) === Number(memberId)) || {}).title || ('实验 #' + memberId);
           paragraphs.push({ text: title(link.from) + ' → ' + title(link.to) + ' · 第 ' + (link.position + 1) + ' 步' + (link.note ? ' · ' + link.note : ''), size: 10 });
         }
-        paragraphs.push({ text: '以下按各实验保存的快照分别列出，保留合并前后数据与附件。', size: 10 });
+        paragraphs.push({ text: merge.parallel ? '以下分别列出各支路合并前的数据，以及唯一的共同阶段；共同数据不会重复归到各支路。' : '以下按各实验保存的快照分别列出，保留合并前后数据与附件。', size: 10 });
       }
       let imageTotal = 0, missingImages = 0;
       for (const member of members) {
         paragraphs.push('', { text: member.title, bold: true, size: 13 });
-        paragraphs.push({ text: '开始：' + fmt(member.started_at) + (member.finished_at ? ' · 结束：' + fmt(member.finished_at) : '') + ' · ' + (member.status === 'done' ? '已完成' : '进行中'), size: 10 });
+        paragraphs.push({ text: '开始：' + fmt(member.started_at) + (member.finished_at ? ' · 结束：' + fmt(member.finished_at) : '') + ' · ' + (member._mergedInto ? '独立支路已合并（只读）' : member.status === 'done' ? '已完成' : '进行中'), size: 10 });
         const savedSteps = stepsById[member.id] || [];
-        const position = member.status === 'done' ? Infinity : Number(member.current_step) || 0;
+        const position = member._mergedInto ? member._merge.after_position : member.status === 'done' ? Infinity : Number(member.current_step) || 0;
         for (const step of savedSteps.filter((item) => item.position <= position)) {
-          paragraphs.push('', { text: '第 ' + (step.position + 1) + ' 步 · ' + step.title, bold: true, size: 12 });
+          paragraphs.push('', { text: '第 ' + (window.Merges ? window.Merges.number(member, step.position) : step.position + 1) + ' 步 · ' + step.title, bold: true, size: 12 });
           if (step.started_at || step.finished_at) paragraphs.push({ text: '步骤时间：' + fmt(step.started_at) + ' → ' + fmt(step.finished_at), size: 10 });
           if (step.instruction) paragraphs.push({ text: step.instruction, size: 10 });
           if (step.pyro_seq) paragraphs.push({ text: '热解程序：' + step.pyro_seq, size: 10 });
@@ -3506,7 +3528,7 @@
   });
 
   function scheduleSave(step) {
-    if (run.data && run.data.status !== 'running') return;
+    if (run.data && (run.data.status !== 'running' || !!run.data._mergedInto)) return;
     autosaveStatus(step, '编辑中…');
     saveQueue.schedule(step);
   }
@@ -3666,7 +3688,7 @@
 
   let advancingRun = false;
   async function nextStep() {
-    if (advancingRun || !run.data || run.data.status !== 'running') return;
+    if (advancingRun || !run.data || (run.data.status !== 'running' || !!run.data._mergedInto)) return;
     advancingRun = true;
     const button = $('run-next');
     if (button) button.disabled = true;
@@ -3715,7 +3737,7 @@
 
   let finishingRun = false;
   async function finishRun() {
-    if (finishingRun || !run.data || run.data.status !== 'running') return;
+    if (finishingRun || !run.data || (run.data.status !== 'running' || !!run.data._mergedInto)) return;
     if (!window.confirm('实验完成？会生成一份实验日志并保存到科研记录。')) return;
     finishingRun = true;
     const nextButton = $('run-next');
@@ -3728,7 +3750,7 @@
       if (!await saveStep(step) || !await flushSaves()) return;
       const ended = new Date().toISOString();
       const { error } = await client.rpc('research_finish_run', {
-        p_id: current.id, p_content: buildLog(current, run.steps, ended), p_date: SciHubSafety.localDate(),
+        p_id: current.id, p_content: window.Merges ? await window.Merges.completionLog(current, run.steps, ended, buildLog) : buildLog(current, run.steps, ended), p_date: SciHubSafety.localDate(),
       });
       if (error) throw error;
       current.status = 'done'; current.finished_at = ended;
@@ -3761,7 +3783,7 @@
     lines.push('');
 
     steps.forEach((s, i) => {
-      lines.push('【第 ' + (i + 1) + ' 步】' + s.title);
+      lines.push('【第 ' + (i + (r._mergeOffset || 0) + 1) + ' 步】' + s.title);
       if (s.started_at || s.finished_at) {
         lines.push('  时间：' + (s.started_at ? fmt(s.started_at) : '?') + ' → ' + (s.finished_at ? fmt(s.finished_at) : '?'));
       }
@@ -3780,9 +3802,13 @@
   /* ── 进行中的实验（主页用）────────────────────────────── */
 
   async function runningRuns() {
-    const { data } = await client.from(RUN).select('id,title,started_at,current_step,updated_at,plan_id')
+    if (window.Merges) await window.Merges.refresh();
+    const { data, error } = await client.from(RUN).select('*')
       .eq('status', 'running').order('updated_at', { ascending: false });
-    return data || [];
+    if (error) throw error;
+    const rows = window.Merges ? window.Merges.decorate(data || []) : (data || []);
+    rows.forEach((row) => { row._mergeParents = rows.filter((parent) => parent._mergedInto === row.id); });
+    return rows.filter((row) => !row._mergedInto);
   }
 
   /* 重命名一次实验（只改实验标题，不动方案） */
@@ -3804,6 +3830,7 @@
 
   /* 删除一次实验：连同它的照片一起清理（Storage 不随表级联删除） */
   async function removeRun(runId) {
+    if (window.Merges && await window.Merges.context(runId)) { setStatus('该实验属于合并链路，原始支路及共同阶段需保留，不能直接删除。', 'warn'); return; }
     if (!window.confirm('删除这次实验？它的所有填写数据与照片都会被永久删除，无法恢复。')) return;
 
     try {
@@ -3833,424 +3860,8 @@
        2. 挑对方实验 + 对方的哪一步
        3. 比较两边「从这一步往后」的步骤是否一致 —— 不一致就不让合并
      */
-  function tailKey(s) {
-    return String((s && s.title) || '')
-      .replace(/[\s　]+/g, '')
-      .replace(/[（(][^）)]*[）)]/g, '')      // 去掉括号里的补充说明，如「（3× 放大版）」
-      .replace(/[：:。，,、；;·]/g, '')
-      .toLowerCase();
-  }
-
-  // 从 fromA / fromB 开始逐条比后续步骤，返回第一处不同
-  function compareTail(a, b, fromA, fromB) {
-    const x = a.slice(fromA);
-    const y = b.slice(fromB);
-    const n = Math.min(x.length, y.length);
-    for (let i = 0; i < n; i++) {
-      if (SciHubSafety.stepSignature(x[i]) !== SciHubSafety.stepSignature(y[i])) {
-        return { same: false, at: i, x: x[i], y: y[i], nx: x.length, ny: y.length };
-      }
-    }
-    if (x.length !== y.length) {
-      return { same: false, at: n, x: x[n], y: y[n], nx: x.length, ny: y.length, tail: true };
-    }
-    return { same: true, nx: x.length, ny: y.length };
-  }
-
   async function linkRun(runId) {
-    const { data: mySteps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
-    const { data: me } = await client.from(RUN).select('id,title,status').eq('id', runId).maybeSingle();
-    if (!me || me.status !== 'running') { setStatus('只能关联进行中的实验。', 'warn'); return; }
-    const { data: others } = await client
-      .from(RUN).select('id,title,status').neq('id', runId).eq('status', 'running').order('started_at', { ascending: false });
-
-    if (!others || !others.length) {
-      setStatus('目前没有别的实验可以关联 —— 先开始第二个实验吧。', 'error');
-      return;
-    }
-
-    openModal('关联其它实验', [
-      '<p class="hint small">至少选两个实验，各自选「从哪一步开始合并」—— 这一步之后大家一起做。已选过的实验不会再出现在别的行里。</p>',
-
-      '<div class="lk-rows" id="lk-rows"></div>',
-      '<div class="lk-more">',
-      '  <button type="button" class="ghost tiny" id="lk-add-row" title="再加一个实验" aria-label="再加一个实验">＋</button>',
-      '  <span id="lk-more-tip">点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。</span>',
-      '</div>',
-
-      '<label>关联说明',
-      '  <textarea id="lk-note" rows="3" placeholder="如：混合 v5.1 和 v5 的热解后材料，然后进行酸洗"></textarea>',
-      '</label>',
-      '<div id="lk-check" class="lk-check"></div>',
-
-      // 已经建立的关联：可以逐条删（删一条只解除这一条，不动数据和进度）
-      '<div class="lk-added" id="lk-added"></div>',
-    ].join(''), [
-      { label: '取消', onClick: closeModal },
-      // 一个按钮两种身份：没通过检测时点它＝调 AI 检测；通过之后点它＝真的写库关联。
-      // （openModal 给按钮绑的 onClick 只绑一次，改文案不会换函数，所以这里用分发器。）
-      { label: '检测关联', primary: true, onClick: () => (verified ? writeLinks() : doCheckAll()) },
-    ]);
-
-    // ── 多行编辑器：一行＝一个实验 + 该实验「从哪一步开始合并」 ──
-    // 至少两行（关联至少要两个实验）；第 3 行起右上角有 ✕ 可以删掉整行。
-    // 已经选过的实验不会再出现在别的行里 —— 同一个实验只能用一次。
-    const stepsCache = {};         // runId -> 该实验的步骤
-    let rows = [];                 // [{ runId, stepIdx }]
-    let verified = false;
-    let verifiedKey = '';
-
-    const primaryBtn = () => document.querySelector('.modal-card .actions .primary');
-
-    const setPrimary = (label, disabled) => {
-      const btn = primaryBtn();
-      if (!btn) return;
-      btn.textContent = label;
-      btn.disabled = !!disabled;
-    };
-
-    // 可以选的实验：本次实验 + 其它全部实验
-    const allRuns = [{ id: Number(runId), title: (me && me.title) || '本次实验', status: 'running' }]
-      .concat((others || []).map((o) => ({ id: Number(o.id), title: o.title, status: o.status })));
-
-    const runTitle = (id) => {
-      const r = allRuns.find((x) => Number(x.id) === Number(id));
-      return (r && r.title) || ('实验 #' + id);
-    };
-
-    const loadSteps = async (id) => {
-      if (stepsCache[id]) return stepsCache[id];
-      const { data } = await client.from(RUN_STEP).select('*').eq('run_id', id).order('position');
-      stepsCache[id] = data || [];
-      return stepsCache[id];
-    };
-
-    const choiceKey = () => rows.map((r) => r.runId + ':' + r.stepIdx).join('|');
-
-    const tip = () => (rows.length < 2
-      ? '至少选两个实验。点下面的「＋」加一行。'
-      : '选好后点「检测关联」，会用 AI 比对各行「从所选步骤往后」的步骤是否一致。');
-
-    // 任何一个选择变了，上一次的检测结果就作废 —— 免得拿旧结论去写库
-    const invalidate = () => {
-      verified = false;
-      verifiedKey = '';
-      setPrimary('检测关联', false);
-      const box = $('lk-check');
-      if (box) { box.className = 'lk-check'; box.innerHTML = tip(); }
-    };
-
-    const renderRows = () => {
-      const host = $('lk-rows');
-      if (!host) return;
-
-      const used = rows.map((r) => Number(r.runId));
-      host.innerHTML = rows.map((r, i) => {
-        // 已经在本行选中的实验保留；别的行选过的实验就不再出现
-        const expOpts = allRuns
-          .filter((o) => Number(o.id) === Number(r.runId) || used.indexOf(Number(o.id)) === -1)
-          .map((o) => '<option value="' + o.id + '"'
-            + (Number(o.id) === Number(r.runId) ? ' selected' : '') + '>'
-            + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
-
-        const steps = stepsCache[r.runId] || [];
-        const stepOpts = steps.length
-          ? steps.map((s, k) => '<option value="' + k + '"' + (k === r.stepIdx ? ' selected' : '') + '>第 '
-              + (k + 1) + ' 步：' + esc(s.title) + '</option>').join('')
-          : '<option value="0">（这个实验还没有步骤）</option>';
-
-        return [
-          '<div class="lk-row">',
-          '  <span class="lk-row-no">实验' + (i + 1) + '</span>',
-          '  <select data-pick="exp" data-row="' + i + '" aria-label="实验' + (i + 1) + '">' + expOpts + '</select>',
-          '  <select data-pick="step" data-row="' + i + '" aria-label="实验' + (i + 1) + ' 从哪一步开始合并">' + stepOpts + '</select>',
-          // 关联至少要两个实验，所以前两行不给删
-          i >= 2
-            ? '  <button type="button" class="ghost tiny lk-del" data-del-row="' + i + '" title="删掉这一行" aria-label="删掉这一行">✕</button>'
-            : '  <span class="lk-row-pad"></span>',
-          '</div>',
-        ].join('');
-      }).join('');
-
-      host.querySelectorAll('[data-pick="exp"]').forEach((sel) => {
-        sel.addEventListener('change', async () => {
-          const i = Number(sel.dataset.row);
-          rows[i].runId = Number(sel.value);
-          rows[i].stepIdx = 0;
-          await loadSteps(rows[i].runId);
-          invalidate();
-          renderRows();          // 可选实验跟着变，整块重画
-        });
-      });
-
-      host.querySelectorAll('[data-pick="step"]').forEach((sel) => {
-        sel.addEventListener('change', () => {
-          rows[Number(sel.dataset.row)].stepIdx = Number(sel.value);
-          invalidate();
-        });
-      });
-
-      host.querySelectorAll('[data-del-row]').forEach((b) => {
-        b.addEventListener('click', () => {
-          rows.splice(Number(b.dataset.delRow), 1);
-          invalidate();
-          renderRows();
-        });
-      });
-
-      syncAddBtn();       // 删掉一行后可能空出一个实验，＋ 要跟着启用/置灰
-    };
-
-    // 没有可加的实验时，提示必须出现在弹窗里 —— 页面顶部的状态栏被弹窗盖住，
-    // 用户看不到，就会觉得「点了 ＋ 没反应」。
-    const freeRuns = () => {
-      const used = rows.map((r) => Number(r.runId));
-      return allRuns.filter((o) => used.indexOf(Number(o.id)) === -1);
-    };
-
-    const syncAddBtn = () => {
-      const btn = $('lk-add-row');
-      const tipEl = $('lk-more-tip');
-      if (!btn || !tipEl) return;
-
-      if (freeRuns().length) {
-        btn.disabled = false;
-        btn.title = '再加一个实验';
-        tipEl.className = '';
-        tipEl.textContent = '点「＋」再加一个实验；第 3 行起可以点行尾的 ✕ 删掉那一行。';
-      } else {
-        btn.disabled = true;      // 所有实验都用上了，再点也没有可加的
-        btn.title = '没有别的实验可以加了';
-        tipEl.className = 'tip-warn';
-        tipEl.textContent = '没有别的实验可以加了 —— 现在一共 ' + allRuns.length
-          + ' 个实验，都已经在每一行里了。想并进更多实验，先去新建一个实验，再回来加。';
-      }
-    };
-
-    const addRow = async () => {
-      const free = freeRuns();
-      if (!free.length) { syncAddBtn(); return; }
-      rows.push({ runId: Number(free[0].id), stepIdx: 0 });
-      await loadSteps(Number(free[0].id));
-      invalidate();
-      renderRows();
-    };
-
-    const addBtn = $('lk-add-row');
-    if (addBtn) addBtn.addEventListener('click', addRow);
-
-    // ── 「检测关联」：相邻两行逐对比对，全部通过才允许写库 ──
-    const doCheckAll = async () => {
-      const box = $('lk-check');
-      if (rows.length < 2) { setStatus('至少选两个实验才能关联。', 'warn'); return; }
-
-      for (let i = 0; i < rows.length; i++) {
-        const steps = await loadSteps(rows[i].runId);
-        if (!steps.length) {
-          setStatus('实验' + (i + 1) + '「' + runTitle(rows[i].runId) + '」还没有步骤，不能关联。', 'warn');
-          return;
-        }
-        if (rows[i].stepIdx > steps.length - 1) rows[i].stepIdx = steps.length - 1;
-      }
-
-      const positions = rows.map((row) => stepsCache[row.runId][row.stepIdx].position);
-      if (new Set(positions).size !== 1) {
-        box.className = 'lk-check bad';
-        box.textContent = '目前关联要求各实验的合并点步骤序号一致，请调整合并起点。';
-        return;
-      }
-      verified = false;
-      const checkingKey = choiceKey();
-      setPrimary('检测中…', true);
-      box.className = 'lk-check';
-      box.innerHTML = '正在逐对比对「从所选步骤往后」的步骤…';
-
-      const results = [];
-      for (let i = 0; i < rows.length - 1; i++) {
-        const A = stepsCache[rows[i].runId] || [];
-        const B = stepsCache[rows[i + 1].runId] || [];
-        const local = compareTail(A, B, rows[i].stepIdx, rows[i + 1].stepIdx);
-
-        let verdict = null;
-        try {
-          const { data, error } = await client.functions.invoke('check-link', {
-            body: {
-              mine: A.slice(rows[i].stepIdx).map((s) => ({ title: s.title, instruction: s.instruction, notice: s.notice, pyro_seq: s.pyro_seq, duration_hint: s.duration_hint, fields: s.fields })),
-              other: B.slice(rows[i + 1].stepIdx).map((s) => ({ title: s.title, instruction: s.instruction, notice: s.notice, pyro_seq: s.pyro_seq, duration_hint: s.duration_hint, fields: s.fields })),
-            },
-          });
-          if (!error && data && typeof data.same === 'boolean') verdict = data;
-        } catch (err) {
-          console.warn('[SciHub] check-link 调用失败，退回本地比对：', err);
-        }
-
-        results.push({ i: i, local: local, verdict: verdict, same: verdict ? verdict.same : local.same });
-      }
-
-      if (checkingKey !== choiceKey()) { invalidate(); return; }
-      const bad = results.filter((x) => !x.same);
-      if (bad.length) {
-        setPrimary('检测关联', false);
-        box.className = 'lk-check bad';
-        box.innerHTML = '<b>⚠ 检测未通过，不能关联合并</b>'
-          + bad.map((x) => '<span>· 实验' + (x.i + 1) + ' 与 实验' + (x.i + 2)
-              + '：' + (Number.isInteger(x.local.at) ? ('从所选步骤起第 ' + (x.local.at + 1) + ' 条不同') : '关键条件需要核对')
-              + '（剩余 ' + x.local.nx + ' 步 / ' + x.local.ny + ' 步）'
-              + (x.verdict && x.verdict.reason ? ' —— ' + esc(x.verdict.reason) : '')
-              + '</span>').join('')
-          + '<span>调整某一行的步骤、或换一个关联起点，再重新检测。</span>';
-        return;
-      }
-
-      verified = true;
-      verifiedKey = choiceKey();
-      setPrimary('确认关联', false);
-      box.className = 'lk-check ok';
-      box.innerHTML = '✓ 检测通过，可以关联合并。'
-        + '<span>' + results.map((x) => '实验' + (x.i + 1) + '↔实验' + (x.i + 2) + '：'
-            + (x.verdict ? 'AI 判定一致' : '本地比对一致')
-            + '（各 ' + x.local.nx + ' / ' + x.local.ny + ' 步）').join('；')
-        + '</span>';
-    };
-
-    // ── 「确认关联」：相邻两行依次链起来（实验1的这一步 → 实验2，实验2的这一步 → 实验3…）──
-    const writeLinks = async () => {
-      if (!verified || verifiedKey !== choiceKey()) {
-        invalidate();
-        setStatus('选择变过了，请重新点「检测关联」。', 'warn');
-        return;
-      }
-
-      const note = ($('lk-note').value || '').trim();
-      setPrimary('写入中…', true);
-      try {
-        for (let i = 0; i < rows.length - 1; i++) {
-          const steps = stepsCache[rows[i].runId] || [];
-          const st = steps[rows[i].stepIdx];
-          if (!st) throw new Error('实验' + (i + 1) + ' 没有可关联的步骤');
-
-          const { error } = await client.from(RUN_STEP)
-            .update({ link_run_id: rows[i + 1].runId, link_note: note || null })
-            .eq('id', st.id);
-          if (error) throw error;
-
-          st.link_run_id = rows[i + 1].runId;      // 本端缓存同步
-          st.link_note = note || null;
-        }
-      } catch (err) {
-        console.error('[SciHub] 关联写入失败：', err);
-        setPrimary('确认关联', false);
-        setStatus('关联失败：' + errorText(err), 'error');
-        return;
-      }
-
-      closeModal();
-      setStatus('已把 ' + rows.length + ' 个实验关联成一组，主页会合并成一条显示。', 'ok');
-      route('home');
-    };
-
-    // 打开时先给两行：实验1＝本次实验，实验2＝列表里的第一个其它实验
-    rows = [{ runId: Number(runId), stepIdx: 0 }];
-    await loadSteps(Number(runId));
-    const firstOther = (others || [])[0];
-    if (firstOther) {
-      rows.push({ runId: Number(firstOther.id), stepIdx: 0 });
-      await loadSteps(Number(firstOther.id));
-    }
-    renderRows();
-    const initCheck = $('lk-check');
-    if (initCheck) initCheck.innerHTML = tip();
-
-
-    // ── 已经建立的关联：列出来，逐条可删 ─────────────────────
-    // 一个实验可能关联了好几个（第 5 步→v6、第 7 步→v7…），加错了要能一条一条撤。
-    let myLinks = [];
-
-    const linkLabel = (id) => {
-      const o = (others || []).find((x) => Number(x.id) === Number(id));
-      return (o && o.title) || ('实验 #' + id);
-    };
-
-    const renderMyLinks = () => {
-      const host = $('lk-added');
-      if (!host) return;
-      if (!myLinks.length) { host.innerHTML = ''; return; }
-
-      host.innerHTML = [
-        '<div class="lk-added-head">已建立的关联（' + myLinks.length + ' 条）</div>',
-        myLinks.map((x) => [
-          '<div class="lk-added-row">',
-          '  <span class="lk-added-info">',
-          '    <b>第 ' + (x.position + 1) + ' 步</b>：' + esc(x.title || ''),
-          '    <em>→ ' + esc(linkLabel(x.link_run_id)) + '</em>',
-          (x.link_note ? '<i>' + esc(x.link_note) + '</i>' : ''),
-          '  </span>',
-          '  <button type="button" class="ghost tiny lk-del" data-unlink="' + x.id + '" title="删除这条关联" aria-label="删除这条关联">✕</button>',
-          '</div>',
-        ].join('')),
-      ].join('');
-
-      host.querySelectorAll('[data-unlink]').forEach((b) => {
-        b.addEventListener('click', () => unlinkOne(Number(b.dataset.unlink)));
-      });
-    };
-
-    // 删掉一条关联：只清这一步的 link_run_id / link_note ——
-    // 步骤本身、已填数据、进度都不动（和「取消关联」整组撤回不同，这里只撤一条）
-    const unlinkOne = async (stepId) => {
-      const st = myLinks.find((x) => x.id === stepId);
-      if (!st) return;
-
-      const ok = window.confirm(
-        '删除这条关联吗？\n\n'
-        + '第 ' + (st.position + 1) + ' 步「' + (st.title || '') + '」→「' + linkLabel(st.link_run_id) + '」\n\n'
-        + '只解除这一条关联：两边实验的步骤、已填数据和进度都不会动。'
-      );
-      if (!ok) return;
-
-      const { error } = await client.from(RUN_STEP)
-        .update({ link_run_id: null, link_note: null })
-        .eq('id', stepId);
-      if (error) {
-        console.error('[SciHub] 删除关联失败：', error);
-        setStatus('删除关联失败：' + errorText(error), 'error');
-        return;
-      }
-
-      // 本端缓存同步，免得「再加一条」时还拿着旧状态
-      const local = (mySteps || []).find((s) => s.id === stepId);
-      if (local) { local.link_run_id = null; local.link_note = null; }
-
-      setStatus('已删除第 ' + (st.position + 1) + ' 步的关联。', 'ok');
-      await loadMyLinks();
-    };
-
-    const loadMyLinks = async () => {
-      const { data, error } = await client.from(RUN_STEP)
-        .select('id,position,title,link_run_id,link_note')
-        .eq('run_id', runId)
-        .not('link_run_id', 'is', null)
-        .order('position');
-      if (error) {
-        console.warn('[SciHub] 读取已建立的关联失败：', error);
-        myLinks = [];
-      } else {
-        myLinks = data || [];
-      }
-
-      // 已关联的实验可能不在「可关联列表」里（比如已完成或被过滤），补查一下标题
-      const missing = [...new Set(myLinks.map((x) => x.link_run_id))]
-        .filter((id) => !(others || []).some((o) => Number(o.id) === Number(id)));
-      if (missing.length) {
-        const { data: extra } = await client.from(RUN).select('id,title').in('id', missing);
-        // others 是 const，只能 push 不能重新赋值；走到这里时它一定是非空数组
-        (extra || []).forEach((r) => others.push(r));
-      }
-
-      renderMyLinks();
-    };
-
-    await loadMyLinks();
+    if (window.Merges) await window.Merges.open(runId);
   }
 
   /* 取消关联：把这一组里所有实验之间的 link 全部清掉，
@@ -4260,6 +3871,7 @@
     try {
       const info = await collectMergeInfo(runId);
       if (!info) { setStatus('这次实验没有关联别的实验。', 'warn'); return; }
+      if (info.parallel) { setStatus('混合后的共同阶段不能直接拆分，原始支路记录已保留。', 'warn'); return; }
 
       const names = info.runs.map((x) => '· ' + x.title).join('\n');
       const ok = window.confirm(
@@ -4285,7 +3897,7 @@
     }
   }
 
-  window.Run = { flush: flushSaves, hasPending: saveQueue.hasPending, busy: () => advancingRun || finishingRun || savingDraft || syncingRun || startingRun, reset: () => { runRenderSequence++; unsubscribeRun(); unsubscribePlan(); run.id = null; run.data = null; run.steps = []; }, render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
+  window.Run = { flush: flushSaves, hasPending: saveQueue.hasPending, busy: () => advancingRun || finishingRun || savingDraft || syncingRun || startingRun || (window.Merges && window.Merges.busy()), reset: () => { runRenderSequence++; unsubscribeRun(); unsubscribePlan(); run.id = null; run.data = null; run.steps = []; }, render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));

@@ -6,14 +6,15 @@
  *
  * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
  */
-const CACHE = 'scihub-research-v1.0.3';
+const CACHE = 'scihub-research-v1.0.4';
 const ASSETS = [
   './index.html',
-  './style.css?v=1.0.3',
-  './data-safety.js?v=1.0.3',
-  './app.js?v=1.0.3',
-  './experiment.js?v=1.0.3',
-  './manifest.json?v=1.0.3',
+  './style.css?v=1.0.4',
+  './data-safety.js?v=1.0.4',
+  './app.js?v=1.0.4',
+  './experiment.js?v=1.0.4',
+  './merge.js?v=1.0.4',
+  './manifest.json?v=1.0.4',
 ];
 
 self.addEventListener('install', (event) => {

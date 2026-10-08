@@ -14,7 +14,7 @@ for (const file of ['index.html', 'sw.js']) {
   const source = read(file);
   const versions = [...source.matchAll(/\?v=([\d.]+)/g)].map((match) => match[1]);
   assert.ok(versions.length && versions.every((value) => value === version), file + ' 资源版本不一致');
-  assert.ok(source.includes('data-safety.js?v=' + version), file + ' 缺少保存规则资源');
+  for (const resource of ['data-safety.js', 'merge.js']) assert.ok(source.includes(resource + '?v=' + version), file + ' 缺少资源 ' + resource);
 }
 if (staged) {
   const files = git('diff', '--cached', '--name-only', '--diff-filter=ACMR').trim().split('\n').filter(Boolean);
@@ -27,7 +27,7 @@ if (staged) {
       assert.notEqual(payload.role, 'service_role', '禁止提交 service_role：' + file);
     }
   }
-  const frontend = files.some((file) => /^(app\.js|experiment\.js|data-safety\.js|style\.css|index\.html|sw\.js)$/.test(file));
+  const frontend = files.some((file) => /^(app\.js|experiment\.js|data-safety\.js|merge\.js|style\.css|index\.html|sw\.js)$/.test(file));
   if (frontend) {
     const previous = JSON.parse(git('show', 'HEAD:version.json')).version.split('.').map(Number);
     previous[2]++;
