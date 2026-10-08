@@ -57,6 +57,41 @@ test('oversized AI payloads are rejected before upstream execution', { skip: !pr
   assert.equal(proxy.calls.some((url) => url.includes('deepseek')), false);
 });
 
+const chinesePlan = (instruction, extra = {}) => ({ title: '虚构导入方案', steps: [{ title: '加入试剂', instruction,
+  notice: '', duration_hint: '', fields: [], ...extra }] });
+
+test('Chinese import rejects quantity loss, unit case changes, ranges and invented values', { skip: !process.env.TYPESCRIPT_MODULE }, async () => {
+  const source = '加入 120 mL 甲醇。浓度为 0.5 M。温度范围为 80-100 ℃。';
+  for (const instruction of ['加入 12 mL 甲醇。浓度为 0.5 M。温度范围为 80-100 ℃。',
+    '加入 120 mL 甲醇。浓度为 0.5 mM。温度范围为 80-100 ℃。',
+    '加入 120 mL 甲醇。浓度为 0.5 M。温度为 100 ℃。', source + '搅拌 2 h。']) {
+    const response = await loadProxy('parse-plan', chinesePlan(instruction)).request({ text: source });
+    assert.equal(response.status, 502);
+    assert.match((await response.json()).error, /数值及单位/);
+  }
+  assert.equal((await loadProxy('parse-plan', chinesePlan(source)).request({ text: source })).status, 200);
+});
+
+test('Chinese import retains exact programs and rejects prose in English or duplicate fields', { skip: !process.env.TYPESCRIPT_MODULE }, async () => {
+  const source = '设置 C30-T60-C30-T184-C950--121 程序。';
+  assert.equal((await loadProxy('parse-plan', chinesePlan('设置 C30-T60-C30-T184-C900--121 程序。')).request({ text: source })).status, 502);
+  assert.equal((await loadProxy('parse-plan', chinesePlan('Set the program.')).request({ text: source })).status, 502);
+  const fields = [{ label: '质量', unit: 'g' }, { label: '质量', unit: 'g' }];
+  assert.equal((await loadProxy('parse-plan', chinesePlan('记录实际质量。', { fields })).request({ text: '记录实际质量。' })).status, 502);
+  assert.equal((await loadProxy('parse-plan', chinesePlan(source)).request({ text: source })).status, 200);
+});
+
+test('long import text is rejected intact and vague waits do not acquire invented hours', { skip: !process.env.TYPESCRIPT_MODULE }, async () => {
+  const proxy = loadProxy('parse-plan');
+  assert.equal((await proxy.request({ text: '文'.repeat(60001) })).status, 413);
+  assert.equal(proxy.calls.some(url => url.includes('deepseek')), false);
+  const body = { mode: 'duration', steps: [{ title: '干燥', instruction: '干燥过夜。' }] };
+  assert.equal((await loadProxy('parse-plan', { durations: ['12 h'] }).request(body)).status, 502);
+  const response = await loadProxy('parse-plan', { durations: ['过夜（时长待确认）'] }).request(body);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).durations, ['过夜（时长待确认）']);
+});
+
 test('all Edge Functions pass TypeScript checking against the Deno surface', { skip: !process.env.TYPESCRIPT_MODULE }, () => {
   const ts = require(process.env.TYPESCRIPT_MODULE);
   const root = path.join(__dirname, '..');

@@ -108,6 +108,7 @@ p('todo-auto', 'home', 'Use experiment tasks and time reminders', '使用实验�
 ], ['SciHub updates the experiment task from the saved progress.', 'SciHub 根据已保存的进度更新实验待办。'], [
   ['Automatic tasks have no manual delete button.', '自动实验待办没有手动删除按钮。'],
   ['Time reminders are estimates from the plan and recorded times.', '计时提醒根据方案和记录时间估算。'],
+  ['A duration marked "待确认" does not produce an automatic end time.', '标为“待确认”的时长不生成自动结束时间。'],
   ['SciHub does not send system alarms when the page is closed.', '关闭页面后，SciHub 不会发送系统闹钟通知。']
 ]);
 p('record-new', 'records', 'Create a research record', '新建科研记录', ['Log in.', '先登录。'], [
@@ -160,12 +161,17 @@ p('plan-import', 'plans', 'Import a Word plan', '导入 Word 实验方案', ['Pr
   ['Select "实验方案" (Experiment plans).', '选择“实验方案”。'],
   ['In "导入 Word 方案（.docx）", select the file.', '在“导入 Word 方案（.docx）”中选择文件。'],
   ['Wait for the plan draft.', '等待方案草稿出现。'],
+  ['Open "查看导入原文（核对用）".', '展开“查看导入原文（核对用）”。'],
   ['Compare all draft steps with the source document.', '将全部草稿步骤与原文件逐项核对。'],
   ['Correct the draft before you save it.', '保存前修正草稿。']
 ], ['SciHub opens "核对导入结果" (Check import results).', 'SciHub 打开“核对导入结果”。'], [
   ['SciHub tries AI parsing first; it uses rule parsing if AI is not available.', 'SciHub 优先尝试 AI 解析；AI 不可用时改用规则解析。'],
   ['AI parsing can send plan text to the configured AI service.', 'AI 解析可能把方案文本发送到配置的 AI 服务。'],
-  ['The parser can combine adjacent operations; check the step boundaries.', '解析器可能合并相邻工序，需要核对步骤边界。'],
+  ['AI produces a Chinese chemical procedure with reagents, conditions, operations, and endpoints from the source.', 'AI 按化学实验步骤书整理原文中的试剂、条件、操作和终点，不提供英文对照。'],
+  ['Keep source values, units, conditions, negative instructions, and instrument codes unchanged.', '保留原文数值、单位、条件、否定指令及仪器代码，不擅自更改。'],
+  ['Rule fallback keeps the source text; manually check its chemical operations.', '规则回退保留原文；需要手工核对化学工序、条件和记录项。'],
+  ['An unnumbered source needs manual process boundaries before you save.', '无编号原文须在保存前手工核对并划分工序。'],
+  ['Import instructions do not require STE sentence limits.', '导入说明不强制采用 STE 的句长限制。'],
   ['PDF, .doc, and image imports are not available.', '目前不支持 PDF、.doc 和图片导入。']
 ]);
 p('plan-review', 'plans', 'Check and save a plan draft', '核对并保存方案草稿', ['Open an imported draft or select "编辑方案".', '打开导入草稿，或选择“编辑方案”。'], [
@@ -173,6 +179,7 @@ p('plan-review', 'plans', 'Check and save a plan draft', '核对并保存方案�
   ['Check each step title, instruction, and time hint.', '核对每步的标题、说明和时长提示。'],
   ['Check the field names, units, and input types.', '核对字段名称、单位和填写方式。'],
   ['Check the notices and pyrolysis program.', '核对注意事项和热解程序。'],
+  ['Resolve each "待确认" item from your approved source.', '根据已确认的原文件，逐项处理“待确认”内容。'],
   ['Select "保存方案" or "保存修改".', '选择“保存方案”或“保存修改”。'],
   ['If empty rows remain, read the confirmation before you continue.', '如果存在空白行，先阅读确认提示再继续。'],
   ['Wait for the successful save message.', '等待保存成功提示。']
@@ -221,13 +228,15 @@ p('plan-version', 'plans', 'Upload a new plan version', '上传方案新版本',
   ['Select the new .docx file.', '选择新版 .docx 文件。'],
   ['Check the new, retained, and manually added steps in the draft.', '核对草稿中新增、保留以及手动添加的步骤。'],
   ['Correct the field names, units, and conditions.', '修正字段名称、单位和条件。'],
+  ['Compare the Chinese instructions with "查看导入原文（核对用）".', '对照“查看导入原文（核对用）”核对中文指令。'],
   ['Select "保存修改" (Save changes).', '选择“保存修改”。'],
   ['Read the save and experiment synchronization messages.', '阅读保存和实验同步提示。']
 ], ['The dated plan log identifies the saved update.', '按日期记录的方案日志标识此次更新。'], [
   ['A change log entry is not a complete restorable copy of an old plan.', '更新日志条目并不是可完整恢复的旧方案副本。']
 ], [
   ['Do not assume that every active experiment changed with the plan.', '不要假定全部进行中实验都已随方案更新。'],
-  ['A blocked structural change keeps the old experiment snapshot.', '无法安全同步的结构变化会保留原实验快照。']
+  ['A blocked structural change keeps the old experiment snapshot.', '无法安全同步的结构变化会保留原实验快照。'],
+  ['If a step match is uncertain, check the retained old steps and the new steps.', '步骤对应关系不确定时，核对保留的旧步骤及新增步骤。']
 ]);
 p('plan-rename', 'plans', 'Rename a plan', '重命名方案', ['Open the saved plan.', '打开已保存方案。'], [
   ['Select "重命名" (Rename).', '选择“重命名”。'],
@@ -549,7 +558,7 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
 module.exports = {
-  version: '1.0.5', updated: '2026-10-08',
+  version: '1.0.6', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

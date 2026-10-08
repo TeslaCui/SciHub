@@ -5,9 +5,9 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-版本 **v1.0.5**（2026-10-08）。新增中英对照使用教程，包含 51 个操作流程，提供搜索、目录、语言切换和打印；教程与功能随同一版本更新。平行实验合并设计详见 [说明](docs/PARALLEL-MERGE.md)，此前项目检查详见 [审计报告](docs/AUDIT-2026-10-08.md)。
+版本 **v1.0.6**（2026-10-08）。方案导入按化学实验步骤书整理中文版，提供原文核对，检查明显的数值、单位和程序串变化；不推算含糊时长。旧方案与实验不会自动重写。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明范围与旧数据兼容。平行实验合并设计详见 [说明](docs/PARALLEL-MERGE.md)，此前项目检查详见 [审计报告](docs/AUDIT-2026-10-08.md)。
 
-**使用教程：[网站版](https://teslacui.github.io/SciHub/guide.html?v=1.0.5) · [GitHub 版](docs/USER-GUIDE.md)**。英文采用 ASD-STE100 简明技术写作原则，中文逐项对照；完整词典符合性尚未经独立审核。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
+**使用教程：[网站版](https://teslacui.github.io/SciHub/guide.html?v=1.0.6) · [GitHub 版](docs/USER-GUIDE.md)**。英文采用 ASD-STE100 简明技术写作原则，中文逐项对照；完整词典符合性尚未经独立审核。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
 
 后续功能更新须遵循 [维护规则](AGENTS.md) 中的旧数据兼容与迁移要求：兼容增量升级、明确映射、转换前核实私密备份与恢复方案，并验证旧版本数据升级路径。
 

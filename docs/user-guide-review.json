@@ -1,17 +1,17 @@
 {
-  "version": "1.0.5",
+  "version": "1.0.6",
   "reviewed": "2026-10-08",
-  "guideSourceHash": "c07e2bf1bd0497c04b552205c9ce170e7fdf1bb4970602889b01cadbeb4ef7ff",
+  "guideSourceHash": "e04c18b6c2263058f38278f7a6feefde6594ebda80b67552bf6167c889f5ae5c",
   "sourceHashes": {
-    "index.html": "30a31016f34e05717386cf40f2a5175c4aa6d24610262b02907f4713b51e8400",
-    "app.js": "b41b04029cc85d21ee9e02a0dac4c77270ec0c94a3fdfb9d51aba8c50bcdb323",
-    "experiment.js": "22f171869c6c25bda3b52d9a9f9f931920272984866df5b87e880a6863ff6e99",
+    "index.html": "9d3d13115bec7550c826edaf0b8d95c7adcdfb19da275c46d598094a4805afe2",
+    "app.js": "af149b299fe37234ce51a138925e17abdf62e00a1abd37b844d104ddf0f289f5",
+    "experiment.js": "22630221c0ea3c51616eb12c63bb892c4f9c293a4427f480cbacd7845951270f",
     "merge.js": "f537fecafb71fa5d57e083b791bc61007f4ef3fbf1b6ac370723f9ff7e241336",
     "data-safety.js": "d6f6602c4226bb8161b898c235900dcbcbcdf2d526d067aad91ac875dd856648",
     "supabase_schema.sql": "bf5b616cacdd68191aab94b06ec0d60025e01f6c60a9a163506eef3a39ed6669",
     "guide.js": "94593cd2adfc32a3dc6055d521211cbc3c257eb3f0a3595948fe5a09bceee0e5",
     "supabase/functions/_shared/ai.ts": "a6d3a60a4f7a1901e2f9f683a419cf452bfd01fa884c11e6c2b1f40d26ec9993",
-    "supabase/functions/parse-plan/index.ts": "15fb64b48d6ae059db54b7b573362ad2cd507fc0bf7240907b66ede1331263e9",
+    "supabase/functions/parse-plan/index.ts": "da24532e270f97d4ffd5786c248c1d12bb0342076eabbfd0c4224c7e28ddeb0d",
     "supabase/functions/match-params/index.ts": "8d86d5b977bd49eeca4b277147132740202763ba5993e9143e79ed6b66c6f4b9",
     "supabase/functions/check-link/index.ts": "fa7ae4cb61deb74b8911f84651dacd310aab54557393ce3c88531ad4138ef4ac",
     "supabase/functions/todo-plan/index.ts": "7a50ffc8a0eb875237685f81f98aa37c9298255233c25b911c6343987414abd8"

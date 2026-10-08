@@ -94,10 +94,33 @@
     return fields;
   }
 
+  /* Only split at sentence punctuation outside parentheses. Keep conditions, commas, decimals and codes intact. */
+  function formatChineseInstructions(text) {
+    const lines = [];
+    let line = '', depth = 0;
+    for (const char of String(text || '').replace(/\r\n?/g, '\n')) {
+      if ('（(【['.includes(char)) depth += 1;
+      if ('）)】]'.includes(char)) depth = Math.max(0, depth - 1);
+      if (char === '\n') {
+        if (line.trim()) lines.push(line.trim());
+        line = '';
+      } else {
+        line += char;
+        if (!depth && '。；;！!'.includes(char)) {
+          if (line.trim()) lines.push(line.trim());
+          line = '';
+        }
+      }
+    }
+    if (line.trim()) lines.push(line.trim());
+    return lines.join('\n');
+  }
+
   /* 段落 → { title, steps:[{title, instruction, fields[]}] } */
   function parsePlan(title, paras) {
-    const SECTION = /^([一二三四五六七八九十百]+)\s*[、.．]\s*(.+)$/;
+    const SECTION = /^([一二三四五六七八九十百]+|\d+)\s*[、.．](?!\d)\s*(.+)$/;
     const steps = [];
+    const preamble = [];
     let first = '';
 
     paras.forEach((p) => {
@@ -107,17 +130,19 @@
         return;
       }
       if (steps.length) steps[steps.length - 1].lines.push(p);
-      else if (p.length <= 40 && !first) first = p;
+      else { preamble.push(p); if (p.length <= 40 && !first) first = p; }
     });
+    if (!steps.length && preamble.length) steps.push({ title: '原文操作（工序待确认）', lines: preamble.slice() });
+    else if (preamble.length && steps.length) steps[0].lines.unshift(...preamble);
 
     return {
       title: title || first || '未命名实验方案',
       steps: steps.map((s, i) => {
-        const text = s.lines.join('\n');
+        const text = s.lines.length ? s.lines.join('\n') : s.title;
         return {
           position: i,
           title: s.title,
-          instruction: text,
+          instruction: formatChineseInstructions(text),
           fields: withChecklistFields(detectFields(text), guessDuration(text) ? [] : checklistOf(null, text)),
           duration_hint: guessDuration(text),
           notice: extractNotice(text),
@@ -174,15 +199,25 @@
   /* 从文本里猜时长提示（如「24 h」「过夜」「12 h」「4 h」） */
   function guessDuration(text) {
     const t = String(text || '');
-    const m = t.match(/(\d+(?:\.\d+)?)\s*(h|小时|min|分钟)/i);
-    if (m) return '约 ' + m[1] + ' ' + (m[2].toLowerCase() === 'h' ? '小时' : m[2]);
-    // 没有数字的常见写法，折算成能用来算结束时间的话
-    if (/过夜|隔夜|整夜|一夜|一晚|overnight/i.test(t)) return '约 12 小时（过夜）';
-    if (/隔天|第二天|次日|一整天|整天|全天/.test(t)) return '约 24 小时（隔天）';
-    if (/半天|半日/.test(t)) return '约 12 小时（半天）';
-    if (/一周|整周|一个星期/.test(t)) return '约 7 天（一周）';
-    if (/半小时|半个小时/.test(t)) return '约 30 分钟';
+    const times = [...t.matchAll(/(?:(?:至少|最多|不超过|不少于|[<>≤≥]=?)\s*)?[-+]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?:\s*(?:[-–—~～]|至)\s*[-+]?(?:\d+(?:\.\d+)?|\.\d+))?\s*(?:小时|分钟|秒|天|h|min|s|d)(?![A-Za-z])/g)].map(match => match[0]);
+    if (times.length > 1) return '多段时长待确认：' + times.join('；');
+    if (times.length) return /\d\s*[-–—~～至]\s*[-+]?\d/.test(times[0]) ? '时长范围待确认：' + times[0] : reviewDurationHint(times[0]);
+    // Ambiguous terms do not authorize an invented numerical duration.
+    const vague = t.match(/过夜|隔夜|整夜|一夜|一晚|overnight|隔天|第二天|次日|一整天|整天|全天|半天|半日/i);
+    if (vague) return (/overnight/i.test(vague[0]) ? '过夜' : vague[0]) + '（时长待确认）';
+    const words = t.match(/一周|整周|一个星期|半小时|半个小时/);
+    if (words) return words[0] + '（时长待确认）';
     return '';
+  }
+
+  function reviewDurationHint(text) {
+    const hint = String(text || '').trim();
+    if (!hint || /待确认/.test(hint)) return hint;
+    const times = hint.match(/\d+(?:\.\d+)?\s*(?:小时|分钟|秒|天|h|min|s|d)(?![A-Za-z])/g) || [];
+    if (times.length > 1 || /(?:\d\s*[-–—~～至]\s*\d)|(?:^|\s)-\d|[eE][+-]?\d|[<>≤≥]|至少|最多|不超过|不少于|过夜|隔夜|半天|半日|次日|隔天|一晚|整夜|一夜|半小时|一周|overnight/i.test(hint)) {
+      return hint + '（时长待确认）';
+    }
+    return hint;
   }
 
   /* 已完成勾选条目：优先用 AI/已有数组；否则按规则从说明里识别，
@@ -263,6 +298,7 @@
     try {
       const { data, error } = await client.functions.invoke('parse-plan', { body: { text: text } });
       if (error) throw error;
+      if (!data || data.writing_format !== 'chemical-procedure-zh-v1') throw new Error('服务端中文步骤书规则尚未就绪');
       const plan = normalizePlan(data);
       if (!plan) throw new Error('AI 未返回有效步骤');
       return plan;
@@ -298,8 +334,8 @@
 
       return {
         title: String((s && s.title) || ('步骤 ' + (i + 1))).trim(),
-        instruction: String((s && s.instruction) || '').trim(),
-        duration_hint: String((s && s.duration_hint) || '').trim(),
+        instruction: formatChineseInstructions((s && s.instruction) || ''),
+        duration_hint: reviewDurationHint(s && s.duration_hint),
         // AI 没单独给 notice 时，就从 instruction 里按关键词兜底提取
         notice: String((s && s.notice) || '').trim() || extractNotice(s && s.instruction),
         // 热解程序：AI 给了就用，否则从说明里识别；都没有就留空（不显示热解板块）
@@ -446,7 +482,7 @@
       '  <label>导入 Word 方案（.docx）',
       '    <input type="file" id="docx-input" accept=".docx">',
       '  </label>',
-      '  <p class="hint small">导入后会自动拆成步骤与数据字段，你可以在下一步里修改。</p>',
+      '  <p class="hint small">按化学实验步骤书整理中文版。导入后请对照原文核对工序、试剂用量、条件和记录项。</p>',
       '</div>',
       cards || '<div class="empty">还没有实验方案，先导入一份 .docx 吧。</div>',
     ].join('\n');
@@ -606,8 +642,8 @@
      旧方案里用户自己加的步骤（新文档里没有）追加到最后 —— 用户删过的步骤不在旧方案里，
      自然不会再出现。返回合并后的步骤数组（字段形如 {label,unit,type}）。 */
   async function mergePlanVersions(oldSteps, newSteps) {
-    const tkey = (s) => String(s || '').replace(/[\s（）()【】\[\]：:、，,。.·—\-]/g, '');
-    const stem = 4;
+    const tkey = (s) => String(s || '').trim().replace(/\s+/g, ' ');
+    const instructionKey = (step) => String(step.instruction || '').replace(/\s+/g, '');
     const oldUsed = new Set();
     const out = [];
     let newCount = 0;
@@ -617,13 +653,19 @@
       const nk = tkey(ns.title);
       let old = null;
       let oi = -1;
-      oldSteps.forEach((os, i) => {
-        if (oldUsed.has(i)) return;
-        const ok = tkey(os.title);
-        const related = (nk && ok && (nk.indexOf(ok) !== -1 || ok.indexOf(nk) !== -1))
-          || (nk.length >= stem && ok.length >= stem && nk.slice(0, stem) === ok.slice(0, stem));
-        if (related) { old = os; oi = i; }
-      });
+      const titleMatches = oldSteps.map((step, index) => ({ step, index }))
+        .filter(({ step, index }) => !oldUsed.has(index) && nk && tkey(step.title) === nk);
+      const uniqueNewTitle = newSteps.filter(step => tkey(step.title) === nk).length === 1;
+      let match = uniqueNewTitle && titleMatches.length === 1 ? titleMatches[0] : null;
+      if (!match) {
+        // A renamed operation can be matched only by unique, unchanged source instructions.
+        // Prefixes such as “干燥处理” and “干燥处理后记录” are not an identity.
+        const key = instructionKey(ns);
+        const instructionMatches = oldSteps.map((step, index) => ({ step, index }))
+          .filter(({ step, index }) => !oldUsed.has(index) && key && instructionKey(step) === key);
+        if (instructionMatches.length === 1 && newSteps.filter(step => instructionKey(step) === key).length === 1) match = instructionMatches[0];
+      }
+      if (match) { old = match.step; oi = match.index; }
       if (old != null) { oldUsed.add(oi); keptCount += 1; } else { newCount += 1; }
 
       const oldFields = (old && old.fields) || [];
@@ -756,17 +798,18 @@
 
       // 优先用 AI 解析（能区分同名药品、能读表格）；不可用时回退规则解析
       let plan = await parsePlanSmart(paras.join('\n'));
+      const usedAI = !!plan;
       if (plan) {
-        setStatus('AI 解析完成，请核对步骤与字段。', 'ok');
+        setStatus('已按化学实验步骤书整理中文版，请对照原文核对试剂、用量、条件和记录项。', 'ok');
       } else {
         plan = parsePlan(name, paras);
-        setStatus('已用规则解析（AI 未启用或调用失败）：请重点核对字段是否齐全。', 'warn');
+        setStatus('已保留原文并按标点分行（AI 不可用或校验未通过）；请手工核对中文指令及全部字段。', 'warn');
       }
 
       draft = plan;
-      // 解析常把同一工序拆成多步（例如「950℃热解」+「热解后冷却称量」），这里自动合并一次，
-      // 合并结果仍会展示在校对页，可以手动再调。
-      draft.steps = mergeAdjacentSteps(draft.steps);
+      // Preserve the parser's process boundaries; similar titles do not prove two operations are the same.
+      draft.importMethod = usedAI ? 'ai' : 'rule';
+      draft.sourceText = paras.join('\n');
       // 编辑器用「行数组」表示注意事项，这里把解析出来的字符串转一次
       draft.steps.forEach((s) => { s.noticeRows = noticeRowsOf(s); });
       draft.source = file.name;
@@ -843,6 +886,12 @@
         ? '保存后会更新这个方案；能安全对应的内容会同步到进行中实验；步骤结构改变时保留原实验快照。'
         : '可修改标题、增删步骤与字段，确认后保存。') + '</p>',
       '</div>',
+      draft.sourceText ? '<div class="card import-review" style="margin-bottom:14px">'
+        + '<p class="hint small">' + (draft.importMethod === 'ai'
+          ? '化学实验步骤书：核对试剂与用量、操作顺序、条件、终点判断和注意事项。'
+          : '规则回退：保留原文并按标点分行；请手工核对工序、条件和记录项。')
+        + ' 保存前逐项核对；“待确认”内容须由你确认。</p>'
+        + '<details><summary>查看导入原文（核对用）</summary><pre class="import-source">' + esc(draft.sourceText) + '</pre></details></div>' : '',
       draft.steps.map((s, si) => [
         '<div class="step-card" data-step="' + si + '">',
         '  <div class="step-head">',
@@ -1158,13 +1207,13 @@
           steps: todo.map((i) => ({ title: steps[i].title || '', instruction: steps[i].instruction || '' })),
         },
       });
-      if (error || !data || !Array.isArray(data.durations)) {
+      if (error || !data || !Array.isArray(data.durations) || data.durations.length !== todo.length) {
         console.warn('[SciHub] 时长 AI 解析不可用（parse-plan 未更新 / 未部署？），已跳过：', error);
         return 0;
       }
       let n = 0;
       todo.forEach((i, k) => {
-        const d = String(data.durations[k] || '').trim();
+        const d = reviewDurationHint(data.durations[k]);
         if (d) { steps[i].duration_hint = d; n += 1; }
       });
       return n;
@@ -1563,6 +1612,7 @@
         const { name, paras } = await readDocx(f);
         const text = paras.join('\n');
         let parsed = await parsePlanSmart(text);
+        const usedAI = !!parsed;
         if (!parsed) parsed = parsePlan(name, paras);
         parsed.title = parsed.title || plan.title || name;
 
@@ -1571,6 +1621,8 @@
         const merged = await mergePlanVersions(steps || [], parsed.steps);
         draft = {
           id: plan.id,
+          sourceText: text,
+          importMethod: usedAI ? 'ai' : 'rule',
         updatedAt: plan.updated_at,
           title: parsed.title,
           source: name,
@@ -1595,7 +1647,8 @@
         };
         renderDraft();
         showView('plan');
-        setStatus('已解析出新版本，并保留了你之前的手动修改；请核对后保存（保存时会同步到进行中的实验并迁移数据）。', 'ok');
+        setStatus((usedAI ? '已按化学实验步骤书整理中文新版本' : 'AI 不可用或校验未通过，已保留原文并按标点分行')
+          + '；已有手动修改已保留。请对照原文核对后保存；结构不兼容的实验保留原快照。', usedAI ? 'ok' : 'warn');
       } catch (err) {
         console.error('[SciHub] 解析新版本失败：', err);
         setStatus('解析新版本失败：' + errorText(err), 'error');
