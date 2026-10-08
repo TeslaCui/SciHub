@@ -1,3 +1,5 @@
+import { authorizeAI, readAIRequest, fetchAI } from '../_shared/ai.ts';
+
 // Supabase Edge Function：用 DeepSeek 判断「旧字段」与「新字段」里哪些是同一个参数
 //
 // ── 为什么需要它 ────────────────────────────────────────────
@@ -50,10 +52,12 @@ Deno.serve(async (req: Request) => {
     return json({ error: '只支持 POST' }, 405);
   }
 
+  const authError = await authorizeAI(req);
+  if (authError) return authError;
   try {
-    const body = await req.json().catch(() => null);
-    const oldList = Array.isArray(body?.old) ? body.old.map((x: unknown) => String(x ?? '')).filter(Boolean) : [];
-    const newList = Array.isArray(body?.new) ? body.new.map((x: unknown) => String(x ?? '')).filter(Boolean) : [];
+    const body = await readAIRequest(req);
+    const oldList = Array.isArray(body?.old) ? body.old.map((x: unknown) => String(x ?? '')).filter(Boolean).slice(0, 200).map((text: string) => text.slice(0, 200)) : [];
+    const newList = Array.isArray(body?.new) ? body.new.map((x: unknown) => String(x ?? '')).filter(Boolean).slice(0, 200).map((text: string) => text.slice(0, 200)) : [];
     if (!oldList.length || !newList.length) {
       return json({ error: '缺少 old 或 new' }, 400);
     }
@@ -63,7 +67,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: '服务端未配置 DEEPSEEK_API_KEY' }, 500);
     }
 
-    const upstream = await fetch('https://api.deepseek.com/chat/completions', {
+    const upstream = await fetchAI('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -103,9 +107,13 @@ Deno.serve(async (req: Request) => {
     const oldSet = new Set(oldList);
     const newSet = new Set(newList);
     const rawPairs = (parsed as { pairs?: unknown })?.pairs;
+    const usedOld = new Set<string>(), usedNew = new Set<string>();
     const pairs = (Array.isArray(rawPairs) ? rawPairs : [])
       .map((p) => ({ from: String((p as { from?: unknown })?.from ?? ''), to: String((p as { to?: unknown })?.to ?? '') }))
-      .filter((p) => oldSet.has(p.from) && newSet.has(p.to));
+      .filter((p) => {
+        if (!oldSet.has(p.from) || !newSet.has(p.to) || usedOld.has(p.from) || usedNew.has(p.to)) return false;
+        usedOld.add(p.from); usedNew.add(p.to); return true;
+      });
 
     return json({ pairs });
   } catch (err) {

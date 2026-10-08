@@ -1,3 +1,5 @@
+import { authorizeAI, readAIRequest, fetchAI } from '../_shared/ai.ts';
+
 // Supabase Edge Function：用 DeepSeek 判断「两个实验从某一步往后」的后续步骤是否一致
 //
 // ── 为什么需要它 ────────────────────────────────────────────
@@ -57,16 +59,19 @@ Deno.serve(async (req: Request) => {
     return json({ error: '只支持 POST' }, 405);
   }
 
+  const authError = await authorizeAI(req);
+  if (authError) return authError;
   try {
-    const body = await req.json().catch(() => null);
+    const body = await readAIRequest(req);
     const pick = (v: unknown): string[] =>
       (Array.isArray(v) ? v : [])
         .map((x) => {
           if (typeof x === 'string') return x;
-          const t = (x as { title?: unknown })?.title;
-          return t == null ? '' : String(t);
+          if (!x || typeof x !== 'object') return '';
+          const step = x as Record<string, unknown>;
+          return JSON.stringify({ title: step.title, instruction: step.instruction, notice: step.notice, pyro_seq: step.pyro_seq, duration_hint: step.duration_hint, fields: step.fields });
         })
-        .map((s) => s.trim())
+        .map((s) => s.trim().slice(0, 4000))
         .filter(Boolean);
 
     const mine = pick(body?.mine);
@@ -77,12 +82,15 @@ Deno.serve(async (req: Request) => {
       return json({ same: false, reason: '一边没有后续步骤，无法比较。' });
     }
 
+    if (mine.length !== other.length || mine.length > 60) return json({ same: false, reason: '步骤数量不同或超过可校验范围。' });
+    const numericConditions = (list: string[]) => list.map((text) => (text.match(/[-+]?\d+(?:\.\d+)?/g) || []).join('|')).join('~');
+    if (numericConditions(mine) !== numericConditions(other)) return json({ same: false, reason: '两组步骤的数字条件不同，请人工核对温度、时间、用量等。' });
     const apiKey = Deno.env.get('DEEPSEEK_API_KEY');
     if (!apiKey) {
       return json({ error: '服务端未配置 DEEPSEEK_API_KEY' }, 500);
     }
 
-    const upstream = await fetch('https://api.deepseek.com/chat/completions', {
+    const upstream = await fetchAI('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

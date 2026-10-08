@@ -19,7 +19,14 @@ BRANCH="master"
 
 cd "$REPO"
 
-# ── 1. 语法检查（有 node 才做，没有则跳过）──────────────────
+# 只提交人工审核并暂存的文件，避免 git add -A 收入无关文件。
+if [ "$(git branch --show-current)" != "$BRANCH" ]; then
+  echo "当前分支不是 master，已中止。" >&2
+  exit 1
+fi
+git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null
+
+# ── 1. 必须通过语法与发布检查 ──────────────────
 NODE_BIN=""
 for candidate in node "/d/LeStoreDownload/Node.js/node.exe"; do
   if command -v "$candidate" >/dev/null 2>&1 || [ -x "$candidate" ]; then
@@ -29,7 +36,7 @@ for candidate in node "/d/LeStoreDownload/Node.js/node.exe"; do
 done
 
 if [ -n "$NODE_BIN" ]; then
-  for js in app.js experiment.js sw.js; do
+  for js in app.js experiment.js data-safety.js sw.js; do
     if ! "$NODE_BIN" --check "$js"; then
       echo "语法检查失败：$js —— 已中止推送" >&2
       exit 1
@@ -37,16 +44,35 @@ if [ -n "$NODE_BIN" ]; then
   done
   echo "语法检查通过（app.js / experiment.js / sw.js）"
 else
-  echo "未找到 node，跳过语法检查"
+  echo "未找到 node，无法验证，已中止。" >&2
+  exit 1
+fi
+"$NODE_BIN" tools/check-release.cjs --staged
+if ! git diff --quiet; then
+  echo "存在未暂存的已跟踪文件，测试内容与提交可能不一致，已中止。" >&2
+  exit 1
+fi
+git diff --cached --check
+"$NODE_BIN" --test tests/data-safety.test.cjs tests/experiment.test.cjs tests/service-worker.test.cjs
+if git diff --cached --name-only | grep -Eq '^(supabase/|tests/(sql-transactions|edge-functions))'; then
+  if [ -z "${PGLITE_MODULE:-}" ] || [ -z "${TYPESCRIPT_MODULE:-}" ]; then
+    echo "数据库 / Edge 改动需要 PGLITE_MODULE 和 TYPESCRIPT_MODULE 才能完成验证。" >&2
+    exit 1
+  fi
+  "$NODE_BIN" --test tests/sql-transactions.test.cjs tests/edge-functions.test.cjs
 fi
 
 # ── 2. 提交本地改动 ─────────────────────────────────────────
-if [ -n "$(git status --porcelain)" ]; then
-  git add -A
+if ! git diff --cached --quiet; then
+  git diff --cached --stat
   git commit -q -m "${1:-chore: 自动同步}"
   echo "已提交：$(git log --oneline -1)"
 else
-  echo "工作区干净，跳过提交。"
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "有未暂存改动，请先审核并 git add 明确文件，已中止。" >&2
+    exit 1
+  fi
+  echo "没有暂存改动，跳过提交。"
 fi
 
 # ── 3. 推送：直连失败就自动降级到代理 ───────────────────────

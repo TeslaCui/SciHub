@@ -1,3 +1,5 @@
+import { authorizeAI, readAIRequest, fetchAI } from '../_shared/ai.ts';
+
 // Supabase Edge Function：用 DeepSeek 把实验方案文本结构化成「步骤 + 数据字段」
 //
 // ── 为什么要有它 ────────────────────────────────────────────
@@ -106,8 +108,10 @@ Deno.serve(async (req: Request) => {
     return json({ error: '只支持 POST' }, 405);
   }
 
+  const authError = await authorizeAI(req);
+  if (authError) return authError;
   try {
-    const body = await req.json().catch(() => null);
+    const body = await readAIRequest(req);
     // ── 模式三：{ "mode": "progress", "currentStep": 6, "steps": [{position,title,done,filled,photos,note}] } ──
     // 响应：{ "step": 6, "reason": "第 7 步已填数据，第 8 步没有任何填写痕迹" }
     if (body && body.mode === 'progress') {
@@ -127,7 +131,7 @@ Deno.serve(async (req: Request) => {
 
       const userMsg = 'currentStep（0 起算）=' + Number(body.currentStep ?? 0) + NL + '步骤清单：' + NL + list;
 
-      const up = await fetch('https://api.deepseek.com/chat/completions', {
+      const up = await fetchAI('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pgKey },
         body: JSON.stringify({
@@ -154,7 +158,7 @@ Deno.serve(async (req: Request) => {
       }
       const step3 = Number(parsed3?.step);
       if (!Number.isFinite(step3)) return json({ error: 'AI 没有给出 step' }, 502);
-      return json({ step: step3, reason: String(parsed3?.reason ?? '').slice(0, 300) });
+      return json({ step: Math.max(0, Math.min(Math.trunc(step3), items.length - 1)), reason: String(parsed3?.reason ?? '').slice(0, 300) });
     }
 
     // ── 模式二：{ "mode": "duration", "steps": [{title, instruction}] } ──
@@ -170,7 +174,7 @@ Deno.serve(async (req: Request) => {
         .map((x, i) => (i + 1) + '. 标题：' + String(x?.title ?? '') + ' 说明：' + String(x?.instruction ?? '').slice(0, 800))
         .join(String.fromCharCode(10));
 
-      const up = await fetch('https://api.deepseek.com/chat/completions', {
+      const up = await fetchAI('https://api.deepseek.com/chat/completions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + durKey },
         body: JSON.stringify({
@@ -196,6 +200,7 @@ Deno.serve(async (req: Request) => {
         return json({ error: 'DeepSeek 返回的不是合法 JSON', detail: String(content2).slice(0, 600) }, 502);
       }
       const rows = Array.isArray(parsed2?.durations) ? parsed2.durations : [];
+      if (rows.length !== items.length) return json({ error: 'AI 时长数量与步骤不一致' }, 502);
       return json({ durations: rows.map((x) => String(x ?? '').trim()) });
     }
 
@@ -209,7 +214,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: '服务端未配置 DEEPSEEK_API_KEY' }, 500);
     }
 
-    const upstream = await fetch('https://api.deepseek.com/chat/completions', {
+    const upstream = await fetchAI('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -242,6 +247,7 @@ Deno.serve(async (req: Request) => {
       return json({ error: 'DeepSeek 返回的不是合法 JSON', detail: String(content).slice(0, 600) }, 502);
     }
 
+    if (!plan || typeof plan !== 'object' || !Array.isArray((plan as { steps?: unknown }).steps)) return json({ error: 'AI 方案缺少步骤数组' }, 502);
     return json(plan);
   } catch (err) {
     return json({ error: String((err as Error)?.message ?? err) }, 500);

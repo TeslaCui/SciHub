@@ -552,13 +552,15 @@
     const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
     newFields.forEach((nf) => {
+      const original = (oldFields || []).find((field) => field.label === nf.label);
+      if (original && String(original.unit || '').trim() !== String(nf.unit || '').trim() && has(src, nf.label) && src[nf.label] !== '') throw new Error('字段「' + nf.label + '」已有数据且单位改变，不能自动迁移；请保留原实验快照并新建实验。');
       if (has(src, nf.label)) { out[nf.label] = src[nf.label]; return; }        // ① 同名
 
-      const byAi = (oldFields || []).find((of) => aiMap && aiMap[of.label] === nf.label && has(src, of.label));
+      const byAi = (oldFields || []).find((of) => aiMap && aiMap[of.label] === nf.label && String(of.unit || '').trim() === String(nf.unit || '').trim() && has(src, of.label));
       if (byAi) { out[nf.label] = src[byAi.label]; return; }                    // ② AI 判定
 
       const nk = fieldKey(nf.label);
-      const hit = (oldFields || []).find((of) => fieldKey(of.label) === nk && has(src, of.label));
+      const hit = (oldFields || []).find((of) => fieldKey(of.label) === nk && String(of.unit || '').trim() === String(nf.unit || '').trim() && has(src, of.label));
       if (hit) out[nf.label] = src[hit.label];                                  // ③ 归一化名
     });
 
@@ -577,9 +579,11 @@
       if (error) throw error;
 
       const map = {};
+      const usedNew = new Set();
       ((data && data.pairs) || []).forEach((p) => {
-        if (p && p.from && p.to && oldLabels.indexOf(p.from) !== -1 && newLabels.indexOf(p.to) !== -1) {
+        if (p && p.from && p.to && !Object.prototype.hasOwnProperty.call(map, p.from) && !usedNew.has(p.to) && oldLabels.indexOf(p.from) !== -1 && newLabels.indexOf(p.to) !== -1) {
           map[p.from] = p.to;
+          usedNew.add(p.to);
         }
       });
       return Object.keys(map).length ? map : null;
@@ -651,7 +655,8 @@
           if (!of) continue;
           usedOldLabels.add(of.label);
           byNew.add(nf.label);
-          mergedFields.push({ label: of.label, unit: of.unit || nf.unit, type: of.type || nf.type });
+          const index = mergedFields.findIndex((field) => field.label === nf.label);
+          if (index !== -1) mergedFields[index] = { label: of.label, unit: of.unit || nf.unit, type: of.type || nf.type };
         }
       }
       // 用户手工添加、新解析认不出的旧字段保留在末尾
@@ -835,7 +840,7 @@
       '<div class="card" style="margin-bottom:14px">',
       '  <label>方案名称<input id="draft-title" value="' + esc(draft.title) + '"></label>',
       '  <p class="hint small">共 ' + draft.steps.length + ' 个步骤。' + (editing
-        ? '保存后会更新这个方案；已经开始的实验用的是启动时的快照，不受影响。'
+        ? '保存后会更新这个方案；能安全对应的内容会同步到进行中实验；步骤结构改变时保留原实验快照。'
         : '可修改标题、增删步骤与字段，确认后保存。') + '</p>',
       '</div>',
       draft.steps.map((s, si) => [
@@ -1169,176 +1174,61 @@
     }
   }
 
-  /* 非破坏性替换方案步骤。
-     旧写法是「先把旧行全 delete、再 insert 新行」：插入一旦失败（或被刷新页面 / 断网 /
-     登录过期打断），方案就只剩 0 个步骤，而方案上的更新日志已经先写了一条「已保存」，
-     表面上毫无异常 —— 2026-09-18 那次方案步骤全丢就是这个原因（见 README）。
-     现在分三步，任何一步失败都不会动到原有步骤：
-       ① 新行先用「偏移位号」插入，避开 plan_steps 的 unique(plan_id, position)，旧行原样不动；
-       ② 插入成功后，再按 id 删掉旧行；
-       ③ 旧行删完，把新行的位号归位成 0..n-1（顺序不变）。
-     ② 失败 → 撤掉刚插入的那批新行，退回原来的版本（宁可回退，也不留空方案或两份）。 */
-  async function replacePlanSteps(planId, rows) {
-    if (!rows.length) throw new Error('没有可写入的步骤');
-
-    const { data: oldRows, error: oldErr } = await client
-      .from(STEP).select('id, position').eq('plan_id', planId);
-    if (oldErr) throw oldErr;
-
-    const oldIds = (oldRows || []).map((r) => r.id);
-    // 偏移基数比任何旧位号都大 —— 新行绝不会撞上还没删掉的旧行
-    const oldMax = (oldRows || []).reduce((m, r) => Math.max(m, Number(r.position) || 0), -1);
-    const base = oldMax + rows.length + 1;
-
-    const { data: inserted, error: insErr } = await client
-      .from(STEP)
-      .insert(rows.map((r, i) => Object.assign({}, r, { position: base + i })))
-      .select('id, position');
-    if (insErr) throw insErr;   // 旧行一步都没动，方案没丢
-
-    const fresh = (inserted || []).slice().sort((a, b) => a.position - b.position);
-
-    // 没拿到写入回执时绝不能往下走（否则删了旧行、新行又认不出来 = 空方案）。
-    // 这里用位号范围把刚插入的偏移行清掉，保持原样。
-    if (!fresh.length) {
-      const { error: undoErr } = await client.from(STEP).delete().eq('plan_id', planId).gte('position', base);
-      if (undoErr) console.error('[SciHub] 清理未确认的步骤失败，请打开方案确认步骤：', undoErr);
-      throw new Error('写入步骤后没有拿到回执，已恢复原样');
-    }
-
-    if (oldIds.length) {
-      const { error: delErr } = await client.from(STEP).delete().in('id', oldIds);
-      if (delErr) {
-        // 旧行没删掉 → 把这批新行撤掉，恢复成原来那一版
-        const { error: undoErr } = await client.from(STEP).delete().in('id', fresh.map((r) => r.id));
-        if (undoErr) console.error('[SciHub] 撤销新步骤也失败了，请打开方案确认步骤：', undoErr);
-        throw delErr;
-      }
-    }
-
-    // 归位：旧行已删，0..n-1 空出来了，按原顺序写回
-    for (let i = 0; i < fresh.length; i++) {
-      if (fresh[i].position === i) continue;
-      const { error: posErr } = await client.from(STEP).update({ position: i }).eq('id', fresh[i].id);
-      if (posErr) {
-        console.warn('[SciHub] 步骤位号归位失败（步骤内容都在，只是显示序号可能不对）：', posErr);
-        break;
-      }
-    }
-  }
-
+  /* 方案与步骤在数据库事务内保存；不再用多次 HTTP 写入模拟事务。 */
+  let savingDraft = false;
   async function saveDraft() {
+    if (savingDraft || !draft) return;
     collectDraft();
     if (!draft.steps.length) { setStatus('至少保留一个步骤。', 'error'); return; }
-
-    // 保存前检查空白行（没填内容的字段 / 注意事项 / 勾选条目）：
-    // 有就提示「默认删除」，让用户确认是否继续（取消则什么都不做，方便回去补内容）。
+    try { SciHubSafety.validateFields(draft.steps); }
+    catch (err) { setStatus(errorText(err), 'error'); return; }
     const blanks = countBlankRows(draft.steps);
-    if (blanks) {
-      const ok = window.confirm(
-        '检测到 ' + blanks + ' 处空白行（只有输入框、没填内容）。\n\n'
-        + '继续保存会自动删除这些空白行；\n'
-        + '点「取消」则返回编辑，把它们补上内容或删掉。'
-      );
-      if (!ok) { setStatus('已取消保存：请先补上空白行的内容，或删掉这些行。', 'warn'); return; }
-    }
+    if (blanks && !window.confirm('检测到 ' + blanks + ' 处空白行。继续保存会忽略这些空白行，是否继续？')) return;
 
-    // 缺时长的步骤先补齐（规则 → AI 兜底），这样待办不必每次再调 AI
-    const filled = await fillStepDurations(draft.steps);
-    if (filled) console.info('[SciHub] 已用 AI 补上 ' + filled + ' 个步骤的时长提示');
-
-    const title = draft.title.trim() || '未命名实验方案';
-    const wasEdit = !!draft.id;
-
+    savingDraft = true;
     const btn = $('draft-save');
     btn.disabled = true;
+    const currentDraft = draft;
     try {
-      let planId = draft.id;
-      let metaWarn = '';   // 步骤写成功、但方案那一行（标题/更新日志）没写成功时的提示
-
-      // 落库前清理空白行：注意事项拼回「；」分隔（noticeText 去掉空行）、
-      // 字段要求有名字、勾选条目要求非空 —— 空行不写进数据库。
-      // 标题兜底成「步骤 N」只是保险（plan_steps.title 允许空串），
-      // 真正会因为空标题报错的是 experiment_plans.title。
-      const buildRows = (pid) => draft.steps.map((s, i) => ({
-        user_id: state.user.id,
-        plan_id: pid,
-        position: i,
-        title: String(s.title || '').trim() || ('步骤 ' + (i + 1)),
-        instruction: String(s.instruction || ''),
-        notice: noticeText(s.noticeRows && s.noticeRows.length ? s.noticeRows : noticeRowsOf(s)),
-        pyro_seq: s.pyro_seq || '',
-        fields: (s.fields || []).filter((f) => String((f && f.label) || '').trim()),
-        duration_hint: s.duration_hint || '',
-        checklist: [],   // 勾选已并入字段（type='check'），旧列保留但不再写内容
-      }));
-
-      if (planId) {
-        // 先写步骤（非破坏性：失败也不会动到旧行），写成功了才记「更新日志」。
-        // 顺序反过来就会出现「日志写着已保存、步骤却是空的」这种假象 —— 09-18 那次就是这样。
-        await replacePlanSteps(planId, buildRows(planId));
-
-        const versionLog = (draft.versionLog || []).concat([draft.versionEntry || {
-          at: new Date().toISOString(),
-          type: '编辑',
-          source: draft.source || '',
-          summary: '手工编辑保存',
-        }]);
-        const { error: metaErr } = await client.from(PLAN)
-          .update({ title: title, parse_version: PARSE_VERSION, version_log: versionLog })
-          .eq('id', planId);
-        if (metaErr) {
-          console.warn('[SciHub] 步骤已保存，但方案信息/更新日志没写成功：', metaErr);
-          metaWarn = '（步骤已保存，只是方案的标题/更新日志没写成功：' + errorText(metaErr) + '）';
-        }
-      } else {
-        const { data: plan, error } = await client.from(PLAN).insert({
-          title: title, source: draft.source || '', user_id: state.user.id,
-          parse_version: PARSE_VERSION,
-        }).select().single();
-        if (error) throw error;
-        planId = plan.id;
-        const { error: stepErr } = await client.from(STEP).insert(buildRows(planId));
-        if (stepErr) {
-          // 新方案的步骤没写进去 → 把刚建的空方案删掉，别在列表里留一个「共 0 个步骤」的壳
-          const { error: undoErr } = await client.from(PLAN).delete().eq('id', planId);
-          if (undoErr) console.warn('[SciHub] 清理空方案失败，列表里会多一个 0 步方案：', undoErr);
-          throw stepErr;
-        }
-      }
-
-      draft = null;
-      const doneMsg = (wasEdit ? '方案已更新。' : '方案已保存。') + metaWarn;
-      setStatus(doneMsg, metaWarn ? 'warn' : 'ok');
-
-      // 方案改完后，把最新结构同步给正在做这个方案的实验：
-      // 改过的更新、新增的补上、方案里删掉的也从实验里删掉
+      await fillStepDurations(currentDraft.steps);
+      const versionLog = (currentDraft.versionLog || []).concat([currentDraft.versionEntry || {
+        at: new Date().toISOString(), type: currentDraft.id ? '编辑' : '导入',
+        source: currentDraft.source || '', summary: currentDraft.id ? '手工编辑保存' : '导入方案',
+      }]);
+      const { data: planId, error } = await client.rpc('research_save_plan', {
+        p_id: currentDraft.id || null,
+        p_title: currentDraft.title.trim() || '未命名实验方案',
+        p_source: currentDraft.source || '',
+        p_parse_version: PARSE_VERSION,
+        p_expected_updated_at: currentDraft.updatedAt || null,
+        p_version_log: versionLog,
+        p_steps: currentDraft.steps.map((step, index) => ({
+          title: String(step.title || '').trim() || ('步骤 ' + (index + 1)),
+          instruction: String(step.instruction || ''),
+          notice: noticeText(step.noticeRows || noticeRowsOf(step)),
+          pyro_seq: step.pyro_seq || '', duration_hint: step.duration_hint || '',
+          fields: (step.fields || []).filter((field) => String(field.label || '').trim()),
+        })),
+      });
+      if (error) throw error;
+      if (!planId) throw new Error('没有收到保存回执，请核对后重试');
+      if (draft === currentDraft) draft = null;
+      const doneMsg = currentDraft.id ? '方案已更新。' : '方案已保存。';
+      setStatus(doneMsg, 'ok');
       try {
-        const r = await syncPlanToRunningRuns(planId);
-        const bits = [];
-        if (r.updated) bits.push('更新 ' + r.updated + ' 步');
-        if (r.added) bits.push('补上 ' + r.added + ' 步');
-        if (r.removed) bits.push('删除 ' + r.removed + ' 步');
-        if (bits.length) setStatus(doneMsg + '进行中的实验已同步：' + bits.join('、') + '。', metaWarn ? 'warn' : 'ok');
-
-        // 同步失败的实验逐条报出原因，别让失败被"成功提示"盖过去
-        const fails = r.failed || [];
-        if (fails.length) {
-          const list = fails.map((x) => '· ' + x.title + '：' + x.reason).join('\n');
-          console.warn('[SciHub] 以下实验同步失败：', fails);
-          setStatus(doneMsg + '但有 ' + fails.length + ' 个进行中的实验同步失败：\n' + list, 'warn');
-        }
+        const result = await syncPlanToRunningRuns(planId);
+        if (result.failed.length) setStatus(doneMsg + '以下实验保留原快照：' + result.failed.map((item) => item.title + '：' + item.reason).join('；'), 'warn');
+        else if (result.updated || result.added) setStatus(doneMsg + '进行中的实验已同步。', 'ok');
       } catch (err) {
-        console.warn('[SciHub] 同步到进行中的实验失败：', err);
-        setStatus(doneMsg + '但同步到进行中的实验失败，请稍后重试。', 'warn');
+        setStatus(doneMsg + '本次实验保留原快照：' + errorText(err), 'warn');
       }
-
+      savingDraft = false;
       route('plans');
     } catch (err) {
       console.error('[SciHub] 保存方案失败：', err);
-      // 显示真实原因（否则只能猜），并明确说明旧步骤没被清空 —— 这是这版保存路径的保证
-      setStatus('保存失败：' + errorText(err) + ' —— 方案原有步骤没有被清空，可以再试一次。', 'error');
+      setStatus('保存未确认：' + errorText(err) + '。草稿仍保留；请核对后重试。', 'error');
     } finally {
+      savingDraft = false;
       btn.disabled = false;
     }
   }
@@ -1351,15 +1241,19 @@
      返回 { updated, added, removed }。 */
   async function syncPlanToRunningRuns(planId) {
     const none = { updated: 0, added: 0, removed: 0, failed: [] };
-    const { data: runs } = await client
+    const { data: runs, error: runsError } = await client
       .from(RUN).select('id,title,current_step').eq('plan_id', planId).eq('status', 'running');
+    if (runsError) throw runsError;
     if (!runs || !runs.length) return none;
 
-    const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    const { data: planSteps, error: planError } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (planError) throw planError;
     if (!planSteps || !planSteps.length) return none;   // 方案一步不剩时不动实验，避免把实验清空
 
-    const { data: runSteps } = await client.from(RUN_STEP).select('*').in('run_id', runs.map((r) => r.id));
+    const { data: runSteps, error: stepsError } = await client.from(RUN_STEP).select('*').in('run_id', runs.map((r) => r.id));
+    if (stepsError) throw stepsError;
     const rows = runSteps || [];
+    runs.forEach((item) => SciHubSafety.assertSafeStepSync(planSteps, rows.filter((step) => step.run_id === item.id)));
 
     // ── 先处理「删」：方案里已经没有的 position，实验里也去掉 ──
     const planPositions = new Set(planSteps.map((p) => p.position));
@@ -1406,6 +1300,7 @@
             instruction: ps.instruction || '',
             notice: ps.notice || '',
             pyro_seq: ps.pyro_seq || '',
+            duration_hint: ps.duration_hint || '',
             fields: newFields,
             values: {},
             images: [],
@@ -1435,20 +1330,18 @@
           instruction: ps.instruction || '',
           notice: ps.notice || '',
           pyro_seq: ps.pyro_seq || '',
+            duration_hint: ps.duration_hint || '',
           fields: newFields,
           values: values,
           checks: {},        // 勾选状态已迁移进字段值
         };
 
-        const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', oldFields, rs.values, oldChecks]);
-        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values, next.checks]);
+        const before = JSON.stringify([rs.title, rs.instruction, rs.notice, rs.pyro_seq || '', rs.duration_hint || '', oldFields, rs.values, oldChecks]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.duration_hint, next.fields, next.values, next.checks]);
         if (before === after) continue;    // 没有实质变化就不写库
 
-        let { error } = await client.from(RUN_STEP).update(next).eq('id', rs.id);
-        if (error && /checks/.test(String(error.message || ''))) {
-          const slim = Object.assign({}, next); delete slim.checks;
-          ({ error } = await client.from(RUN_STEP).update(slim).eq('id', rs.id));
-        }
+        const { data: saved, error } = await client.from(RUN_STEP).update(next).eq('id', rs.id).eq('updated_at', rs.updated_at).select('id').maybeSingle();
+        if (!error && !saved) throw new Error('步骤已在其他设备修改，本次不覆盖其数据');
         if (error) throw error;
         updated += 1;
       }
@@ -1494,6 +1387,7 @@
 
     draft = {
       id: plan.id,
+        updatedAt: plan.updated_at,
       title: plan.title,
       source: plan.source || '',
       versionLog: (plan.version_log || []).slice(),
@@ -1550,6 +1444,7 @@
 
       draft = {
         id: plan.id,
+        updatedAt: plan.updated_at,
         title: plan.title,
         source: plan.source || '',
         versionLog: (plan.version_log || []).slice(),
@@ -1676,6 +1571,7 @@
         const merged = await mergePlanVersions(steps || [], parsed.steps);
         draft = {
           id: plan.id,
+        updatedAt: plan.updated_at,
           title: parsed.title,
           source: name,
           versionLog: (plan.version_log || []).slice(),
@@ -1725,7 +1621,10 @@
 
   /* ══ 开始一次实验（把方案快照进 run_steps）══════════════ */
 
+  let startingRun = false;
   async function startRun(planId) {
+    if (startingRun) return;
+    startingRun = true;
     setStatus('正在准备实验…');
     try {
       const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
@@ -1745,7 +1644,7 @@
         user_id: state.user.id,
         plan_id: plan.id,
         title: runTitle,
-        status: 'running',
+        status: 'aborted',
         current_step: 0,
       }).select().single();
       if (error) throw error;
@@ -1780,33 +1679,38 @@
       }
       if (stepErr) throw stepErr;
 
+      const { error: activationError } = await client.from(RUN).update({ status: 'running' }).eq('id', run.id);
+      if (activationError) throw activationError;
       setStatus('实验已开始，随时可以继续。', 'ok');
+      startingRun = false;
       route('run', run.id);
     } catch (err) {
       console.error('[SciHub] 开始实验失败：', err);
-      setStatus('无法开始实验，请稍后重试。', 'error');
-    }
+      setStatus('实验准备未完成：' + errorText(err) + '。未完成的准备记录已保留，不会出现在进行中列表。', 'error');
+    } finally { startingRun = false; }
   }
 
   window.Plans = { list: listPlans, editor: renderEditor, start: startRun };
 
   /* ══ 执行界面 ═══════════════════════════════════════════ */
 
-  const run = { id: null, data: null, steps: [], pos: 0, saveTimer: null, urls: {}, urlErrors: {}, drift: { fields: [] } };
+  const run = { id: null, data: null, steps: [], pos: 0, urls: {}, urlErrors: {}, drift: { fields: [] } };
 
   /* 对比「本次实验」与「方案当前内容」，给出步骤级差异 —— 用来实时提示「是否与方案同步」。
      覆盖五种情况：方案新增的步骤、方案已删的步骤、内容改过的步骤、
      新增的数据字段，以及「方案删掉了某个字段、但实验里已经填了值」。
      返回 { same, added:[], removed:[], changed:[], fieldAdded:[], fieldRemoved:[] } */
   async function planDiff(r) {
+    const snapshot = run.steps.slice();
     const empty = { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
     if (!r || !r.plan_id) return empty;
 
-    const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+    const { data: planSteps, error } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+    if (error) throw error;
     if (!planSteps || !planSteps.length) return empty;   // 方案一步不剩时不当成「不同步」
 
     const byPos = {};
-    (run.steps || []).forEach((s) => { byPos[s.position] = s; });
+    snapshot.forEach((s) => { byPos[s.position] = s; });
     const planByPos = {};
     planSteps.forEach((p) => { planByPos[p.position] = p; });
 
@@ -1814,8 +1718,8 @@
     const added = planSteps.filter((p) => !byPos[p.position])
       .map((p) => ({ position: p.position, title: p.title }));
     // 实验有、方案没有 → 方案里删掉了
-    const removed = (run.steps || []).filter((s) => !planByPos[s.position])
-      .map((s) => ({ id: s.id, position: s.position, title: s.title }));
+    const removed = snapshot.filter((s) => !planByPos[s.position])
+      .map((s) => Object.assign({}, s));
 
     const changed = [];
     const fieldAdded = [];
@@ -1828,6 +1732,8 @@
       if (String(s.instruction || '') !== String(p.instruction || '')) what.push('说明');
       if (String(s.notice || '') !== String(p.notice || '')) what.push('注意事项');
       if (String(s.pyro_seq || '') !== String(p.pyro_seq || '')) what.push('热解程序');
+      if (String(s.duration_hint || '') !== String(p.duration_hint || '')) what.push('时长提示');
+      if (JSON.stringify(s.fields || []) !== JSON.stringify(p.fields || [])) what.push('字段定义');
       if (what.length) changed.push({ position: p.position, title: p.title, what: what.join('、') });
 
       const keys = new Set((s.fields || []).map((f) => fieldKey(f.label)));
@@ -1840,7 +1746,7 @@
     // 方案里删掉了某个字段、但实验里已经填过值 → 值还在，只是方案不再有这个字段。
     // 必须提醒用户：否则他会以为数据丢了，或者继续照旧字段填。
     const fieldRemoved = [];
-    (run.steps || []).forEach((s) => {
+    snapshot.forEach((s) => {
       const ps = planByPos[s.position];
       if (!ps) return;                                    // 整步被删的情况另有提示，这里不重复
       const planKeys = new Set((ps.fields || []).map((f) => fieldKey(f.label)));
@@ -1863,15 +1769,26 @@
 
   /* 立即把本次实验与方案对齐：补上方案新增的步骤与字段、更新改过的内容。
      （方案里已删的步骤不在这里删 —— 那要丢数据，得在保存方案时确认，避免这里误删正在填的内容。） */
+  let syncingRun = false;
   async function syncRunNow() {
+    if (syncingRun) return;
+    syncingRun = true;
+    try { await performSyncRunNow(); }
+    finally { syncingRun = false; }
+  }
+
+  async function performSyncRunNow() {
     const r = run.data;
-    if (!r || !r.plan_id) return;
+    if (!r || !r.plan_id || r.status !== 'running') return;
+    if (!await flushSaves()) return;
 
     setStatus('正在与方案同步…');
     try {
-      const { data: planSteps } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+      const { data: planSteps, error: planError } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+      if (planError) throw planError;
       if (!planSteps || !planSteps.length) { setStatus('这个方案没有步骤，无法同步。', 'warn'); return; }
 
+      SciHubSafety.assertSafeStepSync(planSteps, run.steps);
       const byPos = {};
       run.steps.forEach((s) => { byPos[s.position] = s; });
       let n = 0;
@@ -1889,6 +1806,7 @@
             instruction: ps.instruction || '',
             notice: ps.notice || '',
             pyro_seq: ps.pyro_seq || '',
+            duration_hint: ps.duration_hint || '',
             fields: ps.fields || [],
             values: {},
             images: [],
@@ -1907,22 +1825,25 @@
           instruction: ps.instruction || '',
           notice: ps.notice || '',
           pyro_seq: ps.pyro_seq || '',
+            duration_hint: ps.duration_hint || '',
           fields: newFields,
           values: values,
         };
 
-        const before = JSON.stringify([s.title, s.instruction, s.notice, s.pyro_seq || '', s.fields || [], s.values]);
-        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.fields, next.values]);
+        const before = JSON.stringify([s.title, s.instruction, s.notice, s.pyro_seq || '', s.duration_hint || '', s.fields || [], s.values]);
+        const after = JSON.stringify([next.title, next.instruction, next.notice, next.pyro_seq, next.duration_hint, next.fields, next.values]);
         if (before === after) continue;
 
-        const { error } = await client.from(RUN_STEP).update(next).eq('id', s.id);
+        const { data: saved, error } = await client.from(RUN_STEP).update(next).eq('id', s.id).eq('updated_at', s.updated_at).select('updated_at').maybeSingle();
+        if (!error && !saved) throw new Error('步骤已在他端修改，请重新核对');
+        if (saved) next.updated_at = saved.updated_at;
         if (error) throw error;
         Object.assign(s, next);
         n += 1;
       }
 
       run.steps.sort((a, b) => a.position - b.position);
-      run.drift = { same: true, added: [], removed: [], changed: [], fieldAdded: [], fieldRemoved: [] };
+      run.drift = await planDiff(r);
       setStatus(n ? ('已与方案同步，更新了 ' + n + ' 处。') : '已经和方案一致，无需改动。', 'ok');
       drawRun();
     } catch (err) {
@@ -1937,8 +1858,20 @@
      实验里就会多出末尾一步，内容和上一步一样，而方案里已经没有它。
      表现：执行界面一直显示「方案已删 N 步（实验里还有）」，点「立即同步」怎么都不消失。 */
   async function dropExtraSteps() {
+    if (syncingRun) return;
+    syncingRun = true;
+    try { await performDropExtraSteps(); }
+    finally { syncingRun = false; }
+  }
+
+  async function performDropExtraSteps() {
     const r = run.data;
-    if (!r || !r.plan_id) return;
+    if (!r || !r.plan_id || r.status !== 'running') return;
+    if (!await flushSaves()) return;
+    const { data: planSteps, error: planError } = await client.from(STEP).select('*').eq('plan_id', r.plan_id).order('position');
+    if (planError) { setStatus('无法核对方案，已取消清理。', 'error'); return; }
+    try { SciHubSafety.assertSafeStepSync(planSteps || [], run.steps); }
+    catch (err) { setStatus(errorText(err), 'warn'); return; }
 
     // 动手前把差异重新算一遍：别的设备刚改过方案时，界面上那份旧差异可能已经过时，
     // 拿它去删就可能删掉方案里其实还在的步骤。核对失败就直接不动手。
@@ -2034,12 +1967,18 @@
     ]);
   }
 
+  let runRenderSequence = 0;
   async function renderRun(runId) {
+    const sequence = ++runRenderSequence;
+    const isCurrent = () => sequence === runRenderSequence && !host.hidden && state.user && state.user.id === ownerId;
     const host = $('view-run');
     host.innerHTML = '<div class="empty">加载中…</div>';
 
-    const { data: r } = await client.from(RUN).select('*').eq('id', runId).maybeSingle();
-    const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
+    const ownerId = state.user && state.user.id;
+    const { data: r, error: runError } = await client.from(RUN).select('*').eq('id', runId).maybeSingle();
+    const { data: steps, error: stepsError } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
+    if (!isCurrent()) return;
+    if (runError || stepsError) { host.innerHTML = '<div class="empty">实验加载失败，请稍后重试。</div>'; return; }
     if (!r) { host.innerHTML = '<div class="empty">实验记录不存在。</div>'; return; }
 
     run.id = runId;
@@ -2056,6 +1995,7 @@
     const linkIds = [...new Set(run.steps.map((s) => s.link_run_id).filter(Boolean))];
     if (linkIds.length) {
       const { data: linkedRuns } = await client.from(RUN).select('id,title').in('id', linkIds);
+      if (!isCurrent()) return;
       (linkedRuns || []).forEach((x) => { run.linked[x.id] = x.title; });
     }
 
@@ -2065,6 +2005,7 @@
 
     if (paths.length) {
       const { data: signedList, error: signError } = await client.storage.from(BUCKET).createSignedUrls(paths, 60 * 60 * 24);
+      if (!isCurrent()) return;
       (signedList || []).forEach((item) => {
         if (item && item.path && item.signedUrl) run.urls[item.path] = item.signedUrl;
         else if (item && item.path) run.urlErrors[item.path] = errorText(item.error) || '无法读取';
@@ -2082,6 +2023,7 @@
     run.mergedFrom = [];
     try {
       const { data: intoMe } = await client.from(RUN_STEP).select('run_id,position').eq('link_run_id', runId);
+      if (!isCurrent()) return;
       if (intoMe && intoMe.length) {
         run.mergeCut = Math.max.apply(null, intoMe.map((x) => x.position));
         run.mergedFrom = intoMe.map((x) => x.run_id);
@@ -2109,12 +2051,18 @@
       const needTitles = (run.mergedFrom || []).filter((id) => !run.peers.some((p) => p.id === id));
       if (needTitles.length) {
         const { data: mergedRuns } = await client.from(RUN).select('id,title').in('id', needTitles);
+        if (!isCurrent()) return;
         (mergedRuns || []).forEach((x) => run.peers.push({ id: x.id, title: x.title }));
       }
     }
 
     // 与方案对齐检查：方案后来增/删/改过步骤就会记下差异，界面顶部实时提示
-    try { run.drift = await planDiff(r); } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
+    try {
+      const drift = await planDiff(r);
+      if (!isCurrent()) return;
+      run.drift = drift;
+    } catch (err) { console.warn('[SciHub] 方案差异检查失败：', err); }
+    if (!isCurrent()) return;
 
     subscribeRun(runId);          // 多端实时同步（本实验的填写内容）
     subscribePlan(r.plan_id);     // 方案被改动时，立刻重新做一次对齐检查
@@ -2130,26 +2078,30 @@
   function subscribeRun(runId) {
     unsubscribeRun();
     try {
-      runChannel = client
-        .channel('run-steps-' + runId)
-        .on('postgres_changes', {
-          event: '*', schema: 'public', table: 'run_steps', filter: 'run_id=eq.' + runId,
-        }, (payload) => {
-          // 本机正在输入时不打断（避免把他端推来的内容盖到用户光标上）
-          if (run.saveTimer) return;
-          const row = payload.new || payload.old;
+      runChannel = client.channel('run-steps-' + runId)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'run_steps', filter: 'run_id=eq.' + runId }, (payload) => {
+          if (Number(run.id) !== Number(runId)) return;
+          const row = payload.eventType === 'DELETE' ? payload.old : payload.new;
           if (!row || row.id == null) return;
-
-          const idx = run.steps.findIndex((x) => x.id === row.id);
-          if (idx === -1) return;
-
-          run.steps[idx] = Object.assign({}, run.steps[idx], row);
-          if (idx === run.pos) drawRun();
+          const index = run.steps.findIndex((step) => step.id === row.id);
+          if (index !== -1 && saveQueue.isDirty(run.steps[index])) {
+            // Preserve local input. The timestamp condition will detect conflicts.
+            return;
+          }
+          if (payload.eventType === 'DELETE') {
+            if (index !== -1) run.steps.splice(index, 1);
+          } else if (index === -1) run.steps.push(row);
+          else Object.assign(run.steps[index], row);
+          run.steps.sort((a, b) => a.position - b.position);
+          const host = $('view-run');
+          if (host && !host.hidden) drawRun();
         })
-        .subscribe();
-    } catch (err) {
-      console.warn('[SciHub] 实时同步不可用（不影响保存）：', err);
-    }
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'experiment_runs', filter: 'id=eq.' + runId }, (payload) => {
+          if (Number(run.id) !== Number(runId) || !payload.new || !payload.new.id) return;
+          Object.assign(run.data, payload.new);
+          if (!saveQueue.hasPending() && !$('view-run').hidden) drawRun();
+        }).subscribe();
+    } catch (err) { console.warn('[SciHub] 实时同步不可用：', err); }
   }
 
   function unsubscribeRun() {
@@ -2172,11 +2124,15 @@
           event: '*', schema: 'public', table: 'plan_steps', filter: 'plan_id=eq.' + planId,
         }, async () => {
           if (!run.data || run.data.plan_id !== planId) return;
-          if (run.saveTimer) return;          // 本机正在输入时先不打扰
+          if (saveQueue.hasPending()) return;          // 本机正在输入时先不打扰
+          const activeId = run.id, sequence = runRenderSequence;
           try {
-            const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', run.id).order('position');
+            const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', activeId).order('position');
+            if (run.id !== activeId || runRenderSequence !== sequence || saveQueue.hasPending()) return;
             if (steps) run.steps = steps;
-            run.drift = await planDiff(run.data);
+            const drift = await planDiff(run.data);
+            if (run.id !== activeId || runRenderSequence !== sequence || saveQueue.hasPending()) return;
+            run.drift = drift;
             drawRun();
             setStatus(
               run.drift.same ? '已与方案同步。' : '方案有改动，与本次实验不一致 —— 点上方「立即同步」即可对齐。',
@@ -2237,15 +2193,8 @@
       const k = keys[Number(cb.dataset.checkToggle)];
       const nextChecks = Object.assign({}, s.checks || {}, { [k]: cb.checked });
       s.checks = nextChecks;
-      const { error } = await client.from(RUN_STEP).update({ checks: nextChecks }).eq('id', s.id);
-      if (error) {
-        console.error('[SciHub] 勾选保存失败：', error);
-        setStatus('勾选保存失败：' + errorText(error), 'error');
-        s.checks = Object.assign({}, s.checks || {}, { [k]: !cb.checked });
-        drawRun();
-        return;
-      }
-      drawRun();   // 重新渲染：进度条/步骤圆点立刻反映这次勾选
+      scheduleSave(s);
+      drawChecks(s);
     }));
   }
 
@@ -2260,6 +2209,7 @@
     const s = run.steps[run.pos];
     if (!s) { host.innerHTML = '<div class="empty">没有可执行的步骤。</div>'; return; }
 
+    const readOnly = run.data.status !== 'running';
     const done = run.steps.slice(0, total).filter((x) => x.status === 'done').length;
 
     // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤（只在可见范围内看）。
@@ -2291,11 +2241,12 @@
     host.innerHTML = [
       '<div class="run-head">',
       '  <div><b>' + esc(run.data.title) + '</b>',
-      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + ' · 已进行 ' + sinceText(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成' : '') + '</div>',
+      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + ' · 已进行 ' + sinceText(run.data.started_at) + (run.data.status === 'done' ? ' · 已完成（只读）' : '') + '</div>',
       '  </div>',
       '  <div class="hc-actions">',
       // 导出统一放在主页的「进行中的实验」卡片上，这里不再重复一个入口
       '    <button type="button" class="ghost" id="run-exit">返回主页</button>',
+      '    <button type="button" class="ghost" id="run-export">导出 Word</button>',
       '  </div>',
       '</div>',
 
@@ -2469,6 +2420,8 @@
     }
 
     $('run-exit').addEventListener('click', () => route('home'));
+    $('run-export').addEventListener('click', () => exportRunData(run.id));
+    if (readOnly) host.querySelectorAll('#fields input, #fields textarea, #checks input, #photos input, #photos .photo-drop, #photos .photo-add, #run-next, #run-sync-now, #run-drop-extra, #set-progress, #link-add, #link-edit, #link-del, #pyro-seq, #pyro-room, #pyro-rate, #pyro-final').forEach((node) => { node.disabled = true; });
 
     // ── 步骤关联其它实验 ────────────────────────────────
     // 场景：v5.1 的第 7 步「酸洗」是和 v5 一起做的 —— 混料后统一酸洗。
@@ -2494,53 +2447,10 @@
       return true;
     };
 
-    const openLinkDialog = async () => {
-      const st = curStep();
-      const { data: others } = await client
-        .from(RUN)
-        .select('id,title,status,started_at')
-        .neq('id', run.id)
-        .order('started_at', { ascending: false });
-
-      const opts = (others || []).map((o) => '<option value="' + o.id + '"'
-        + (String(st.link_run_id) === String(o.id) ? ' selected' : '') + '>'
-        + esc(o.title) + (o.status === 'done' ? '（已完成）' : '') + '</option>').join('');
-
-      openModal('关联其它实验', [
-        '<label>关联到哪个实验',
-        '  <select id="link-select">',
-        '    <option value="">— 请选择 —</option>',
-        opts,
-        '  </select>',
-        '</label>',
-        '<label>关联说明',
-        '  <textarea id="link-note" rows="3" placeholder="如：混合 v5.1 和 v5 的热解后材料，然后进行酸洗">'
-          + esc(st.link_note || '') + '</textarea>',
-        '</label>',
-        '<p class="hint small">关联后，主页会把这两条实验合并成一条显示。</p>',
-      ].join(''), [
-        { label: '取消', onClick: closeModal },
-        {
-          label: '保存',
-          primary: true,
-          onClick: async () => {
-            const id = $('link-select').value ? Number($('link-select').value) : null;
-            if (!id) { setStatus('请先选择要关联的实验。', 'error'); return; }
-            const note = ($('link-note').value || '').trim();
-            if (await saveLink(id, note || null)) {
-              closeModal();
-              setStatus('已关联，主页会合并显示这两条实验。', 'ok');
-              drawRun();
-            }
-          },
-        },
-      ]);
-    };
-
     const linkAdd = $('link-add');
-    if (linkAdd) linkAdd.addEventListener('click', openLinkDialog);
+    if (linkAdd) linkAdd.addEventListener('click', () => linkRun(run.id));
     const linkEdit = $('link-edit');
-    if (linkEdit) linkEdit.addEventListener('click', openLinkDialog);
+    if (linkEdit) linkEdit.addEventListener('click', () => linkRun(run.id));
     const linkDel = $('link-del');
     if (linkDel) linkDel.addEventListener('click', async () => {
       if (await saveLink(null, null)) {
@@ -2558,7 +2468,7 @@
     }));
 
     $('run-prev').addEventListener('click', () => { run.pos--; drawRun(); });
-    $('run-next').addEventListener('click', () => (isLast ? finishRun() : nextStep()));
+    $('run-next').addEventListener('click', () => (isLast && cut == null ? finishRun() : nextStep()));
     const syncBtn = $('run-sync-now');
     if (syncBtn) syncBtn.addEventListener('click', syncRunNow);
     const dropExtraBtn = $('run-drop-extra');
@@ -2946,7 +2856,7 @@
       host.innerHTML = '<p class="hint small">这一步没有预设字段，可在下方备注里记录。</p>';
     } else {
       host.innerHTML = fields.map((f, i) => {
-        const value = (s.values || {})[f.label] || '';
+        const value = (s.values || {})[f.label] ?? '';
         const type = fieldTypeOf(f);
         const head = '<label>' + esc(f.label) + (f.unit ? '<span class="unit">(' + esc(f.unit) + ')</span>' : '') + '</label>';
         const parts = splitDateTime(value);
@@ -3065,7 +2975,7 @@
       }
 
       return [
-        '<figure class="photo" data-path="' + esc(img.path) + '" data-media="' + idx + '" draggable="true" title="可拖动调整顺序">',
+        '<figure class="photo" data-path="' + esc(img.path) + '" data-media="' + idx + '" draggable="' + (run.data.status === 'running') + '" title="照片 / 视频">',
         '  <button type="button" class="photo-open" data-zoom="' + idx + '" title="' + (video ? '点击播放' : '点击放大查看') + '">',
         '    ' + inner,
         '  </button>',
@@ -3091,6 +3001,11 @@
         openLightbox(s, Number(b.dataset.zoom));
       });
     });
+
+    if (run.data.status !== 'running') {
+      host.querySelectorAll('input, .photo-drop, .photo-add').forEach((node) => { node.disabled = true; });
+      return;
+    }
 
     // 拖动缩略图调整顺序；顺序会被保存，导出的 Word 文档也按这个顺序排照片。
     // 桌面走原生 HTML5 拖拽；手机触屏没有 drag 事件，用 Pointer Events 做「长按拖动」。
@@ -3202,9 +3117,11 @@
     host.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', async () => {
       const path = b.dataset.drop;
       if (!window.confirm('删除这张照片？')) return;
-      await client.storage.from(BUCKET).remove([path]);
+      const previous = s.images;
       s.images = (s.images || []).filter((x) => x.path !== path);
-      await saveStep(s, true);
+      if (!await saveStep(s, true)) { s.images = previous; return; }
+      const { error } = await client.storage.from(BUCKET).remove([path]);
+      if (error) setStatus('附件引用已移除，但云端文件未删除：' + errorText(error), 'warn');
       drawPhotos(s);
     }));
   }
@@ -3219,6 +3136,7 @@
     const zip = new JSZip();
 
     const xml = (s) => String(s == null ? '' : s)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
@@ -3336,8 +3254,8 @@
   }
 
   /* 取图片的二进制与原始尺寸，供 docx 嵌入 */
-  async function fetchImageForDocx(path) {
-    const url = run.urls[path];
+  async function fetchImageForDocx(path, urls = run.urls) {
+    const url = urls[path];
     if (!url) return null;
     try {
       const res = await fetch(url);
@@ -3353,7 +3271,17 @@
         if (bmp.close) bmp.close();
       } catch (_e) { /* 取不到尺寸就用默认值，只影响显示大小 */ }
 
-      return { data: buf, mime: res.headers.get('content-type') || 'image/jpeg', w: w, h: h };
+      const mime = String(res.headers.get('content-type') || '').split(';')[0];
+      if (/^image\/(jpeg|png)$/.test(mime)) return { data: buf, mime, w, h };
+      if (!/^image\//.test(mime)) return null;
+      const bitmap = await createImageBitmap(new Blob([buf], { type: mime }));
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width; canvas.height = bitmap.height;
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      if (bitmap.close) bitmap.close();
+      const converted = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!converted) return null;
+      return { data: await converted.arrayBuffer(), mime: 'image/png', w: canvas.width, h: canvas.height };
     } catch (err) {
       console.warn('[SciHub] 图片读取失败，导出时跳过：', path, err);
       return null;
@@ -3363,217 +3291,95 @@
   /* 收集这条实验所属的「合并组」信息：参与哪些实验、合并点在哪、各实验合并点之前的步骤。
      导出时用它把整组的记录写进同一份文档，保证导出内容和关联信息对得上。 */
   async function collectMergeInfo(runId) {
-    try {
-      if (!runId) return null;
-
-      const { data: outLinks } = await client.from(RUN_STEP)
-        .select('run_id,position,title,link_run_id,link_note')
-        .eq('run_id', runId).not('link_run_id', 'is', null);
-      const { data: inLinks } = await client.from(RUN_STEP)
-        .select('run_id,position,title,link_run_id,link_note')
-        .eq('link_run_id', runId);
-
-      const links = [];
-      (outLinks || []).forEach((x) => links.push({ from: runId, to: x.link_run_id, position: x.position, note: x.link_note }));
-      (inLinks || []).forEach((x) => links.push({ from: x.run_id, to: runId, position: x.position, note: x.link_note }));
-      if (!links.length) return null;               // 没有任何关联就是普通实验
-
-      const ids = [...new Set(links.reduce((acc, l) => acc.concat([l.from, l.to]), [runId]))];
-
-      const { data: runs } = await client.from(RUN).select('id,title,started_at,current_step,status').in('id', ids);
-      const runById = {};
-      (runs || []).forEach((r) => { runById[r.id] = r; });
-
-      // 合并点 = 组里最早被关联的那一步
-      const linkAt = Math.min.apply(null, links.map((l) => l.position));
-
-      // 各实验在合并点之前的步骤（连同填写的数据与照片信息）
-      const stepsById = {};
-      for (const id of ids) {
-        const { data: st } = await client.from(RUN_STEP).select('*').eq('run_id', id).order('position');
-        stepsById[id] = (st || []).filter((x) => x.position <= linkAt);
+    if (!runId) return null;
+    const { data: linkedSteps, error: linksError } = await client.from(RUN_STEP)
+      .select('run_id,position,link_run_id,link_note').not('link_run_id', 'is', null);
+    if (linksError) throw linksError;
+    const ids = new Set([Number(runId)]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const step of linkedSteps || []) {
+        if (!ids.has(Number(step.run_id)) && !ids.has(Number(step.link_run_id))) continue;
+        for (const id of [Number(step.run_id), Number(step.link_run_id)]) if (!ids.has(id)) { ids.add(id); changed = true; }
       }
-
-      return {
-        links: links,
-        runs: ids.map((id) => runById[id]).filter(Boolean),
-        linkAt: linkAt,
-        stepsById: stepsById,
-      };
-    } catch (err) {
-      console.warn('[SciHub] 合并信息收集失败：', err);
-      return null;
     }
+    const links = (linkedSteps || []).filter((step) => ids.has(Number(step.run_id)))
+      .map((step) => ({ from: step.run_id, to: step.link_run_id, position: step.position, note: step.link_note }));
+    if (!links.length) return null;
+    const { data: members, error: runsError } = await client.from(RUN).select('*').in('id', [...ids]);
+    const { data: steps, error: stepsError } = await client.from(RUN_STEP).select('*').in('run_id', [...ids]).order('position');
+    if (runsError || stepsError) throw runsError || stepsError;
+    const stepsById = {};
+    for (const step of steps || []) (stepsById[step.run_id] ||= []).push(step);
+    return { links, runs: members || [], linkAt: Math.min(...links.map((link) => link.position)), stepsById };
   }
 
   /* 把一次实验的步骤、填写数据与照片导成 Word 文档。
      不传 runId 就导当前打开的那次；传了则按 id 读进来（主页的导出按钮用）。 */
   async function exportRunData(runId) {
+    if (!await flushSaves()) return;
+    const id = runId || run.id;
     try {
-      if (runId && (run.id !== runId || !run.data)) {
-        setStatus('正在读取实验数据…');
-        const { data: r } = await client.from(RUN).select('*').eq('id', runId).maybeSingle();
-        const { data: steps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
-        if (!r) { setStatus('找不到这次实验。', 'error'); return; }
-
-        run.id = runId;
-        run.data = r;
-        run.steps = steps || [];
-        run.urls = {};
-        run.urlErrors = {};
-
-        const paths = [];
-        run.steps.forEach((s) => (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); }));
-        if (paths.length) {
-          const { data: signedList } = await client.storage.from(BUCKET).createSignedUrls(paths, 60 * 60 * 24);
-          (signedList || []).forEach((it) => { if (it && it.path && it.signedUrl) run.urls[it.path] = it.signedUrl; });
-        }
+      const { data: current, error: runError } = await client.from(RUN).select('*').eq('id', id).maybeSingle();
+      const { data: steps, error: stepsError } = await client.from(RUN_STEP).select('*').eq('run_id', id).order('position');
+      if (runError || stepsError) throw runError || stepsError;
+      if (!current || !steps || !steps.length) { setStatus('没有可导出的实验数据。', 'warn'); return; }
+      const merge = await collectMergeInfo(id);
+      const members = merge ? merge.runs : [current];
+      const stepsById = merge ? merge.stepsById : { [id]: steps };
+      const paths = [...new Set(Object.values(stepsById).flatMap((list) => list.flatMap((step) => (step.images || []).map((image) => image.path))).filter(Boolean))];
+      const urls = {};
+      if (paths.length) {
+        const { data: signed, error } = await client.storage.from(BUCKET).createSignedUrls(paths, 3600);
+        if (error) throw error;
+        for (const item of signed || []) if (item.signedUrl) urls[item.path] = item.signedUrl;
       }
-
-      if (!run.data || !run.steps.length) { setStatus('还没有可导出的数据。', 'warn'); return; }
-
-      // 只导出到「当前进行到的步骤」为止 —— 还没做到的那几步不写进文档。
-      // 实验做完时 current_step 已是最后一步，所以等于全量导出。
-      const cur = Math.min(Math.max(0, Number(run.data.current_step) || 0), run.steps.length - 1);
-
       setStatus('正在生成 Word 文档…');
-      const title = run.data.title || '实验';
-
-      // 这条实验属于某个合并组吗？属于的话，文档要保留整组的完整信息：
-      // 参与哪些实验、在哪些步骤合并、各实验合并前的记录、以及合并后的数据。
-      const merge = await collectMergeInfo(runId || run.id);
-
-      // 合并组：合并点之前的记录归到第一部分，这里只写合并点之后的共同数据
-      const from = merge ? merge.linkAt : 0;
-      const upto = run.steps.filter((s) => s.position <= cur && s.position >= from);
-
-      const paras = [
-        { text: (merge ? '实验记录（合并） · 合并实验数据' : '实验记录 · ' + title), bold: true, size: 16, align: 'center' },
-        {
-          text: '开始于 ' + fmt(run.data.started_at)
-            + (run.data.status === 'done' ? ' · 已完成' : ' · 进行中')
-            + ' · 已做到第 ' + (cur + 1) + ' 步（共 ' + run.steps.length + ' 步）'
-            + (merge ? ' · 合并组共 ' + merge.runs.length + ' 个实验' : ''),
-          size: 9, align: 'center',
-        },
-        '',
-      ];
-
-      // ── 一、合并信息 ──
+      const paragraphs = [{ text: '实验记录' + (merge ? '（关联实验）' : '') + ' · ' + current.title, bold: true, size: 16, align: 'center' }];
       if (merge) {
-        paras.push({ text: '合并信息', bold: true, size: 13, color: '0F766E' });
-        paras.push({ text: '参与合并的实验（共 ' + merge.runs.length + ' 个）：', size: 10 });
-        merge.runs.forEach((x) => {
-          paras.push({ text: '　· ' + x.title, size: 10 });
-        });
-        paras.push({
-          text: '合并点：第 ' + (merge.linkAt + 1) + ' 步 —— 到这一步为止各实验分开做，之后合在一起做。',
-          size: 10,
-        });
-        merge.links.forEach((l) => {
-          const a = (merge.runs.find((x) => x.id === l.from) || {}).title || '';
-          const b = (merge.runs.find((x) => x.id === l.to) || {}).title || '';
-          paras.push({
-            text: '　⇄ 第 ' + (l.position + 1) + ' 步：「' + a + '」→「' + b + '」' + (l.note ? '　' + l.note : ''),
-            size: 10,
-          });
-        });
-        paras.push('');
-
-        // ── 二、各实验在合并点之前的记录 ──
-        paras.push({ text: '一、合并前的各实验记录（截至合并点）', bold: true, size: 13, color: '0F766E' });
-        paras.push('');
-        for (const x of merge.runs) {
-          const st = merge.stepsById[x.id] || [];
-          paras.push({
-            text: '【' + x.title + '】开始于 ' + fmt(x.started_at) + ' · 合并点前共 ' + st.length + ' 个步骤',
-            bold: true, size: 11,
-          });
-          if (!st.length) paras.push({ text: '　（合并点之前还没有记录）', size: 9, color: '666666' });
-
-          st.forEach((s) => {
-            paras.push({ text: '　第 ' + (s.position + 1) + ' 步　' + (s.title || ''), bold: true, size: 10, color: '333333' });
-            if (s.pyro_seq) paras.push({ text: '　　热解程序：' + s.pyro_seq, size: 9 });
-            if (s.duration_hint) paras.push({ text: '　　时长提示：' + s.duration_hint, size: 9 });
-            noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '　　⚠ ' + line, size: 9, color: 'C05621' }));
-            if (s.instruction) paras.push({ text: '　　' + s.instruction, size: 9 });
-
-            const f = s.fields || [];
-            const v = s.values || {};
-            if (f.length) {
-              f.forEach((fd) => {
-                const val = v[fd.label];
-                paras.push({
-                  text: '　　· ' + fd.label + '：' + ((val == null || val === '') ? '（未填）' : val)
-                    + (fd.unit ? ' ' + fd.unit : ''),
-                  size: 9,
-                });
-              });
-            }
-            if (String(s.note || '').trim()) paras.push({ text: '　　备注：' + s.note, size: 9 });
-            const nImg = (s.images || []).filter((i) => !isVideoFile(i)).length;
-            if (nImg) paras.push({ text: '　　（照片 ' + nImg + ' 张，见下方合并实验数据部分）', size: 9, color: '666666' });
-          });
-          paras.push('');
+        paragraphs.push({ text: '关联信息', bold: true, size: 13 });
+        for (const link of merge.links) {
+          const title = (memberId) => (members.find((member) => Number(member.id) === Number(memberId)) || {}).title || ('实验 #' + memberId);
+          paragraphs.push({ text: title(link.from) + ' → ' + title(link.to) + ' · 第 ' + (link.position + 1) + ' 步' + (link.note ? ' · ' + link.note : ''), size: 10 });
         }
-
-        // ── 三、合并后的数据记录（合并实验数据，不属于任何单一实验） ──
-        paras.push({ text: '二、合并后的数据记录（合并实验数据）', bold: true, size: 13, color: '0F766E' });
-        paras.push({ text: '从第 ' + (merge.linkAt + 1) + ' 步开始的共同操作与数据：', size: 9, color: '666666' });
-        if (!upto.length) paras.push({ text: '　（还没做到合并点，暂无合并后的记录）', size: 9, color: '666666' });
-        paras.push('');
+        paragraphs.push({ text: '以下按各实验保存的快照分别列出，保留合并前后数据与附件。', size: 10 });
       }
-
-      let imgTotal = 0;
-
-      for (const s of upto) {
-        paras.push({ text: '第 ' + (s.position + 1) + ' 步　' + (s.title || ''), bold: true, size: 13, color: '0F766E' });
-        if (s.pyro_seq) paras.push({ text: '热解程序：' + s.pyro_seq, size: 10 });
-        if (s.duration_hint) paras.push({ text: '时长提示：' + s.duration_hint, size: 10 });
-        // 注意事项用橙色标出，和界面里的警示条呼应
-        noticeLines(s).filter(Boolean).forEach((line) => paras.push({ text: '⚠ ' + line, size: 10, color: 'C05621' }));
-        if (s.instruction) paras.push({ text: s.instruction, size: 10 });
-
-        const fields = s.fields || [];
-        const vals = s.values || {};
-        if (fields.length) {
-          paras.push({ text: '填写数据', bold: true, size: 10 });
-          fields.forEach((f) => {
-            const v = vals[f.label];
-            const shown = (v == null || v === '') ? '（未填）' : v;
-            paras.push({ text: '　· ' + f.label + '：' + shown + (f.unit ? ' ' + f.unit : ''), size: 10 });
-          });
+      let imageTotal = 0, missingImages = 0;
+      for (const member of members) {
+        paragraphs.push('', { text: member.title, bold: true, size: 13 });
+        paragraphs.push({ text: '开始：' + fmt(member.started_at) + (member.finished_at ? ' · 结束：' + fmt(member.finished_at) : '') + ' · ' + (member.status === 'done' ? '已完成' : '进行中'), size: 10 });
+        const savedSteps = stepsById[member.id] || [];
+        const position = member.status === 'done' ? Infinity : Number(member.current_step) || 0;
+        for (const step of savedSteps.filter((item) => item.position <= position)) {
+          paragraphs.push('', { text: '第 ' + (step.position + 1) + ' 步 · ' + step.title, bold: true, size: 12 });
+          if (step.started_at || step.finished_at) paragraphs.push({ text: '步骤时间：' + fmt(step.started_at) + ' → ' + fmt(step.finished_at), size: 10 });
+          if (step.instruction) paragraphs.push({ text: step.instruction, size: 10 });
+          if (step.pyro_seq) paragraphs.push({ text: '热解程序：' + step.pyro_seq, size: 10 });
+          if (step.duration_hint) paragraphs.push({ text: '时长提示：' + step.duration_hint, size: 10 });
+          noticeLines(step).forEach((line) => paragraphs.push({ text: '注意：' + line, size: 10 }));
+          const values = step.values || {}, labels = new Set();
+          for (const field of step.fields || []) {
+            labels.add(field.label);
+            paragraphs.push({ text: field.label + '：' + (values[field.label] ?? '（未填）') + (field.unit ? ' ' + field.unit : ''), size: 10 });
+          }
+          for (const label of Object.keys(values)) if (!labels.has(label) && values[label] !== '' && values[label] != null) paragraphs.push({ text: '历史字段 ' + label + '：' + values[label], size: 10 });
+          for (const [label, checked] of Object.entries(step.checks || {})) paragraphs.push({ text: label + '：' + (checked ? '已完成' : '未完成'), size: 10 });
+          if (step.note) paragraphs.push({ text: '备注：' + step.note, size: 10 });
+          for (const image of step.images || []) {
+            if (isVideoFile(image)) { paragraphs.push({ text: '视频附件（未嵌入）：' + (image.name || image.path) + (image.caption ? ' · ' + image.caption : ''), size: 9 }); continue; }
+            const binary = await fetchImageForDocx(image.path, urls);
+            if (!binary) { missingImages++; paragraphs.push({ text: '图片暂无法读取：' + (image.name || image.path), size: 9 }); continue; }
+            imageTotal++;
+            paragraphs.push({ text: '照片 ' + imageTotal + (image.caption ? '：' + image.caption : ''), size: 9 }, { image: binary });
+          }
         }
-        if (s.note) paras.push({ text: '备注：' + s.note, size: 10 });
-
-        // 照片按当前顺序嵌进文档（拖动排序后，这里也就是拖后的顺序）
-        const imgs = s.images || [];
-        let n = 0;
-        for (const img of imgs) {
-          if (isVideoFile(img)) continue;              // 视频无法嵌入文档
-          const bin = await fetchImageForDocx(img.path);
-          if (!bin) continue;
-          n += 1;
-          imgTotal += 1;
-          paras.push({ text: '照片 ' + n + (img.caption ? '：' + img.caption : ''), size: 9, color: '666666' });
-          paras.push({ image: bin });
-        }
-        const skipped = imgs.filter(isVideoFile).length;
-        if (skipped) paras.push({ text: '（另有 ' + skipped + ' 个视频未嵌入文档）', size: 9, color: '666666' });
-
-        paras.push('');
       }
-
-      const blob = await buildDocx(paras);
-      const safe = String(title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
-      // 文件名统一带「实验记录」前缀，方便和方案 / 其它文档区分
-      downloadBlob(blob, '实验记录-' + safe + '-' + new Date().toISOString().slice(0, 10) + '.docx');
-      setStatus('已导出到第 ' + (cur + 1) + ' 步（共 ' + upto.length + ' 个步骤'
-        + (imgTotal ? '、' + imgTotal + ' 张照片' : '') + '）。', 'ok');
-    } catch (err) {
-      console.error('[SciHub] 导出失败：', err);
-      setStatus('导出失败：' + errorText(err), 'error');
-    }
+      const blob = await buildDocx(paragraphs);
+      const filename = String(current.title).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+      downloadBlob(blob, '实验记录-' + filename + '-' + SciHubSafety.localDate() + '.docx');
+      setStatus('已导出 ' + members.length + ' 个实验、' + imageTotal + ' 张照片。' + (missingImages ? missingImages + ' 张图片未能读取，文档已标明。' : ''), missingImages ? 'warn' : 'ok');
+    } catch (err) { setStatus('导出失败：' + errorText(err), 'error'); }
   }
 
   /* ── 灯箱：放大查看 / 播放 / 存到设备 ─────────────────── */
@@ -3687,51 +3493,72 @@
 
   /* ── 实时保存（输入停下 1 秒后写库）──────────────────── */
 
-  function scheduleSave(s) {
-    $('autosave').textContent = '编辑中…';
-    if (run.saveTimer) clearTimeout(run.saveTimer);
-    run.saveTimer = setTimeout(() => saveStep(s), 1000);
+  function autosaveStatus(step, message) {
+    const node = $('autosave');
+    if (node && Number(run.id) === Number(step.run_id)) node.textContent = message;
   }
 
-  async function saveStep(s, immediate) {
-    if (run.saveTimer && immediate) { clearTimeout(run.saveTimer); run.saveTimer = null; }
-    const { error } = await client.from(RUN_STEP).update({
-      values: s.values || {},
-      note: s.note || '',
-      images: s.images || [],
-      status: s.status,
-      started_at: s.started_at,
-      finished_at: s.finished_at,
-    }).eq('id', s.id);
+  const saveQueue = SciHubSafety.createSaveQueue(writeStep, {
+    onError: (error, step) => {
+      autosaveStatus(step, '未保存：' + errorText(error));
+      setStatus('实验数据未保存：' + errorText(error) + '。请保留页面并重试。', 'error');
+    },
+  });
 
-    // ── 从源头保证「进行到第几步」是对的 ──────────────────
-    // 在这一步填了任何东西，就把进度推进到这里。
-    // 以前只有点「完成并下一步」才推进；点快了或跳着填数据时，进度会停在
-    // 没真正做过的步骤上（v5 的进度停在「第 9 步」、其实只做到第 7 步，就是这么来的）。
-    // 顺手把「进度之后、却没有任何填写痕迹」的完成标记清掉 —— 那是点快留下的绿圈。
-    if (!error) {
-      const pos = Number(s.position);
-      if (Number.isFinite(pos) && pos > (Number(run.data.current_step) || 0)) {
-        run.data.current_step = pos;
-        await client.from(RUN).update({
-          current_step: pos,
-          updated_at: new Date().toISOString(),
-        }).eq('id', run.id);
-      }
-      const from = Number.isFinite(pos) ? pos : 0;
-      const stale = run.steps.filter((x) => x.position > from && x.status === 'done' && !stepHasProgress(x));
-      for (let i = 0; i < stale.length; i++) {
-        stale[i].status = 'pending';
-        await client.from(RUN_STEP).update({ status: 'pending' }).eq('id', stale[i].id);
-      }
-    }
-    if (error) {
-      console.error('[SciHub] 保存步骤失败：', error);
-      $('autosave').textContent = '保存失败，请检查网络';
-      return;
-    }
-    $('autosave').textContent = '已保存 · ' + fmt(now());
+  function scheduleSave(step) {
+    if (run.data && run.data.status !== 'running') return;
+    autosaveStatus(step, '编辑中…');
+    saveQueue.schedule(step);
   }
+
+  async function writeStep(step) {
+    const ownerId = step.user_id;
+    if (!state.user || state.user.id !== ownerId) throw new Error('登录状态已改变，当前数据尚未保存');
+    const { data: parent, error: parentError } = await client.from(RUN).select('status').eq('id', step.run_id).single();
+    if (parentError) throw parentError;
+    if (parent.status !== 'running') throw new Error('实验已完成或终止，不能继续修改');
+    const payload = JSON.parse(JSON.stringify({
+      values: step.values || {}, note: step.note || '', images: step.images || [],
+      status: step.status, started_at: step.started_at, finished_at: step.finished_at,
+      ...(step.checks ? { checks: step.checks } : {}),
+    }));
+    let query = client.from(RUN_STEP).update(payload).eq('id', step.id).eq('run_id', step.run_id);
+    if (step.updated_at) query = query.eq('updated_at', step.updated_at);
+    const { data: saved, error } = await query.select('updated_at').maybeSingle();
+    if (error) throw error;
+    if (!saved) throw new Error('这一步已在其他设备修改或已被移除；本页的未保存内容仍保留，请先核对');
+    step.updated_at = saved.updated_at;
+
+    // Use the step's owner/run identity, never the currently displayed run.
+    const position = Number(step.position);
+    if (Number.isFinite(position) && stepHasProgress(step)) {
+      const { data: progressed, error: progressError } = await client.from(RUN)
+        .update({ current_step: position }).eq('id', step.run_id)
+        .eq('status', 'running').lt('current_step', position).select('current_step,updated_at').maybeSingle();
+      if (progressError) throw progressError;
+      if (progressed && Number(run.id) === Number(step.run_id)) Object.assign(run.data, progressed);
+    }
+    autosaveStatus(step, '已保存 · ' + fmt(now()));
+  }
+
+  async function saveStep(step) {
+    try { await saveQueue.save(step); return true; }
+    catch (err) {
+      autosaveStatus(step, '未保存：' + errorText(err));
+      setStatus('实验数据未保存：' + errorText(err) + '。请保留页面并重试。', 'error');
+      return false;
+    }
+  }
+
+  async function flushSaves() {
+    try { await saveQueue.flushAll(); return true; }
+    catch (err) { setStatus('仍有实验数据未保存：' + errorText(err) + '。请先重试保存。', 'error'); return false; }
+  }
+
+  window.addEventListener('beforeunload', (event) => {
+    if (!saveQueue.hasPending() && !savingDraft) return;
+    event.preventDefault(); event.returnValue = '';
+  });
 
   /* ── 图片上传（支持一次多张）─────────────────────────── */
 
@@ -3782,22 +3609,22 @@
     let ok = 0;
     let lastError = '';
     for (let i = 0; i < list.length; i++) {
-      $('autosave').textContent = '上传中… ' + (i + 1) + ' / ' + list.length;
+      autosaveStatus(s, '上传中… ' + (i + 1) + ' / ' + list.length);
       const result = await uploadPhoto(list[i], true, s);
       if (result === true) ok++;
       else if (typeof result === 'string') lastError = result;
     }
 
-    $('autosave').textContent = (ok === list.length)
+    autosaveStatus(s, (ok === list.length)
       ? ('已上传 ' + ok + ' 个 · ' + fmt(now()))
-      : ('已上传 ' + ok + ' / ' + list.length + ' 个' + (lastError ? '：' + lastError : ''));
+      : ('已上传 ' + ok + ' / ' + list.length + ' 个' + (lastError ? '：' + lastError : '')));
     // 只有还停在这一步时才重绘，否则会把用户当前看的步骤界面刷掉
     if (run.steps[run.pos] === s) drawPhotos(s);
   }
 
   async function uploadPhoto(file, silent, targetStep) {
     const s = targetStep || run.steps[run.pos];
-    const say = (txt) => { $('autosave').textContent = txt; };
+    const say = (txt) => autosaveStatus(s, txt);
 
     if (!silent) say('上传中…');
 
@@ -3806,7 +3633,7 @@
       const stamp = Date.now() + '-' + Math.floor(Math.random() * 100000);
       const safe = String(payload.name || 'photo.jpg').replace(/[^\w.\-]/g, '_');
       // 第一段目录必须是当前用户 id，才符合 Storage 的「只能读写自己目录」策略
-      const path = state.user.id + '/' + run.id + '/' + s.position + '/' + stamp + '-' + safe;
+      const path = s.user_id + '/' + s.run_id + '/' + s.position + '/' + stamp + '-' + safe;
 
       const { error } = await client.storage.from(BUCKET).upload(path, payload, {
         upsert: false,
@@ -3815,7 +3642,7 @@
       if (error) throw error;
 
       const { data: signed } = await client.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24);
-      if (signed) run.urls[path] = signed.signedUrl;
+      if (signed && Number(run.id) === Number(s.run_id)) run.urls[path] = signed.signedUrl;
 
       s.images = (s.images || []).concat([{
         path: path,
@@ -3824,8 +3651,8 @@
         caption: '',
         at: new Date().toISOString(),
       }]);
-      await saveStep(s, true);
-      if (!silent) drawPhotos(s);
+      if (!await saveStep(s, true)) throw new Error('文件已上传，但实验附件信息未保存；请保持页面并重试保存');
+      if (!silent && Number(run.id) === Number(s.run_id)) drawPhotos(s);
       return true;
     } catch (err) {
       console.error('[SciHub] 上传失败：', err, '| 文件：', file && file.name, file && file.size);
@@ -3837,7 +3664,13 @@
 
   /* ── 下一步 / 完成 ────────────────────────────────────── */
 
+  let advancingRun = false;
   async function nextStep() {
+    if (advancingRun || !run.data || run.data.status !== 'running') return;
+    advancingRun = true;
+    const button = $('run-next');
+    if (button) button.disabled = true;
+    try {
     const s = run.steps[run.pos];
 
     // 关联子实验：做到合并点就该停 —— 合并点之后是和大家一起做的
@@ -3847,14 +3680,15 @@
     if (!s.started_at) s.started_at = new Date().toISOString();
     s.status = 'done';
     s.finished_at = new Date().toISOString();
-    await saveStep(s, true);
+    if (!await saveStep(s, true)) return;
 
     // 已经到合并点：这次实验该做的部分做完了，不再往下走
     if (cut != null && run.pos >= total - 1) {
-      await client.from(RUN).update({
+      const { error: pointerError } = await client.from(RUN).update({
         current_step: run.pos,
         updated_at: new Date().toISOString(),
       }).eq('id', run.id);
+      if (pointerError) throw pointerError;
       setStatus('已做到合并点（第 ' + total + ' 步）。第 ' + (cut + 1) + ' 步及之后由合并后的实验一起做。', 'ok');
       drawRun();
       return;
@@ -3864,48 +3698,49 @@
     const ns = run.steps[run.pos];
     if (ns && !ns.started_at) {
       ns.started_at = new Date().toISOString();
-      await saveStep(ns, true);
+      if (!await saveStep(ns, true)) { run.pos--; return; }
     }
 
-    await client.from(RUN).update({
+    const { error: pointerError } = await client.from(RUN).update({
       current_step: run.pos,
       updated_at: new Date().toISOString(),
     }).eq('id', run.id);
+    if (pointerError) throw pointerError;
+    run.data.current_step = run.pos;
 
     drawRun();
+    } catch (err) { setStatus('步骤进度未保存：' + errorText(err), 'error'); }
+    finally { advancingRun = false; if (button) button.disabled = false; }
   }
 
+  let finishingRun = false;
   async function finishRun() {
-    const s = run.steps[run.pos];
-    if (!s.started_at) s.started_at = new Date().toISOString();
-    s.status = 'done';
-    s.finished_at = new Date().toISOString();
-    await saveStep(s, true);
-
+    if (finishingRun || !run.data || run.data.status !== 'running') return;
     if (!window.confirm('实验完成？会生成一份实验日志并保存到科研记录。')) return;
-
-    const ended = new Date().toISOString();
-    const summary = buildLog(run.data, run.steps, ended);
-
-    await client.from(RUN).update({
-      status: 'done',
-      current_step: run.steps.length - 1,
-      finished_at: ended,
-      updated_at: ended,
-    }).eq('id', run.id);
-
-    await client.from('research_records').insert({
-      user_id: state.user.id,
-      title: run.data.title + ' · 实验日志',
-      category: '实验日志',
-      content: summary,
-      tags: ['实验日志'],
-      occurred_on: new Date().toISOString().slice(0, 10),
-    });
-
-    setStatus('实验已完成，日志已保存到科研记录。', 'ok');
-    run.data.status = 'done';
-    drawRun();
+    finishingRun = true;
+    const nextButton = $('run-next');
+    if (nextButton) nextButton.disabled = true;
+    const current = run.data;
+    try {
+      const step = run.steps[run.pos];
+      if (!step.started_at) step.started_at = new Date().toISOString();
+      step.status = 'done'; step.finished_at = new Date().toISOString();
+      if (!await saveStep(step) || !await flushSaves()) return;
+      const ended = new Date().toISOString();
+      const { error } = await client.rpc('research_finish_run', {
+        p_id: current.id, p_content: buildLog(current, run.steps, ended), p_date: SciHubSafety.localDate(),
+      });
+      if (error) throw error;
+      current.status = 'done'; current.finished_at = ended;
+      setStatus('实验已完成，日志已保存到科研记录。', 'ok');
+      await loadRecords();
+      if (run.data === current) drawRun();
+    } catch (err) {
+      setStatus('完成实验未确认：' + errorText(err) + '。请核对后重试。', 'error');
+    } finally {
+      finishingRun = false;
+      if (nextButton) nextButton.disabled = false;
+    }
   }
 
   /* 把「数值 + 单位」标成醒目样式：药品用量、温度、时间、转速等关键参数 */
@@ -3946,7 +3781,7 @@
 
   async function runningRuns() {
     const { data } = await client.from(RUN).select('id,title,started_at,current_step,updated_at,plan_id')
-      .eq('status', 'running').order('updated_at', { ascending: false }).limit(5);
+      .eq('status', 'running').order('updated_at', { ascending: false });
     return data || [];
   }
 
@@ -3972,17 +3807,19 @@
     if (!window.confirm('删除这次实验？它的所有填写数据与照片都会被永久删除，无法恢复。')) return;
 
     try {
-      const { data: steps } = await client.from(RUN_STEP).select('images').eq('run_id', runId);
+      const { data: steps, error: readError } = await client.from(RUN_STEP).select('images').eq('run_id', runId);
+      if (readError) throw readError;
       const paths = [];
       (steps || []).forEach((s) => {
         (s.images || []).forEach((img) => { if (img && img.path) paths.push(img.path); });
       });
-      if (paths.length) await client.storage.from(BUCKET).remove(paths);
-
       const { error } = await client.from(RUN).delete().eq('id', runId); // run_steps 随之级联删除
       if (error) throw error;
 
-      setStatus('实验已删除。', 'ok');
+      let cleanupError = null;
+      if (paths.length) cleanupError = (await client.storage.from(BUCKET).remove(paths)).error;
+      const { error: linkError } = await client.from(RUN_STEP).update({ link_run_id: null, link_note: null }).eq('link_run_id', runId);
+      setStatus(cleanupError || linkError ? '实验已删除，但部分附件或关联尚未清理，请稍后核对。' : '实验已删除。', cleanupError || linkError ? 'warn' : 'ok');
       route('home');
     } catch (err) {
       console.error('[SciHub] 删除实验失败：', err);
@@ -4010,7 +3847,7 @@
     const y = b.slice(fromB);
     const n = Math.min(x.length, y.length);
     for (let i = 0; i < n; i++) {
-      if (tailKey(x[i]) !== tailKey(y[i])) {
+      if (SciHubSafety.stepSignature(x[i]) !== SciHubSafety.stepSignature(y[i])) {
         return { same: false, at: i, x: x[i], y: y[i], nx: x.length, ny: y.length };
       }
     }
@@ -4022,9 +3859,10 @@
 
   async function linkRun(runId) {
     const { data: mySteps } = await client.from(RUN_STEP).select('*').eq('run_id', runId).order('position');
-    const { data: me } = await client.from(RUN).select('id,title').eq('id', runId).maybeSingle();
+    const { data: me } = await client.from(RUN).select('id,title,status').eq('id', runId).maybeSingle();
+    if (!me || me.status !== 'running') { setStatus('只能关联进行中的实验。', 'warn'); return; }
     const { data: others } = await client
-      .from(RUN).select('id,title,status').neq('id', runId).order('started_at', { ascending: false });
+      .from(RUN).select('id,title,status').neq('id', runId).eq('status', 'running').order('started_at', { ascending: false });
 
     if (!others || !others.length) {
       setStatus('目前没有别的实验可以关联 —— 先开始第二个实验吧。', 'error');
@@ -4215,7 +4053,14 @@
         if (rows[i].stepIdx > steps.length - 1) rows[i].stepIdx = steps.length - 1;
       }
 
+      const positions = rows.map((row) => stepsCache[row.runId][row.stepIdx].position);
+      if (new Set(positions).size !== 1) {
+        box.className = 'lk-check bad';
+        box.textContent = '目前关联要求各实验的合并点步骤序号一致，请调整合并起点。';
+        return;
+      }
       verified = false;
+      const checkingKey = choiceKey();
       setPrimary('检测中…', true);
       box.className = 'lk-check';
       box.innerHTML = '正在逐对比对「从所选步骤往后」的步骤…';
@@ -4230,8 +4075,8 @@
         try {
           const { data, error } = await client.functions.invoke('check-link', {
             body: {
-              mine: A.slice(rows[i].stepIdx).map((s) => s.title),
-              other: B.slice(rows[i + 1].stepIdx).map((s) => s.title),
+              mine: A.slice(rows[i].stepIdx).map((s) => ({ title: s.title, instruction: s.instruction, notice: s.notice, pyro_seq: s.pyro_seq, duration_hint: s.duration_hint, fields: s.fields })),
+              other: B.slice(rows[i + 1].stepIdx).map((s) => ({ title: s.title, instruction: s.instruction, notice: s.notice, pyro_seq: s.pyro_seq, duration_hint: s.duration_hint, fields: s.fields })),
             },
           });
           if (!error && data && typeof data.same === 'boolean') verdict = data;
@@ -4242,13 +4087,14 @@
         results.push({ i: i, local: local, verdict: verdict, same: verdict ? verdict.same : local.same });
       }
 
+      if (checkingKey !== choiceKey()) { invalidate(); return; }
       const bad = results.filter((x) => !x.same);
       if (bad.length) {
         setPrimary('检测关联', false);
         box.className = 'lk-check bad';
         box.innerHTML = '<b>⚠ 检测未通过，不能关联合并</b>'
           + bad.map((x) => '<span>· 实验' + (x.i + 1) + ' 与 实验' + (x.i + 2)
-              + '：从所选步骤起 第 ' + (x.local.at + 1) + ' 条就不一样'
+              + '：' + (Number.isInteger(x.local.at) ? ('从所选步骤起第 ' + (x.local.at + 1) + ' 条不同') : '关键条件需要核对')
               + '（剩余 ' + x.local.nx + ' 步 / ' + x.local.ny + ' 步）'
               + (x.verdict && x.verdict.reason ? ' —— ' + esc(x.verdict.reason) : '')
               + '</span>').join('')
@@ -4439,7 +4285,7 @@
     }
   }
 
-  window.Run = { render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
+  window.Run = { flush: flushSaves, hasPending: saveQueue.hasPending, busy: () => advancingRun || finishingRun || savingDraft || syncingRun || startingRun, reset: () => { runRenderSequence++; unsubscribeRun(); unsubscribePlan(); run.id = null; run.data = null; run.steps = []; }, render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));

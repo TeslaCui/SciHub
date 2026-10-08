@@ -92,7 +92,8 @@ async function initAuth() {
   const { data } = await client.auth.getSession();
   applyUser((data.session && data.session.user) || null);
   client.auth.onAuthStateChange((_event, session) => {
-    applyUser((session && session.user) || null);
+    // Defer SDK calls until the auth callback releases its internal lock.
+    setTimeout(() => applyUser((session && session.user) || null), 0);
   });
 }
 
@@ -103,6 +104,7 @@ function applyUser(user) {
   $('auth-view').hidden = !!state.user;
   $('app-view').hidden = !state.user;
   $('user-box').hidden = !state.user;
+  if (changed) { state.profile = null; state.records = []; state.calOffset = 0; healedPlansOnce.clear(); }
   if (state.user) { updateUserChip(); loadProfile(); }
   else { state.profile = null; closeUserMenu(); closeModal(); }
 
@@ -112,6 +114,8 @@ function applyUser(user) {
     if (changed) route('home');
     subscribeHomeRealtime();
   } else {
+    unsubscribeHomeRealtime();
+    if (window.Run) window.Run.reset();
     state.records = [];
     state.editingId = null;
     closeForm();
@@ -180,10 +184,6 @@ async function register() {
     setStatus('请填写用户名。', 'error');
     return;
   }
-  if (!phone) {
-    setStatus('请填写电话。', 'error');
-    return;
-  }
   if (!password) {
     setStatus('请填写密码。', 'error');
     return;
@@ -218,7 +218,7 @@ async function register() {
   const { error: profileError } = await client.from(PROFILE_TABLE).insert({
     user_id: data.user.id,
     username: username,
-    phone: phone,
+    phone: phone || null,
     email: email,
   });
   if (profileError) {
@@ -270,7 +270,9 @@ function readPendingProfile() {
 
 async function logout() {
   if (!client) return;
-  await client.auth.signOut();
+  if (window.Run && (window.Run.busy() || !await window.Run.flush())) return;
+  const { error } = await client.auth.signOut();
+  if (error) { setStatus(friendly(error), 'error'); return; }
   setStatus('已退出登录。', 'ok');
 }
 
@@ -278,12 +280,14 @@ async function logout() {
 
 async function loadRecords() {
   if (!client || !state.user) return;
+  const userId = state.user.id;
   const { data, error } = await client
     .from(TABLE)
     .select('*')
     .order('occurred_on', { ascending: false })
     .order('created_at', { ascending: false });
 
+  if (!state.user || state.user.id !== userId) return;
   if (error) {
     state.records = [];
     state.tableMissing = isMissingTable(error);
@@ -465,7 +469,7 @@ function switchAuthMode(mode) {
   $('register-extra').hidden = !isRegister;
   $('confirm-extra').hidden = !isRegister;
   $('auth-username').required = isRegister;
-  $('auth-phone').required = isRegister;
+  $('auth-phone').required = false;
   $('auth-password2').required = isRegister;
   $('auth-submit').textContent = isRegister ? '注册' : '登录';
   $('auth-password').setAttribute('autocomplete', isRegister ? 'new-password' : 'current-password');
@@ -501,7 +505,7 @@ function bindEvents() {
       const rows = visibleRecords();
       if (!rows.length) { setStatus('当前没有可导出的记录。', 'warn'); return; }
 
-      const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const cell = SciHubSafety.csvCell;
       const lines = [['标题', '类别', '日期', '标签', '内容'].map(cell).join(',')];
       rows.forEach((r) => {
         lines.push([
@@ -516,7 +520,7 @@ function bindEvents() {
       const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = '科研记录-' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.download = '科研记录-' + today() + '.csv';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -585,9 +589,11 @@ function closeModal() { $('modal').hidden = true; }
 
 async function loadProfile() {
   if (!state.user) return;
+  const userId = state.user.id;
   const { data } = await client
     .from(PROFILE_TABLE).select('username,phone,email')
     .eq('user_id', state.user.id).maybeSingle();
+  if (!state.user || state.user.id !== userId) return;
   state.profile = data || null;
   updateUserChip();
 }
@@ -663,7 +669,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.2';
+const APP_VERSION = '1.0.3';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -699,11 +705,12 @@ async function checkVersion() {
 
 if ($('update-btn')) {
   $('update-btn').addEventListener('click', async () => {
+    if (window.Run && (window.Run.busy() || !await window.Run.flush())) return;
     try {
       const keys = await caches.keys();
-      await Promise.all(keys.map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((key) => key.startsWith('scihub-research-')).map((k) => caches.delete(k)));
       const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map((r) => r.unregister()));
+      await Promise.all(regs.filter((registration) => registration.scope === new URL('./', location.href).href).map((r) => r.unregister()));
     } catch (_error) { /* 清缓存失败也照样刷新 */ }
     location.reload();
   });
@@ -735,8 +742,15 @@ function showView(name) {
   window.scrollTo({ top: 0 });
 }
 
-function route(name, param) {
+let navigationSequence = 0;
+async function route(name, param) {
   if (!state.user) return;
+  const sequence = ++navigationSequence;
+  if (window.Run) {
+    if (window.Run.busy()) { setStatus('正在保存，请稍候。', 'warn'); return; }
+    if (!await window.Run.flush()) return;
+  }
+  if (sequence !== navigationSequence || !state.user) return;
   const target = ROUTES.indexOf(name) === -1 ? 'home' : name;
   showView(target);
 
@@ -784,7 +798,11 @@ document.addEventListener('click', (e) => {
 let runStepsHasDuration = null;
 const healedPlansOnce = new Set();
 
+let homeRenderSequence = 0;
 async function renderHome() {
+  const sequence = ++homeRenderSequence;
+  const userId = state.user && state.user.id;
+  if (!userId) return;
   const host = $('view-home');
   host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
 
@@ -840,8 +858,8 @@ async function renderHome() {
     const { data } = await client
       .from('experiment_runs')
       .select('id,title,started_at,finished_at,status,current_step')
-      .gte('started_at', monthStart.toISOString())
       .lt('started_at', monthEnd.toISOString())
+      .or('finished_at.is.null,finished_at.gte.' + monthStart.toISOString())
       .order('started_at', { ascending: true });
     monthRuns = data || [];
   } catch (error) {
@@ -863,11 +881,13 @@ async function renderHome() {
       const withDur = await client.from('run_steps').select(STEP_COLS + ',duration_hint,checks')
         .in('run_id', ids).order('position');
       if (!withDur.error) { runStepsHasDuration = true; return withDur.data || []; }
-      console.warn('[SciHub] run_steps 还没有 duration_hint / checks 列，降级读取：', withDur.error.message);
+      if (!/duration_hint|checks/.test(String(withDur.error.message || ''))) throw withDur.error;
+      console.warn('[SciHub] run_steps 缺少可选列，降级读取：', withDur.error.message);
       runStepsHasDuration = false;
     }
     const plain = await client.from('run_steps').select(STEP_COLS)
       .in('run_id', ids).order('position');
+    if (plain.error) throw plain.error;
     return plain.data || [];
   };
 
@@ -886,15 +906,7 @@ async function renderHome() {
   // ② **旧字段的残留值不算**：方案改版后旧键会留在 values 里（如 v5 第 9 步存着
   //    「样品编号」「热解后样品质量」，但当前字段是分取 ICP/XRD…），不把这类旧键过滤掉，
   //    进度就会被旧数据推到根本没做的步骤。
-  const isTimeKey = (k) => /日期|时间|时刻/.test(String(k || ''));
   const fieldLabelSet = (x) => new Set(((x && x.fields) || []).map((f) => f.label));
-  const filledCount = (x) => Object.keys(x.values || {}).filter((k) => {
-    if (!fieldLabelSet(x).has(k)) return false;
-    if (isTimeKey(k)) return false;
-    const v = (x.values || {})[k];
-    return String(v == null ? '' : v).trim() !== '';
-  }).length;
-
   // 「这一步有没有实质进展」：填了当前字段的值，或上传过照片，都算做过。
   // 时间字段也算（v5.1 反应步只填了「反应开始时间」也是在做）；旧字段残留值不算；
   // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
@@ -1051,177 +1063,12 @@ async function renderHome() {
     return '';
   };
 
-  // 「这一步到底有没有在做」的判定：填过值 / 传过照片 / 写过备注 / 标了完成。
-  // 待办靠它算「实际进度」—— 只看 current_step（上次停在的位置）会取错步骤。
-  // 「一次实验进行到第几步」改为交给 AI 判断（见 judgeProgress）：
-  // 把步骤清单（是否标完成 / 填了几项 / 照片数 / 有没有备注 + 系统记录的 current_step）
-  // 发给 parse-plan 的 progress 模式，由它判断现在实际做到哪一步。
-  // 结果按「步骤状态签名」缓存在 localStorage —— 状态没变就不重复调用；
-  // AI 不可用（函数没更新/没部署、断网、没额度）时一律回退到 current_step，界面不会空着。
-  const aiPos = {};
-  const aiWhy = {};                 // runId -> AI 给出的判断依据（显示在界面上，方便核对）
-  // 本地兜底口径：以「上次停在这里」为准；如果更靠后的步骤确实填过数据，就取那个。
-  // 注意**不看 done** —— 早先点到过后面、又退回前面继续做时，那些步骤会残留「已完成」标记
-  // （v5 的第 8/9 步圆圈是绿的、但其实没做，就是这么来的），按它算会把进度推错。
-  const localProgressPos = (r) => {
-    const steps = stepMap[r.id] || [];
+  // Progress is computed from current fields and stored step position.
+  const runProgressPos = (run) => {
+    const steps = stepMap[run.id] || [];
     let lastFilled = -1;
-    steps.forEach((x, k) => { if (stepTouchedAny(x)) lastFilled = k; });
-    return Math.max(Number(r.current_step) || 0, lastFilled);
-  };
-  // 「进行到第几步」是事实，用本地确定性规则（填过数据的最后一步 与 上次停在的位置 取靠后者）。
-  // AI 有时会把「第 N 步」当 position 返回、差一位就把界面带偏 —— 这里不再让它覆盖定位。
-  const runProgressPos = (r) => localProgressPos(r);
-
-  // （进度判定函数已挪到「日历渲染之前」定义，见上面 byDay 前的那段）
-  const aiProgressKey = (id) => 'scihub.aiProgress.' + id;
-
-  // 步骤状态签名：任一步的「标完成 / 填了数据」情况或 current_step 变了，就重新问一次 AI。
-  // 照片与备注不参与 —— 它们不算「做过」（见下面发给 AI 的字段）。
-  const progressSignature = (r, steps) => steps.map((x) => [
-    x.position, x.status || '', filledCount(x),
-  ].join(':')).join('|') + '#' + (Number(r.current_step) || 0);
-
-  const judgeProgress = async (r) => {
-    const steps = stepMap[r.id] || [];
-    const base = Number(r.current_step) || 0;
-    if (!steps.length) return base;
-
-    const sig = progressSignature(r, steps);
-    try {
-      const raw = window.localStorage.getItem(aiProgressKey(r.id));
-      if (raw) {
-        const c = JSON.parse(raw);
-        if (c && c.sig === sig && Number.isFinite(Number(c.step))) {
-          aiWhy[r.id] = String(c.reason || '');
-          return Number(c.step);
-        }
-      }
-    } catch (_e) { /* 隐私模式下忽略缓存 */ }
-
-    try {
-      const { data, error } = await client.functions.invoke('parse-plan', {
-        body: {
-          mode: 'progress',
-          currentStep: base,
-          // 只发「是否标完成」和「填了几项数据」——
-          // 实测把照片/备注一起发过去，AI 会把「传了张照片」「写了句备注」也当成做完了这一步，
-          // 于是进度被推到很后面（v5 被判到第 9 步就是这个原因）。这里干脆不给它这两个字段。
-          steps: steps.map((x) => ({
-            position: x.position,
-            title: x.title || '',
-            done: x.status === 'done',
-            filled: filledCount(x),
-          })),
-        },
-      });
-      if (error || !data || !Number.isFinite(Number(data.step))) {
-        console.warn('[SciHub] AI 进度判断不可用（parse-plan 未更新？），改用 current_step：', error);
-        return base;
-      }
-      const step = Math.max(0, Math.min(Number(data.step), steps.length - 1));
-      aiWhy[r.id] = String(data.reason || '');
-      try {
-        window.localStorage.setItem(aiProgressKey(r.id), JSON.stringify({ sig: sig, step: step, reason: aiWhy[r.id] }));
-      } catch (_e) { /* 忽略 */ }
-      return step;
-    } catch (err) {
-      console.warn('[SciHub] AI 进度判断调用失败，改用 current_step：', err);
-      return base;
-    }
-  };
-
-  // ── 待办改由独立的 Edge Function「todo-plan」制订 ─────────────
-  // 把每个进行中实验的「事实」发过去（是否标完成、填了几项、方案里这一步的时长、各步时间戳），
-  // 由它返回：进行到第几步 + 待办文案 + 还要等多久。规则集中在服务端 —— 以后调提示词不用动前端。
-  // 结果按「步骤事实签名」缓存；函数没部署 / 断网 / 没额度时，全部走下面已有的本地规则兜底。
-  const aiLabel = {};      // runId -> AI 给的待办文案（如「等待下一步：酸洗」）
-  const aiHours = {};      // runId -> AI 给的时长（小时）
-  const aiKind = {};       // runId -> AI 给的 kind（doing＝正在等这一步；wait＝只提醒下一步）
-
-  const planDurAt = (r, pos) => {
-    const byPlan = planDur[r.plan_id] || {};
-    if (byPlan[pos]) return byPlan[pos];
-    const st = (stepMap[r.id] || []).find((x) => x.position === pos);
-    return st ? String(st.duration_hint || '').trim() : '';
-  };
-
-  const applyAiTodos = (list) => {
-    (list || []).forEach((t) => {
-      const id = Number(t && t.runId);
-      if (!Number.isFinite(id)) return;
-      if (Number.isFinite(Number(t.step))) {
-        // AI 有时会把「第 N 步」（1 起算的步号）当成 position 返回 —— 差一位就会让界面整体偏移
-        // （v5 显示第 9 步、其实停在第 8 步就是这么来的）。这里用实际的 position 集合校验，差一位就纠回来。
-        const steps = stepMap[id] || [];
-        const positions = steps.map((x) => x.position);
-        let st = Number(t.step);
-        if (positions.length && positions.indexOf(st) === -1 && positions.indexOf(st - 1) !== -1) st = st - 1;
-        aiPos[id] = st;
-      }
-      aiWhy[id] = String((t && t.reason) || '');
-      aiLabel[id] = String((t && t.label) || '');
-      aiHours[id] = Number((t && t.dueInHours) || 0) || 0;
-      aiKind[id] = String((t && t.kind) || '');
-    });
-  };
-
-  const fetchAiTodos = async (groupList) => {
-    const runs = groupList.map((g) => {
-      const head = g.runs[0];
-      const steps = stepMap[head.id] || [];
-      return {
-        id: head.id,
-        title: head.title,
-        startedAt: head.started_at,
-        currentStep: Number(head.current_step) || 0,
-        // 把「完整步骤内容」都发过去（说明、注意事项、时长、填了哪些项）——
-        // 只给标题和数字的话，AI 看不出流程语义（哪一步是等待、哪一步是动作、下一步该做什么）。
-        steps: steps.map((x) => ({
-          position: x.position,
-          title: x.title || '',
-          // 不发送 done：早先点到过后面又退回时它会残留，AI 会据此把进度判到根本没做的步骤
-          filled: filledCount(x),
-          filledKeys: Object.keys(x.values || {}).filter((k) => {
-            if (isTimeKey(k)) return false;
-            const v = (x.values || {})[k];
-            return String(v == null ? '' : v).trim() !== '';
-          }).slice(0, 12),
-          planDuration: planDurAt(head, x.position),
-          instruction: String(x.instruction || '').slice(0, 500),
-          notice: String(x.notice || '').slice(0, 150),
-          stepStartedAt: x.started_at || '',
-          stepUpdatedAt: x.updated_at || '',
-        })),
-      };
-    }).filter((x) => x.steps.length);
-    if (!runs.length) return;
-
-    const sig = 'v3|' + runs.map((x) => x.id + ':' + x.currentStep + ':' + x.steps.map((s) =>
-      s.position + s.filled + '|' + s.planDuration).join(',')).join('~');
-    const cacheKey = 'scihub.todos.' + runs.map((x) => x.id).join('-');
-
-    try {
-      const raw = window.localStorage.getItem(cacheKey);
-      if (raw) {
-        const c = JSON.parse(raw);
-        if (c && c.sig === sig && Array.isArray(c.todos)) { applyAiTodos(c.todos); return; }
-      }
-    } catch (_e) { /* 隐私模式下忽略缓存 */ }
-
-    try {
-      const { data, error } = await client.functions.invoke('todo-plan', {
-        body: { now: new Date().toISOString(), runs: runs },
-      });
-      if (error || !data || !Array.isArray(data.todos)) {
-        console.warn('[SciHub] todo-plan 不可用（未部署 / 报错），待办改用本地规则：', error);
-        return;
-      }
-      applyAiTodos(data.todos);
-      try { window.localStorage.setItem(cacheKey, JSON.stringify({ sig: sig, todos: data.todos })); } catch (_e) { /* 忽略 */ }
-    } catch (err) {
-      console.warn('[SciHub] todo-plan 调用失败，待办改用本地规则：', err);
-    }
+    steps.forEach((step, index) => { if (stepTouchedAny(step)) lastFilled = index; });
+    return Math.max(0, Math.min(Math.max(Number(run.current_step) || 0, lastFilled), Math.max(0, steps.length - 1)));
   };
 
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
@@ -1254,30 +1101,7 @@ async function renderHome() {
   // ── 把有关联的实验合并成一组 ──────────────────────────
   // 某实验的某个步骤 link_run_id 指向另一个实验时（如 v5.1 第 7 步酸洗 → v5），
   // 这两个实验算一组：主页只显示一条「关联实验」，同一件事不重复出现。
-  const groups = [];
-  const groupOf = {};   // runId -> 组下标
-
-  (runs || []).forEach((r) => {
-    if (groupOf[r.id] != null) return;
-    const gi = groups.length;
-    groups.push({ runs: [r], links: [] });
-    groupOf[r.id] = gi;
-
-    // 顺着 link_run_id 把能连上的实验都并进来
-    const queue = [r.id];
-    while (queue.length) {
-      const id = queue.shift();
-      (stepMap[id] || []).forEach((s) => {
-        if (!s.link_run_id || groupOf[s.link_run_id] != null) return;
-        const other = (runs || []).find((x) => x.id === s.link_run_id);
-        if (!other) return;
-        groupOf[other.id] = gi;
-        groups[gi].runs.push(other);
-        groups[gi].links.push({ from: id, to: other.id, note: s.link_note, position: s.position });
-        queue.push(other.id);
-      });
-    }
-  });
+  const groups = SciHubSafety.groupsOf(runs || [], stepMap);
 
   // 待办（自动）：所有「进行中」的实验都会进来，每个实验一条。
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
@@ -1438,7 +1262,7 @@ async function renderHome() {
       hours: hours,
       dur: durOf(cur),
       isNext: isNext,
-      why: aiWhy[r.id] || '',
+      why: '',
       // 待办文案统一用本地格式：无时间要求时一律「已完成第 X 步…，等待进行第 Y 步…」；
       // AI（todo-plan）只保留作后台参考，不再覆盖这句文案，避免出现和 v5 不一致的写法。
       aiTxt: (lastDoneStep && nextOfDone
@@ -1552,6 +1376,7 @@ async function renderHome() {
     + '<circle class="ring-fg" cx="18" cy="18" r="15.9155" stroke-dasharray="' + Math.max(0, Math.min(100, pct)) + ', 100"/>'
     + '</svg>';
 
+  if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
   host.innerHTML = [
     '<div class="home-top">' + calendar + todoCard + '</div>',
     '<div class="section-title">进行中的实验</div>',
@@ -1589,7 +1414,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta"' + (aiWhy[r.id] ? ' title="AI 判断依据：' + esc(aiWhy[r.id]) + '"' : '') + '>开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (runProgressPos(r) + 1) + ' 步进行中'
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             // 合并后只保留这一栏；子实验收在下拉里，提示直接挂在下拉标题上
@@ -1681,7 +1506,7 @@ async function renderHome() {
 
   // 方案卡片：整卡点开详情（操作按钮统一放在详情页，这里不再重复）
   host.querySelectorAll('[data-open-plan]').forEach((el) => {
-    const open = () => { if (window.Plans) window.Plans.editor(Number(el.dataset.openPlan)); };
+    const open = () => route('plan', Number(el.dataset.openPlan));
     el.addEventListener('click', open);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
@@ -1843,9 +1668,16 @@ function subscribeHomeRealtime() {
   try {
     homeChannel = client.channel('scihub-home')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'run_steps' }, scheduleHomeRefresh)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'experiment_runs' }, scheduleHomeRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'experiment_runs' }, scheduleHomeRefresh)
       .subscribe();
   } catch (_error) {
     homeChannel = null;   // 实时不可用不影响使用，刷新页面仍会重算
   }
+}
+
+function unsubscribeHomeRealtime() {
+  if (homeRefreshTimer) clearTimeout(homeRefreshTimer);
+  homeRefreshTimer = null;
+  if (homeChannel) client.removeChannel(homeChannel);
+  homeChannel = null;
 }

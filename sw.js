@@ -6,13 +6,14 @@
  *
  * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
  */
-const CACHE = 'scihub-research-v1.0.2';
+const CACHE = 'scihub-research-v1.0.3';
 const ASSETS = [
   './index.html',
-  './style.css?v=1.0.2',
-  './app.js?v=1.0.2',
-  './experiment.js?v=1.0.2',
-  './manifest.json?v=1.0.2',
+  './style.css?v=1.0.3',
+  './data-safety.js?v=1.0.3',
+  './app.js?v=1.0.3',
+  './experiment.js?v=1.0.3',
+  './manifest.json?v=1.0.3',
 ];
 
 self.addEventListener('install', (event) => {
@@ -23,7 +24,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith('scihub-research-') && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -43,10 +44,20 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(target)
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE).then((cache) => cache.put(request, copy)).catch(() => {});
+        }
         return response;
       })
-      .catch(() => caches.match(request).then((hit) => hit || caches.match('./index.html')))
+      .catch(async () => {
+        const hit = await caches.match(request);
+        if (hit) return hit;
+        if (isDocument) {
+          const page = await caches.match('./index.html');
+          if (page) return page;
+        }
+        return Response.error();
+      })
   );
 });

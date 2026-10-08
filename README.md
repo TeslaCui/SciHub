@@ -5,7 +5,7 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-当前版本 **v1.0.2**（2026-09-18）。
+当前版本 **v1.0.3**（2026-10-08）。本次检查和修复详见 [项目审计报告](docs/AUDIT-2026-10-08.md)。
 
 ## 架构
 
@@ -14,12 +14,12 @@ index.html            页面骨架（登录视图 / 应用视图 / 模态框）
 style.css             样式
 app.js                认证、科研记录 CRUD、主页（进行中的实验 + 日历 + 待办）、路由、小工具入口
 experiment.js         实验模块：方案导入/编辑、按步执行、拍照、导出、关联实验、热解程序计算器
-supabase_schema.sql   数据库结构参考（与 migrations 基线等价，含自检查询，可手工整段执行）
+supabase_schema.sql   数据库结构参考（与完整 migrations 对应，含自检查询，可手工整段执行）
 supabase/migrations/  数据库迁移（结构以这里为准；push 后由 Supabase GitHub 集成自动应用）
 supabase/config.toml  Supabase 项目标识 + 要部署的 Edge Functions 声明
 supabase/functions/   Edge Function（DeepSeek 代理）：parse-plan / match-params / check-link / todo-plan
 manifest.json / sw.js / version.json   PWA 与版本标记
-tools/sync.sh|.cmd    一键「语法检查 → 提交 → 推送」（可选）
+tools/sync.sh|.cmd    「检查已审核暂存内容 → 回归测试 → 提交 → 推送」（可选）
 ```
 
 - 前端纯静态，**没有任何自建服务端**，可直接托管在 GitHub Pages / Vercel / Netlify。
@@ -105,20 +105,20 @@ git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
 - **导入 `.docx`**：前端用 JSZip 解 Word，按章节拆步骤，自动识别「xxx：____ g」这类需要现场填写的字段。
 - **两条解析路线**：优先 AI 解析（`parse-plan`，能区分同名药品、能读表格），不可用时**自动回退规则解析**并在界面上提示。
 - **校对 / 编辑**：拖动排序步骤、字段与注意事项；给字段指定填写方式（**文本 / 数字 / 勾选已完成 / 时间 / 日期 / 日期 + 时间**）——「勾选已完成」就是执行时打勾确认的项（如「第一次抽滤」「是否出现沉淀」），勾选状态同样计入进度；每步底部只有一个「＋ 添加板块」（数据字段 / 注意事项 / 热解程序），行内 × 删除该行、删空后板块自动消失；保存时若有空白行会提示并自动清理。
-- **解析规则版本**：方案记下导入时用的规则版本（当前 v4：v1 基础字段 → v2 注意事项 + 同名药品前缀 → v3 热解程序 + 字段填写方式 → v4 步骤粒度按工序归并）。落后就在列表上标「有新版本 / 更新」，一键**重新解析**；重新解析不影响已开始的实验，已填数据会按字段名迁移（优先 `match-params` 语义配对，失败则本地字符串比对）。
-- **开始一次实验**：把方案步骤**快照**进 `run_steps`，之后改方案不会篡改历史记录。
-- **保存不会丢步骤**：编辑保存走**非破坏性替换**——先把新步骤写进去（用偏移位号避开 `unique(plan_id, position)`），写成功后才按 id 删旧步骤；写入失败或被刷新 / 断网打断都不会动到原有步骤，方案也不会变成 0 步。更新日志改成**步骤写成功之后**才追加，不再出现「日志记了已保存、步骤却是空的」。步骤被清空的方案，详情页会直接给恢复入口：开过实验的可一键**从实验快照恢复步骤**（把 `run_steps` 快照搬回编辑器，核对后再保存），没开过实验的重新导入原 docx。
+- **解析规则版本**：方案记下导入时用的规则版本（当前 v4：v1 基础字段 → v2 注意事项 + 同名药品前缀 → v3 热解程序 + 字段填写方式 → v4 步骤粒度按工序归并）。落后就在列表上标「有新版本 / 更新」，一键**重新解析**；重新解析后，能安全对应的内容可同步到进行中实验；步骤名称、顺序或已有数据的单位改变时保留原实验快照。同名步骤有内容变化时也拒绝自动对应。字段配对采取一对一规则。
+- **开始一次实验**：把方案步骤**快照**进 `run_steps`，已完成实验在界面只读；进行中实验允许安全同步，结构无法对应时保留原快照。数据库尚未实现不可变审计历史。
+- **事务保存**：`research_save_plan` 将方案、全部步骤与版本日志放在同一数据库事务中，任何写入失败整笔回滚；修改已有方案时检查 `updated_at`，避免覆盖他端修改。方案保存与向进行中实验同步是两个阶段；同步受结构、单位及步骤时间戳保护，但尚非整组事务。原快照恢复入口仍保留。
 
 ### 执行实验
 
 - 按步执行：填数据、写备注、**拍照上传**；字段按类型给出原生控件（数字键盘、日期 / 时间选择器），关键数值（g/mL/℃/h/rpm…）高亮。
-- **自动保存**：输入停下 1 秒写库；实验与「当前进行到第几步」都存在云端，**换设备、跨天都能接着做**。
+- **自动保存**：每个步骤独立防抖，输入停下 1 秒串行写库；导航、退出和更新前等待保存，失败保留本地输入并提示；跨设备版本冲突拒绝覆盖；实验与「当前进行到第几步」都存在云端，**换设备、跨天都能接着做**。
 - **多端实时同步**：订阅该实验的 `run_steps` 变化。
 - **热解程序计算器**：识别 `C30-T60-C30-T184-C950-T60-C950--121` 形式的程序，按「初始温度 / 升温速率 / 最终温度」重算各段耗时与总时长（室温一变升温段就要重算）。
 - **照片**：一次多张，可拖动排序（桌面原生拖拽，手机长按拖动），点开灯箱放大、播放与存到设备；导出时按当前顺序嵌入文档。
 - **关联实验**：把两个实验在某个步骤上合并（`link_run_id` / `link_note`），主页合并成一条显示；`check-link` 会先判断「合并点之后的步骤是否一致」，拿不准就拦下让人确认。
-- **导出 Word**：只导出到当前进行到的步骤（做完即全量），含每步时间、数据、备注与照片；关联在一起的实验写进同一份文档。
-- **完成实验**：生成实验日志并自动写入「科研记录」（类别＝实验日志）。
+- **导出 Word**：每个实验导出到各自当前步骤（做完即全量），含步骤时间、当前与历史字段、备注和照片；关联组件中的实验各自保留快照写进同一份文档，视频列出名称，无法读取的照片明确标注。
+- **完成实验**：通过 `research_finish_run` 在事务中同时生成实验日志和更新完成状态，重复请求不会新增重复日志。失败时不宣称已完成。
 
 ### 科研记录
 
@@ -167,7 +167,7 @@ git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
 
 部署方式（各函数同理，示例用 `parse-plan`）：
 
-1. **创建函数**：Supabase Dashboard → **Edge Functions** → *Deploy a new function* → 名称填 `parse-plan` → 把 `supabase/functions/parse-plan/index.ts` 的内容粘进去 → **Deploy**（装了 CLI 也可 `supabase functions deploy parse-plan`）。
+1. **创建函数**：Supabase Dashboard → **Edge Functions** → *Deploy a new function* → 名称填 `parse-plan` → 部署整个函数目录（包含 `../_shared/ai.ts`；只粘贴 index.ts 会缺失共享模块）（装了 CLI 也可 `supabase functions deploy parse-plan`）。
 2. **配置密钥**：Dashboard → **Project Settings → Edge Functions → Secrets** → 新增 `DEEPSEEK_API_KEY`，值填你在 DeepSeek 平台申请的 key。**不要把 key 发给任何人或写进仓库。**
 3. 前端无需改动：函数部署好后再导入 `.docx` 就会自动走 AI 解析；调用失败（未部署、密钥缺失、网络异常）会**自动回退**并给出提示，不影响使用。
 
@@ -209,7 +209,8 @@ git add supabase/migrations && git commit -m "db: add run_steps.foo" && git push
 
 其它数据库对象：
 
-- **RPC**：`research_check_signup`（注册查重）、`research_lookup_login_email`（标识符 → 邮箱）。两者都是 `security definer`，并先 `revoke all ... from public` 再单独授权给 `anon` / `authenticated`。
+- **事务 RPC**：`research_save_plan` / `research_finish_run`，`security invoker`，仅 `authenticated` 可执行，遵循调用者 RLS。
+- **账号 RPC**：`research_check_signup`（注册查重）、`research_lookup_login_email`（标识符 → 邮箱）。两者都是 `security definer`，并先 `revoke all ... from public` 再单独授权给 `anon` / `authenticated`。
 - **触发器**：`research_touch_updated_at()` 挂在这些表的 `before update` 上，自动维护 `updated_at`。
 - **Storage**：私有 bucket `experiment-images`，路径约定 `<user_id>/<run_id>/<step_position>/<文件名>`，四条策略确保每人只读写自己 `user_id` 目录下的文件。
 - **Realtime**：`run_steps` 与 `experiment_runs` 加入 `supabase_realtime` 发布，用于多端实时同步。
@@ -231,7 +232,7 @@ npx serve .
 本仓库已开启 GitHub Pages，从 `master` 分支根目录发布：
 
 - 线上地址：<https://teslacui.github.io/SciHub/>
-- 更新方式：改完文件 `git push`，Pages 会自动重新发布（约 1 分钟）；也可用 `tools/sync.sh "提交说明"`（语法检查 → 提交 → 推送，直连失败会自动走代理）。
+- 更新方式：改完文件 `git push`，Pages 会自动重新发布（约 1 分钟）；也可用 `tools/sync.sh "提交说明"`（先人工审核并 `git add` 明确文件，再检查暂存内容、版本和回归测试 → 提交 → 推送，直连失败会自动走代理）。
 - `.nojekyll` 让 Pages 跳过 Jekyll 处理，直接原样发布静态文件。
 
 ### 发版约定
@@ -274,6 +275,14 @@ const SUPABASE_KEY = '<新项目 publishable / anon key>';
 ## 当前边界与后续
 
 - 原 SciHub 的「样品—方法—实验—表征—结果—决策」证据网络模型尚未搬过来；当前是「一条科研记录 + 一条实验流水线」的实用形态。
-- 附件目前只有实验照片（走 Storage）；其它附件类型未做。
+- 附件目前支持实验照片和视频（走 Storage）；通用原始数据文件管理未做。
 - 无审核流、无协作 / 共享（数据按账号完全隔离，只有自己能看到）。
 - 所有科学结论建议在 `content` / 备注里写明条件、不确定性与适用边界，保持可追溯。
+
+## 回归验证
+
+`node --test tests/data-safety.test.cjs tests/experiment.test.cjs tests/service-worker.test.cjs` 可直接运行。数据库事务测试需要 `PGLITE_MODULE` 指向外部安装的 `@electric-sql/pglite`；Edge 测试需要 `TYPESCRIPT_MODULE` 指向 TypeScript 5.9.x。设置后运行 `node --test tests/*.test.cjs`，发布时必须确认没有跳过数据库及 Edge 检查。
+
+用 `node tests/serve-preview.cjs` 打开 `http://127.0.0.1:8787/?mock=1` 可使用虚构数据测试注册、登录、记录与实验主流程；数据只保存在本机浏览器，服务不连接真实数据库。测试资源不进入生产 HTML 或 Service Worker。
+
+发布检查：`node tools/check-release.cjs --staged` 检查将要提交的版本、资源参数与疑似凭据；仍必须人工审阅 `git diff --cached`。同步脚本不再自动 `git add -A`。

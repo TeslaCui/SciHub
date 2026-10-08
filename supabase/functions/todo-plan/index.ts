@@ -1,3 +1,5 @@
+import { authorizeAI, readAIRequest, fetchAI } from '../_shared/ai.ts';
+
 // Supabase Edge Function：AI「检测最新实验步骤 + 制订待办」
 //
 // ── 为什么单独做一个函数 ─────────────────────────────────────
@@ -103,8 +105,10 @@ Deno.serve(async (req: Request) => {
     return json({ error: '只支持 POST' }, 405);
   }
 
+  const authError = await authorizeAI(req);
+  if (authError) return authError;
   try {
-    const body = await req.json().catch(() => null);
+    const body = await readAIRequest(req);
     const runs = body && Array.isArray(body.runs) ? body.runs.slice(0, 20) : [];
     if (!runs.length) return json({ error: '缺少 runs' }, 400);
 
@@ -117,7 +121,7 @@ Deno.serve(async (req: Request) => {
       const steps = Array.isArray(r?.steps) ? r.steps.slice(0, 200) : [];
       lines.push('实验 runId=' + String(r?.id ?? '') + ' 标题=' + String(r?.title ?? '')
         + ' currentStep=' + Number(r?.currentStep ?? 0) + ' 开始于=' + String(r?.startedAt ?? ''));
-      steps.forEach((s) => {
+      steps.forEach((s: Record<string, unknown>) => {
         const keys = Array.isArray(s?.filledKeys) ? s.filledKeys.join('、') : '';
         lines.push('  [' + String(s?.position ?? '') + '] ' + String(s?.title ?? ''));
         lines.push('      说明：' + (String(s?.instruction ?? '') || '（无）'));
@@ -130,7 +134,7 @@ Deno.serve(async (req: Request) => {
     });
     const userMsg = 'now=' + String(body?.now ?? '') + NL + lines.join(NL);
 
-    const upstream = await fetch('https://api.deepseek.com/chat/completions', {
+    const upstream = await fetchAI('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
