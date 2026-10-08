@@ -36,7 +36,7 @@ for candidate in node "/d/LeStoreDownload/Node.js/node.exe"; do
 done
 
 if [ -n "$NODE_BIN" ]; then
-  for js in app.js experiment.js data-safety.js merge.js sw.js; do
+  for js in app.js experiment.js data-safety.js merge.js guide.js sw.js; do
     if ! "$NODE_BIN" --check "$js"; then
       echo "语法检查失败：$js —— 已中止推送" >&2
       exit 1
@@ -53,7 +53,7 @@ if ! git diff --quiet; then
   exit 1
 fi
 git diff --cached --check
-"$NODE_BIN" --test tests/data-safety.test.cjs tests/experiment.test.cjs tests/service-worker.test.cjs tests/merge.test.cjs
+"$NODE_BIN" --test tests/data-safety.test.cjs tests/experiment.test.cjs tests/service-worker.test.cjs tests/merge.test.cjs tests/guide.test.cjs
 if git diff --cached --name-only | grep -Eq '^(supabase/|tests/(sql-transactions|sql-merge|edge-functions))'; then
   if [ -z "${PGLITE_MODULE:-}" ] || [ -z "${TYPESCRIPT_MODULE:-}" ]; then
     echo "数据库 / Edge 改动需要 PGLITE_MODULE 和 TYPESCRIPT_MODULE 才能完成验证。" >&2

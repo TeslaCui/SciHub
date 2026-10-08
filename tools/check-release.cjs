@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const staged = process.argv.includes('--staged');
 const git = (...args) => cp.execFileSync('git', args, { encoding: 'utf8' });
 const read = (file) => staged ? git('show', ':' + file) : fs.readFileSync(file, 'utf8');
+require('./build-guide.cjs').check(read);
 const version = JSON.parse(read('version.json')).version;
 assert.match(version, /^\d+\.\d+\.\d+$/);
 assert.ok(version.split('.').every((part) => Number(part) < 10), '版本段应按项目约定进位');
@@ -27,7 +28,7 @@ if (staged) {
       assert.notEqual(payload.role, 'service_role', '禁止提交 service_role：' + file);
     }
   }
-  const frontend = files.some((file) => /^(app\.js|experiment\.js|data-safety\.js|merge\.js|style\.css|index\.html|sw\.js)$/.test(file));
+  const frontend = files.some((file) => /^(app\.js|experiment\.js|data-safety\.js|merge\.js|style\.css|index\.html|sw\.js|guide\.(html|css|js))$/.test(file));
   if (frontend) {
     const previous = JSON.parse(git('show', 'HEAD:version.json')).version.split('.').map(Number);
     previous[2]++;

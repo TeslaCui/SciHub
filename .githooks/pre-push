@@ -1,0 +1,10 @@
+#!/bin/sh
+# Validate the current release; do not change or delete files.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "存在未提交的已跟踪改动，无法核对待推送版本；请先核对并提交。" >&2
+  exit 1
+fi
+node tools/build-guide.cjs --check
+node tools/check-release.cjs
