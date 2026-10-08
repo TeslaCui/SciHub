@@ -286,6 +286,8 @@ const SUPABASE_KEY = '<新项目 publishable / anon key>';
 
 ## 回归验证
 
+连接线上服务的功能测试必须使用专用普通内测账号，写入前核对项目与账号 UUID，仅使用带 `[内测]` 标记的虚构数据。凭据保存在仓库外的本机加密配置；迁移和跨账号测试仍在隔离环境验证。操作规则见 [专用内测账号与测试隔离](docs/BETA-TESTING.md)。
+
 `node --test tests/data-safety.test.cjs tests/experiment.test.cjs tests/service-worker.test.cjs` 可直接运行。数据库事务测试需要 `PGLITE_MODULE` 指向外部安装的 `@electric-sql/pglite`；Edge 测试需要 `TYPESCRIPT_MODULE` 指向 TypeScript 5.9.x。设置后运行 `node --test tests/*.test.cjs`，发布时必须确认没有跳过数据库及 Edge 检查。
 
 用 `node tests/serve-preview.cjs` 打开 `http://127.0.0.1:8787/?mock=1` 可使用虚构数据测试注册、登录、记录与实验主流程；数据只保存在本机浏览器，服务不连接真实数据库。测试资源不进入生产 HTML 或 Service Worker。
