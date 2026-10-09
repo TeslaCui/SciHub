@@ -89,6 +89,43 @@
       step.checklist || []]);
   }
 
+  function updateStepSchema(step = {}) {
+    const stable = (value) => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+    return stable({ title: step.title || '', instruction: step.instruction || '', notice: step.notice || '',
+      pyro_seq: step.pyro_seq || '', duration_hint: step.duration_hint || '',
+      fields: (step.fields || []).map(field => ({ ...field, unit: field.unit || '', type: field.type || '' })),
+      checklist: (step.checklist || Object.keys(step.checks || {})).slice().sort() });
+  }
+
+  function planUpdateChanges(before, after) {
+    const names = { title: '标题', instruction: '说明', notice: '注意事项', pyro_seq: '热解程序', duration_hint: '时长', fields: '字段', checklist: '完成确认' };
+    return Array.from({ length: Math.max(before.length, after.length) }, (_, position) => {
+      const old = before[position], next = after[position];
+      const a = updateStepSchema(old), b = updateStepSchema(next);
+      const what = Object.keys(names).filter(key => JSON.stringify(a[key]) !== JSON.stringify(b[key])).map(key => names[key]);
+      return { position, old, next, what, action: !old ? '新增' : !next ? '移除' : '修改' };
+    }).filter(change => !change.old || !change.next || change.what.length);
+  }
+
+  function reviewPlanUpdate(candidate, runs, stepMap) {
+    const issues = [], reviewed = [];
+    for (const run of runs.filter(item => item.status === 'running' && !item._mergedInto)) {
+      const steps = (stepMap[run.id] || []).slice().sort((a, b) => a.position - b.position);
+      const evidence = steps.filter(step => step.status === 'done' || step.finished_at || stepHasInput(step));
+      const locked = Math.max(-1, ...evidence.map(step => step.position));
+      for (let position = 0; position <= locked; position++) {
+        const step = steps.find(item => item.position === position);
+        if (!step || !candidate[position] || JSON.stringify(updateStepSchema(step)) !== JSON.stringify(updateStepSchema(candidate[position]))) {
+          issues.push({ run_id: run.id, title: run.title, position, reason: '已完成、当前或已有记录的步骤定义不一致' });
+        }
+      }
+      reviewed.push({ id: run.id, title: run.title, locked_through: locked, updated_at: run.updated_at,
+        steps: steps.map(step => ({ id: step.id, position: step.position, updated_at: step.updated_at })) });
+    }
+    return { allowed: !issues.length, issues, runs: reviewed };
+  }
+
   function groupsOf(runs, stepMap) {
     const byId = new Map(runs.map((run) => [String(run.id), run]));
     const neighbors = new Map(runs.map((run) => [String(run.id), new Set()]));
@@ -164,5 +201,5 @@
     return { schedule, save, flushAll, isDirty, hasPending: () => [...entries.values()].some((e) => e.saved < e.revision || !!e.promise) };
   }
 
-  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, groupsOf, createSaveQueue };
+  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
 });

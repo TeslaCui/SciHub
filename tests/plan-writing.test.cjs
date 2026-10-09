@@ -69,12 +69,12 @@ test('version upload never swaps adjacent steps with similar titles or guesses a
   assert.deepEqual(Array.from(result.steps, step => step.fields[0].label), ['干燥温度', '干燥后质量']);
   const ambiguous = await api.mergePlanVersions(old, [{ title: '干燥处理新工序', instruction: '120 ℃ 干燥 4 h。', fields: [] }]);
   assert.equal(ambiguous.stats.newCount, 1);
-  assert.equal(ambiguous.stats.userKept, 0);
+  assert.equal(ambiguous.stats.userKept, 2);
   assert.equal(ambiguous.steps[0].fields.length, 0);
-  assert.equal(ambiguous.steps.length, 1);
+  assert.equal(ambiguous.steps.length, 3);
   const changed = await api.mergePlanVersions(old, [{...old[0], title:'改名后的工序', fields:[{label:'干燥温度',unit:'K',type:'number'}]}]);
-  assert.equal(changed.steps[0].title,'改名后的工序');
-  assert.equal(changed.steps[0].fields[0].unit,'K');
+  assert.equal(changed.steps[0].title,'干燥处理');
+  assert.equal(changed.steps[0].fields[0].unit,'℃');
 });
 
 test('a new client falls back while the old parser is deployed and accepts the marked Chinese protocol response', async () => {

@@ -5,9 +5,9 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-版本 **v1.1.2**（2026-10-09）。实验进度按有效填写计算，浏览空白步骤不会推进进度或阻止平行实验合并。零值、备注、附件、已勾选条目和完成记录仍受合并审核保护，前后步骤定义必须一致。新增兼容的数据库函数迁移，不改写或删除历史数据。使用教程增加进度与合并审核图解，共 9 张标注截图。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
+版本 **v1.1.3**（2026-10-09）。实验进度按有效填写计算，浏览空白步骤不会推进进度或阻止平行实验合并。零值、备注、附件、已勾选条目和完成记录仍受合并审核保护，前后步骤定义必须一致。新增兼容的数据库函数迁移，不改写或删除历史数据。使用教程增加进度与合并审核图解，共 9 张标注截图。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
 
-**使用教程：[网站版](https://teslacui.github.io/SciHub/index.html?v=1.1.2#guide) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
+**使用教程：[网站版](https://teslacui.github.io/SciHub/index.html?v=1.1.3#guide) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
 
 后续功能更新须遵循 [维护规则](AGENTS.md) 中的旧数据兼容与迁移要求：兼容增量升级、明确映射、转换前核实私密备份与恢复方案，并验证旧版本数据升级路径。
 

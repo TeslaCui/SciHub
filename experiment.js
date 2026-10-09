@@ -2770,12 +2770,13 @@
     const oldRoom = temps[0].value;                 // 程序里第一个温度点＝当初的初始温度
     const oldMax = Math.max.apply(null, temps.map((p) => p.value));
 
+    if (roomTemp === '' || roomTemp == null || rate === '' || rate == null || finalTemp === '' || finalTemp == null) return null;
     const roomNum = Number(roomTemp);
     const finalNum = Number(finalTemp);
-    const useRoom = Number.isFinite(roomNum) && roomNum !== 0;
-    const useFinal = Number.isFinite(finalNum) && finalNum > 0;
-    const room = useRoom ? roomNum : oldRoom;
-    const finalT = useFinal ? finalNum : oldMax;
+    const rateNum = Number(rate);
+    if (!Number.isFinite(roomNum) || !Number.isFinite(finalNum) || !Number.isFinite(rateNum) || rateNum <= 0 || finalNum <= 0) return null;
+    const room = roomNum;
+    const finalT = finalNum;
 
     // 初始温度在程序里往往出现多次（C30-T60-C30-… 开头一次、「回到室温」又一次），
     // 必须一起替换 —— 只换第一个的话前后温度对不上，保温段会被误判成升温。
@@ -2785,7 +2786,7 @@
       else if (p.value === oldMax) p.value = finalT;   // 最终温度（可能有多处，如升温到 950 与保温 950）
     });
 
-    const r = Number(rate) > 0 ? Number(rate) : 0;
+    const r = rateNum;
     const segs = [];
     let total = 0;
     let last = null;
@@ -2948,9 +2949,12 @@
     const oldMax = Math.max.apply(null, temps);
     const roomNum = Number(roomTemp);
     const finalNum = Number(finalTemp);
-    const room = Number.isFinite(roomNum) && roomNum !== 0 ? roomNum : oldRoom;
-    const finalT = Number.isFinite(finalNum) && finalNum > 0 ? finalNum : oldMax;
-    const r = Number(rate) > 0 ? Number(rate) : 0;
+    const rateNum = Number(rate);
+    if (roomTemp === '' || roomTemp == null || rate === '' || rate == null || finalTemp === '' || finalTemp == null
+      || !Number.isFinite(roomNum) || !Number.isFinite(finalNum) || !Number.isFinite(rateNum) || rateNum <= 0 || finalNum <= 0) return '';
+    const room = roomNum;
+    const finalT = finalNum;
+    const r = rateNum;
 
     // 第一趟：先算出每个温度点的新值（这一趟不碰时长）
     const newTemps = parts.map((p) => {
