@@ -5,9 +5,9 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-版本 **v1.1.0**（2026-10-08）。站内页面支持浏览器后退和前进，教程在当前标签打开。所有站内页面复用固定顶部栏，点击 SciHub 图标返回主页。切页等待实验数据保存，未保存方案草稿在当前页面会话中保留；刷新前仍须保存草稿。本次不修改数据库或历史数据。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
+版本 **v1.1.1**（2026-10-08）。新增硝酸、盐酸配制溶液计算器，输出原液体积与质量；使用教程新增 7 张带方框、箭头和编号说明的截图，手机可左右滑动查看。站内页面支持浏览器后退和前进，教程在当前标签打开。所有站内页面复用固定顶部栏，点击 SciHub 图标返回主页。切页等待实验数据保存，未保存方案草稿在当前页面会话中保留；刷新前仍须保存草稿。本次不修改数据库或历史数据。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
 
-**使用教程：[网站版](https://teslacui.github.io/SciHub/index.html?v=1.1.0#guide) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
+**使用教程：[网站版](https://teslacui.github.io/SciHub/index.html?v=1.1.1#guide) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
 
 后续功能更新须遵循 [维护规则](AGENTS.md) 中的旧数据兼容与迁移要求：兼容增量升级、明确映射、转换前核实私密备份与恢复方案，并验证旧版本数据升级路径。
 
@@ -18,7 +18,9 @@ index.html            页面骨架（登录视图 / 应用视图 / 模态框）
 style.css             样式
 app.js                认证、科研记录 CRUD、主页（进行中的实验 + 日历 + 待办）、路由、小工具入口
 merge.js              平行实验合并审核、共同阶段与支路流程图
-platinum.js           独立小工具菜单、铂氯酸投料计算（纯本地）
+platinum.js           小工具菜单、铂氯酸投料计算
+solution.js           配制硝酸、盐酸的原液体积与质量
+assets/guide/         教程页面截图与箭头、方框、编号说明
 experiment.js         实验模块：方案导入/编辑、按步执行、拍照、导出、关联实验、热解程序计算器
 supabase_schema.sql   数据库结构参考（与完整 migrations 对应，含自检查询，可手工整段执行）
 supabase/migrations/  数据库迁移（结构以这里为准；push 后由 Supabase GitHub 集成自动应用）
@@ -296,3 +298,5 @@ const SUPABASE_KEY = '<新项目 publishable / anon key>';
 发布检查：`node tools/check-release.cjs --staged` 检查将要提交的版本、资源参数与疑似凭据；仍必须人工审阅 `git diff --cached`。同步脚本不再自动 `git add -A`。
 
 平行合并的本地六步示例：`http://127.0.0.1:8787/?mock=1&parallel=1`，仅使用独立的虚构测试数据。新增 `tests/merge.test.cjs` 和 `tests/sql-merge.test.cjs`；后者在独立内存数据库中验证审核、回滚、归属、只读及重复提交。
+
+教程包含 7 张标注截图，可在手机上左右滑动查看。小工具中的“配制溶液计算器”支持硝酸和盐酸，按目标摩尔浓度、最终体积及实际原液浓度和密度计算原液体积与质量。

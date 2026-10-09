@@ -1,20 +1,32 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "reviewed": "2026-10-08",
-  "guideSourceHash": "b64b5f581b01a9438234ea3185cef11f72d94a8c33ce545aef40bea19d2a6e28",
+  "guideSourceHash": "d9b6e84ae7a41b10c04724cab0b44f6703c05efbdc3488f91527d9b8717d5682",
   "sourceHashes": {
-    "index.html": "c07122d97b852ea678ed53e08530c164aa35f3f224e4bcb5a615188597026e46",
-    "app.js": "1ec93ee070d3038dc79ca81269bbdac4da5f1ca3d59423e828dd2f400c92679f",
+    "index.html": "fdcbf47b2429e097c1e000a3f2ba54562d06f06fbf4046c092d57791c35d03d9",
+    "app.js": "b69fe9f12eeeed43458d387ca50f1d69dddeddf8724e611c900e220fab7c66e7",
     "experiment.js": "4927500fd9badafff8675fbb70303a489814c95098c1f4ccdcb2af5903b21286",
-    "platinum.js": "b5754b8ad67d8e5a3471b3792e18c1e814cd9bd5ccd9dc225980f34cd377dfa7",
+    "platinum.js": "2fa7c7c73e7b2086ce0bd33ad6d178e4b6d60f7966725b3b6fcc679c9642100b",
+    "solution.js": "9746612a15da9548f7237590e4f4be05f9852811bc76dcb215ab541d96b2672a",
     "merge.js": "04705816916b4303490ee4c65d437915b3e1292b7e3e1f2955400e09c84ef3a3",
     "data-safety.js": "d6f6602c4226bb8161b898c235900dcbcbcdf2d526d067aad91ac875dd856648",
     "supabase_schema.sql": "bf5b616cacdd68191aab94b06ec0d60025e01f6c60a9a163506eef3a39ed6669",
     "guide.js": "9dbca0a7d6ff005fdc9b4467c644d9c4371713e39e45ce3be45fe5a48a515409",
+    "guide.css": "d0a32b35b0e4a3fe7d4efe115b390b4a889a6792a6297555908f0c8289b1eec6",
+    "style.css": "7d467e0dfd3fb5158c7aaff032b3d28b60de6ba9663c6960a1c0e467180c403a",
     "supabase/functions/_shared/ai.ts": "a6d3a60a4f7a1901e2f9f683a419cf452bfd01fa884c11e6c2b1f40d26ec9993",
     "supabase/functions/parse-plan/index.ts": "da24532e270f97d4ffd5786c248c1d12bb0342076eabbfd0c4224c7e28ddeb0d",
     "supabase/functions/match-params/index.ts": "8d86d5b977bd49eeca4b277147132740202763ba5993e9143e79ed6b66c6f4b9",
     "supabase/functions/check-link/index.ts": "fa7ae4cb61deb74b8911f84651dacd310aab54557393ce3c88531ad4138ef4ac",
     "supabase/functions/todo-plan/index.ts": "7a50ffc8a0eb875237685f81f98aa37c9298255233c25b911c6343987414abd8"
+  },
+  "assetHashes": {
+    "assets/guide/home.png": "c784d793480e004fd0fa503b62f0818c1d3e0be9be4f6d082dbb2fdb13f40b10",
+    "assets/guide/record.png": "0ed43b3dd9f6353a6def1b068246de3cce00b694c5e879b8af4877b2219b968e",
+    "assets/guide/plan.png": "336c6d355ef6f12bc9b477758364796dbbf3f7f471f51d4ce4cc7d1a4ad7c17e",
+    "assets/guide/run.png": "7c69659bf162c0bf5f9dcc4a39080968b1bc2a2411eed46d3bd25be74e87d0a4",
+    "assets/guide/tools.png": "1ddf7e38001df7b9d08375efe09b5b698443af70fe8208936849877a733aabfa",
+    "assets/guide/solution.png": "c031d0a0a6052054b9ec86729bc44ba589cc1f67f27d092f4ce3b1baad6d506e",
+    "assets/guide/solution-result.png": "4da0b71c4dbb0d51c0edc4cfc5a63a10f3bf06cf34ff73570f3a997c96bb84f7"
   }
 }

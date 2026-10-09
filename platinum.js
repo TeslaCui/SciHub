@@ -71,10 +71,12 @@
 
   function openMenu() {
     openModal('小工具', '<div class="lab-tool-menu">'
+      + '<button type="button" class="ghost" id="tool-solution">配制溶液计算器<span>硝酸、盐酸的原液体积与质量</span></button>'
       + '<button type="button" class="ghost" id="tool-platinum">铂氯酸计算器<span>FeNC 用量、Fe wt% 与 Pt:Fe 摩尔比</span></button>'
       + '<button type="button" class="ghost" id="tool-pyro">热解程序计算器<span>程序串与分段时长</span></button></div>',
     [{ label: '关闭', onClick: closeModal }]);
     byId('tool-platinum').addEventListener('click', openCalculator);
+    byId('tool-solution').addEventListener('click', () => window.SolutionTool.open());
     byId('tool-pyro').addEventListener('click', () => {
       if (window.Tools && window.Tools.openPyroCalculator) window.Tools.openPyroCalculator();
       else setStatus('热解计算器暂不可用，请刷新重试。', 'warn');

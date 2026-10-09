@@ -7,11 +7,12 @@ const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const SOURCE = 'docs/user-guide.source.cjs';
 const REVIEW = 'docs/user-guide-review.json';
-const REVIEW_SOURCES = ['index.html', 'app.js', 'experiment.js', 'platinum.js', 'merge.js', 'data-safety.js', 'supabase_schema.sql',
-  'guide.js', 'supabase/functions/_shared/ai.ts', 'supabase/functions/parse-plan/index.ts',
+const REVIEW_SOURCES = ['index.html', 'app.js', 'experiment.js', 'platinum.js', 'solution.js', 'merge.js', 'data-safety.js', 'supabase_schema.sql',
+  'guide.js', 'guide.css', 'style.css', 'supabase/functions/_shared/ai.ts', 'supabase/functions/parse-plan/index.ts',
   'supabase/functions/match-params/index.ts', 'supabase/functions/check-link/index.ts', 'supabase/functions/todo-plan/index.ts'];
 const normalize = text => text.replace(/\r\n/g, '\n');
 const hash = text => crypto.createHash('sha256').update(normalize(text)).digest('hex');
+const assetHash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const escape = text => String(text).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 function load(source) {
   const context = { module: { exports: {} } };
@@ -41,6 +42,13 @@ function validate(guide, release) {
     assert.ok(item.steps.length, '流程不能缺少步骤：' + item.id);
     item.steps.forEach(step => sentence(step, 20));
     [...item.notes, ...item.caution].forEach(note => sentence(note, 25));
+    for (const figure of item.figures || []) {
+      assert.match(figure.file, /^assets\/guide\/[a-z0-9-]+\.png$/, '截图必须为教程目录内的 PNG');
+      pair(figure.caption); pair(figure.alt);
+      assert.ok(Number.isInteger(figure.width) && figure.width > 0 && Number.isInteger(figure.height) && figure.height > 0);
+      assert.ok(figure.labels.length, '截图必须含编号说明');
+      figure.labels.forEach(note => sentence(note, 25));
+    }
     if (['todo-remove', 'record-delete', 'plan-order', 'plan-delete', 'run-extra', 'run-delete', 'media-delete', 'merge-review'].includes(item.id)) {
       assert.ok(item.caution.length, '涉及删除或冻结的流程必须保留操作前提醒：' + item.id);
     }
@@ -57,13 +65,14 @@ function render(guide) {
   const labels = {before:label('Before you start','开始前'), steps:label('Procedure','操作步骤'), result:label('Result','预期结果'),
     caution:label('CAUTION — Data and operation limits','注意 — 数据及操作影响'),notes:label('Notes','说明')};
   const list = (items, type = 'ul') => `<${type}>${items.map(item => '<li>' + dual(item, 'p') + '</li>').join('')}</${type}>`;
+  const figures = item => (item.figures || []).map(fig => `<figure class="guide-figure"><div class="guide-image-scroll" tabindex="0" role="region" aria-label="${escape(fig.caption.zh)}"><img src="${fig.file}?v=${guide.version}" width="${fig.width}" height="${fig.height}" loading="lazy" alt="${escape(fig.alt.zh + ' / ' + fig.alt.en)}"></div><figcaption>${dual(fig.caption, 'p')}</figcaption>${list(fig.labels, 'ol')}<p class="guide-image-hint">${dual(label('On a phone, swipe the image left or right to read the details.', '手机上可左右滑动图片查看细节。'))}</p></figure>`).join('');
   const contents = guide.groups.map(group => `<details class="guide-toc-group"><summary>${heading(group.title)}</summary><ul>`
     + guide.procedures.filter(item => item.group === group.id).map(item => `<li><a href="#${item.id}">${heading(item.title)}</a></li>`).join('') + '</ul></details>').join('\n');
   const sections = guide.groups.map(group => `<section class="guide-group" data-group="${group.id}"><h2>${heading(group.title)}</h2>`
     + guide.procedures.filter(item => item.group === group.id).map(item => `<details class="guide-procedure" id="${item.id}"><summary><h3>${heading(item.title)}</h3></summary><div class="guide-procedure-body">`
       + `<h4>${dual(labels.before)}</h4>${dual(item.before,'p')}`
       + (item.caution.length ? `<aside class="guide-caution"><h4>${dual(labels.caution)}</h4>${list(item.caution)}</aside>` : '')
-      + `<h4>${dual(labels.steps)}</h4>${list(item.steps,'ol')}<div class="guide-result"><h4>${dual(labels.result)}</h4>${dual(item.result,'p')}</div>`
+      + `<h4>${dual(labels.steps)}</h4>${list(item.steps,'ol')}${figures(item)}<div class="guide-result"><h4>${dual(labels.result)}</h4>${dual(item.result,'p')}</div>`
       + (item.notes.length ? `<h4>${dual(labels.notes)}</h4>${list(item.notes)}` : '')
       + `<a class="guide-permalink" href="#${item.id}">${dual(label('Link to this procedure','此流程链接'))}</a></div></details>`).join('\n') + '</section>').join('\n');
   const html = `<!DOCTYPE html>
@@ -97,6 +106,10 @@ ${sections}<section id="glossary" class="guide-glossary"><h2>术语表 / Technic
       markdown += `<a id="${item.id}"></a>\n\n### ${item.title.en} · ${item.title.zh}\n\n**Before you start · 开始前**\n\n${mdPair(item.before)}\n\n`;
       if (item.caution.length) markdown += `**CAUTION · 注意**\n\n${mdList(item.caution)}\n\n`;
       markdown += '**Procedure · 操作步骤**\n\n' + item.steps.map((step, i) => `${i+1}. ${step.en}\n\n   ${step.zh}`).join('\n\n') + '\n\n';
+      for (const fig of item.figures || []) {
+        markdown += `![${fig.alt.zh} / ${fig.alt.en}](../${fig.file})\n\n${mdPair(fig.caption)}\n\n`;
+        markdown += fig.labels.map((note, i) => `${i+1}. ${note.en}\n\n   ${note.zh}`).join('\n\n') + '\n\n';
+      }
       markdown += `**Result · 预期结果**\n\n${mdPair(item.result)}\n\n`;
       if (item.notes.length) markdown += `**Notes · 说明**\n\n${mdList(item.notes)}\n\n`;
     }
@@ -105,12 +118,19 @@ ${sections}<section id="glossary" class="guide-glossary"><h2>术语表 / Technic
   markdown += guide.glossary.map(item => `| ${item.term.en} · ${item.term.zh} | ${item.definition.en} ${item.definition.zh} |`).join('\n') + '\n';
   return { 'guide.html': html, 'docs/USER-GUIDE.md': markdown };
 }
-function check(read) {
+function check(read, readAsset = file => fs.readFileSync(path.join(root, file))) {
   const guide = validate(load(read(SOURCE)), JSON.parse(read('version.json')));
   const review = JSON.parse(read(REVIEW));
   assert.equal(review.version, guide.version, '教程审阅记录版本过期');
   assert.equal(review.guideSourceHash, hash(read(SOURCE)), '教程内容已改变，需要重新审阅');
   for (const file of REVIEW_SOURCES) assert.equal(review.sourceHashes[file], hash(read(file)), '功能源码变化，需复核教程：' + file);
+  for (const item of guide.procedures) for (const fig of item.figures || []) {
+    const bytes = readAsset(fig.file);
+    assert.ok(bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])), '截图不是 PNG：' + fig.file);
+    assert.equal(bytes.readUInt32BE(16), fig.width, '截图宽度与教程不符');
+    assert.equal(bytes.readUInt32BE(20), fig.height, '截图高度与教程不符');
+    assert.equal(review.assetHashes[fig.file], assetHash(bytes), '截图变化，需要复核：' + fig.file);
+  }
   for (const [file, content] of Object.entries(render(guide))) assert.equal(normalize(read(file)), content, '教程产物过期：' + file);
   return guide;
 }
@@ -124,7 +144,8 @@ if (require.main === module) {
       const guide = validate(load(read(SOURCE)), JSON.parse(read('version.json')));
       if (process.argv.includes('--review')) {
         const review = { version: guide.version, reviewed: guide.updated, guideSourceHash: hash(read(SOURCE)),
-          sourceHashes: Object.fromEntries(REVIEW_SOURCES.map(file => [file, hash(read(file))])) };
+          sourceHashes: Object.fromEntries(REVIEW_SOURCES.map(file => [file, hash(read(file))])),
+          assetHashes: Object.fromEntries(guide.procedures.flatMap(item => (item.figures || []).map(fig => [fig.file, assetHash(fs.readFileSync(path.join(root, fig.file)))]))) };
         fs.writeFileSync(path.join(root, REVIEW), JSON.stringify(review, null, 2) + '\n');
       }
       for (const [file, content] of Object.entries(render(guide))) fs.writeFileSync(path.join(root, file), content);

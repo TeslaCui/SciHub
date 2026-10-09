@@ -1102,6 +1102,10 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .lab-tool-menu button span { display:block; font-size:12px; color:var(--muted); margin-top:6px; }
 .platinum-input-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; }
 .platinum-input-grid label, .platinum-parameters label { display:grid; gap:6px; min-width:0; }
+.modal-card:has(#sol-reagent) { width: min(680px, calc(100vw - 32px)); max-width: 680px; }
+.modal-card:has(#sol-reagent) .platinum-input-grid label { margin: 0; }
+.modal-card:has(#sol-reagent) .platinum-result { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 22px; }
+.modal-card:has(#sol-reagent) .platinum-result span { flex-basis: 100%; }
 .platinum-input-grid input, .platinum-input-grid select, .platinum-parameters input { width:100%; min-width:0; box-sizing:border-box; }
 .platinum-parameters { margin:14px 0; }
 .platinum-parameters summary { cursor:pointer; margin-bottom:12px; }

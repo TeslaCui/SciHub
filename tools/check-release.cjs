@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const staged = process.argv.includes('--staged');
 const git = (...args) => cp.execFileSync('git', args, { encoding: 'utf8' });
 const read = (file) => staged ? git('show', ':' + file) : fs.readFileSync(file, 'utf8');
-require('./build-guide.cjs').check(read);
+const readAsset = file => staged ? cp.execFileSync('git', ['show', ':' + file]) : fs.readFileSync(file);
+require('./build-guide.cjs').check(read, readAsset);
 const version = JSON.parse(read('version.json')).version;
 assert.match(version, /^\d+\.\d+\.\d+$/);
 assert.ok(version.split('.').every((part) => Number(part) < 10), '版本段应按项目约定进位');
@@ -15,7 +16,7 @@ for (const file of ['index.html', 'sw.js']) {
   const source = read(file);
   const versions = [...source.matchAll(/\?v=([\d.]+)/g)].map((match) => match[1]);
   assert.ok(versions.length && versions.every((value) => value === version), file + ' 资源版本不一致');
-  for (const resource of ['data-safety.js', 'merge.js', 'platinum.js']) assert.ok(source.includes(resource + '?v=' + version), file + ' 缺少资源 ' + resource);
+  for (const resource of ['data-safety.js', 'merge.js', 'platinum.js', 'solution.js']) assert.ok(source.includes(resource + '?v=' + version), file + ' 缺少资源 ' + resource);
 }
 if (staged) {
   const files = git('diff', '--cached', '--name-only', '--diff-filter=ACMR').trim().split('\n').filter(Boolean);
@@ -28,7 +29,7 @@ if (staged) {
       assert.notEqual(payload.role, 'service_role', '禁止提交 service_role：' + file);
     }
   }
-  const frontend = files.some((file) => /^(app\.js|experiment\.js|platinum\.js|data-safety\.js|merge\.js|style\.css|index\.html|sw\.js|guide\.(html|css|js))$/.test(file));
+  const frontend = files.some((file) => /^(app\.js|experiment\.js|platinum\.js|solution\.js|data-safety\.js|merge\.js|style\.css|index\.html|sw\.js|guide\.(html|css|js))$/.test(file));
   if (frontend) {
     const previous = JSON.parse(git('show', 'HEAD:version.json')).version.split('.').map(Number);
     previous[2]++;

@@ -29,3 +29,29 @@ test('rendering preserves bilingual procedural warnings before actions and escap
   assert.ok(html.indexOf('guide-caution') < html.indexOf('<ol>'));
   assert.ok(outputs['docs/USER-GUIDE.md'].includes('删除无法撤销'));
 });
+
+test('screenshots use valid shared paths and must match the reviewed image bytes', () => {
+  const guide = builder.load(read(builder.SOURCE));
+  const release = JSON.parse(read('version.json'));
+  const fig = guide.procedures.find(item => item.figures?.length).figures[0];
+  const outputs = builder.render(guide);
+  assert.ok(outputs['guide.html'].includes(`src="${fig.file}?v=${release.version}"`));
+  assert.ok(outputs['docs/USER-GUIDE.md'].includes(`](../${fig.file})`));
+  assert.ok(read('sw.js').includes(`./${fig.file}?v=${release.version}`));
+  assert.throws(() => builder.check(read, file => {
+    const bytes = fs.readFileSync(path.join(__dirname, '..', file));
+    bytes[bytes.length-1] ^= 1;
+    return bytes;
+  }), /截图变化/);
+  fig.file = '../private.png';
+  assert.throws(() => builder.validate(guide,release), /教程目录/);
+});
+
+test('a missing screenshot or mismatched dimensions blocks the guide release', () => {
+  assert.throws(() => builder.check(read, () => { throw new Error('missing image'); }), /missing image/);
+  assert.throws(() => builder.check(read, file => {
+    const bytes = fs.readFileSync(path.join(__dirname, '..', file));
+    bytes.writeUInt32BE(1,16);
+    return bytes;
+  }), /截图宽度/);
+});

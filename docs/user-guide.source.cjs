@@ -12,7 +12,11 @@ p('guide', 'start', 'Use this guide', '使用本教程', ['Open SciHub in a brow
   ['Enter a word in the search field to find a task.', '在搜索框中输入关键词查找任务。'],
   ['Select the language view that you need.', '选择需要的语言显示方式。'],
   ['Compare the guide version with the version in the SciHub footer.', '核对教程版本与 SciHub 页脚的版本。']
-], ['You can read the guide without an account.', '无需登录即可阅读教程。']);
+], ['You can read the guide without an account.', '无需登录即可阅读教程。'], [
+  ['Screenshot numbers match the descriptions below each image.', '截图编号对应图片下方的说明。'],
+  ['Screenshots use fictional examples; your titles and records can differ.', '截图使用虚构示例；你的名称和记录可能不同。'],
+  ['On a phone, swipe an image left or right to read the details.', '手机上可左右滑动图片查看细节。']
+]);
 p('navigation', 'start', 'Move between pages', '切换页面与返回主页', ['Open SciHub in a browser.', '在浏览器中打开 SciHub。'], [
   ['Select a task to open its page in the current tab.', '选择任务，在当前标签打开对应页面。'],
   ['Use the browser Back button to return to the previous page.', '使用浏览器后退按钮返回上一页。'],
@@ -536,6 +540,12 @@ p('pyro-tool', 'tools', 'Use the pyrolysis program calculator', '使用热解程
   ['Check the generated program against your instrument instructions before use.', '使用前，按照仪器说明核对生成的程序。'],
   ['SciHub does not control a furnace or verify laboratory safety.', 'SciHub 不控制炉体，也不验证实验室安全。']
 ]);
+p('tools-menu', 'tools', 'Open the calculator menu', '打开小工具菜单', ['Open SciHub.', '打开 SciHub。'], [
+  ['Select "小工具" in the top bar.', '选择顶栏的“小工具”。'],
+  ['Select the calculator that you need.', '选择需要的计算器。'],
+  ['If available, select "返回小工具" to return to the menu.', '如果显示“返回小工具”，选择它返回菜单。'],
+  ['Select "关闭" to return to the current page.', '选择“关闭”返回当前页面。']
+], ['The selected calculator opens above the current page.', '所选计算器在当前页面上方打开。']);
 p('platinum-tool', 'tools', 'Calculate the platinum reagent mass', '使用铂氯酸计算器', ['Have the Fe content, target molar ratio, and reagent Pt mass fraction.', '准备 Fe 含量、目标摩尔比和试剂 Pt 质量分数。'], [
   ['Select "小工具" (Tools) in the top bar.', '选择顶栏的“小工具”。'],
   ['Select "铂氯酸计算器" (Platinum reagent calculator).', '选择“铂氯酸计算器”。'],
@@ -554,6 +564,27 @@ p('platinum-tool', 'tools', 'Calculate the platinum reagent mass', '使用铂氯
 ], [
   ['Use the actual reagent Pt mass fraction, not reagent purity or an assumed acid concentration.', '使用实际试剂 Pt 质量分数，不使用试剂纯度或猜测的酸浓度。'],
   ['The result is mass; solution volume requires its density.', '结果为质量；溶液体积换算还需要密度。']
+]);
+p('solution-tool', 'tools', 'Calculate a solution dilution', '使用配制溶液计算器', ['Have the actual stock concentration and density from the bottle label or certificate.', '准备瓶签或证书上的实际原液浓度和密度。'], [
+  ['Select "小工具" in the top bar.', '选择顶栏的“小工具”。'],
+  ['Select "配制溶液计算器".', '选择“配制溶液计算器”。'],
+  ['Select nitric acid or hydrochloric acid.', '选择硝酸或盐酸。'],
+  ['Enter the target concentration in mol/L.', '输入目标浓度，单位为 mol/L。'],
+  ['Enter the final volume and select mL or L.', '输入最终配制体积，并选择 mL 或 L。'],
+  ['Select the stock concentration format: mass percentage or molar concentration.', '选择原液浓度形式：质量分数或摩尔浓度。'],
+  ['Enter the actual stock concentration and density.', '填写实际原液浓度和密度。'],
+  ['Scroll down to read the required stock volume and mass.', '向下滚动，读取需加入原液的体积和质量。'],
+  ['Record the stock parameters and actual dose in your experiment notes.', '在实验备注中记录原液参数和实际加入量。']
+], ['The calculator shows the required stock volume in mL and mass in g.', '计算器显示需加入原液的体积，单位为 mL，以及质量，单位为 g。'], [
+  ['Reference presets are 65% and 1.40 g/mL for nitric acid, and 37% and 1.19 g/mL for hydrochloric acid.', '参考预设：硝酸 65%、1.40 g/mL；盐酸 37%、1.19 g/mL。'],
+  ['Check the concentration, density, and applicable temperature against the bottle label or certificate.', '按瓶签或证书核对浓度、密度和适用温度。'],
+  ['Changing the reagent restores its reference parameters and clears its molar concentration input.', '切换试剂会恢复其参考参数，并清空原液摩尔浓度输入。'],
+  ['Blank, invalid, or excessive target concentrations remove the previous result and show a message.', '缺少输入、输入无效或目标浓度过高时，不保留上次结果并显示提示。'],
+  ['Trial inputs stay in this page session and do not change experimental records.', '试算输入保留在当前页面会话，不改动实验记录。']
+], [
+  ['Slowly add acid to water, allow cooling, then make up to the final volume.', '缓慢将酸加入水中，冷却后定容至目标体积。'],
+  ['Do not add water to concentrated acid.', '不要将水加入浓酸。'],
+  ['Do not calculate the water dose by subtracting the stock volume from the final volume.', '加水量不能直接用最终体积减去原液体积。']
 ]);
 p('pyro-step', 'tools', 'Read a calculator inside an experiment step', '查看步骤中的热解计算器', ['Open a step that contains a pyrolysis program.', '打开包含热解程序的步骤。'], [
   ['Expand "热解程序计算器".', '展开“热解程序计算器”。'],
@@ -609,8 +640,49 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['There is no general list of all completed experiment details.', '目前没有列出全部已完成实验详情的通用历史列表。'],
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
+// Screenshots show local fictional examples. Numbers match the arrow labels.
+function figure(id, file, width, height, caption, labels) {
+  const item = procedures.find(item => item.id === id);
+  (item.figures ||= []).push({ file: 'assets/guide/' + file + '.png', width, height,
+    caption: pair(...caption), alt: pair(...caption), labels: labels.map(x => pair(...x)) });
+}
+figure('navigation', 'home', 1265, 865, ['Home page navigation', '主页导航与常用入口'], [
+  ['Select the SciHub logo to return home.', '点击 SciHub 图标返回主页。'],
+  ['Select "小工具" to open the calculator menu.', '点击“小工具”打开计算器菜单。'],
+  ['Use the navigation bar to open home, plans, or records.', '通过导航栏切换主页、实验方案和科研记录。']
+]);
+figure('tools-menu', 'tools', 1265, 865, ['Select a calculator', '选择计算器'], [
+  ['Select the solution calculator.', '选择配制溶液计算器。'],
+  ['Select the platinum reagent calculator.', '选择铂氯酸计算器。'],
+  ['Select the pyrolysis program calculator.', '选择热解程序计算器。']
+]);
+figure('solution-tool', 'solution', 1265, 865, ['Enter solution parameters', '填写配制溶液参数'], [
+  ['Select the reagent and enter the target concentration in mol/L.', '选择试剂并输入目标浓度，单位为 mol/L。'],
+  ['Enter the final volume and select mL or L.', '输入最终配制体积并选择 mL 或 L。'],
+  ['Check the stock concentration and density against the bottle label or certificate.', '按瓶签或证书核对原液浓度和密度。']
+]);
+figure('solution-tool', 'solution-result', 1265, 865, ['Read the dilution result', '读取配制溶液结果'], [
+  ['Read the required stock volume and mass.', '读取需加入原液的体积和质量。'],
+  ['Check the stock molar concentration and final volume.', '核对原液摩尔浓度及最终配制体积。'],
+  ['Add acid to water, allow cooling, then make up to the final volume.', '酸加入水中，冷却后定容至目标体积。']
+]);
+figure('plan-edit', 'plan', 1280, 875, ['Plan preview controls', '实验方案预览与操作'], [
+  ['Check the steps, then select "开始实验".', '核对步骤后，点击“开始实验”。'],
+  ['Select "编辑方案" to change the plan draft.', '点击“编辑方案”修改方案草稿。'],
+  ['Select "返回方案列表" to read other plans.', '点击“返回方案列表”查看其他方案。']
+]);
+figure('run-data', 'run', 1265, 1301, ['Enter experiment measurements', '填写实验数据与备注'], [
+  ['Enter actual measurements and check the field units.', '填写实际测量值，并核对字段单位。'],
+  ['Enter actual operations and deviations in the notes.', '填写实际操作情况及偏差备注。'],
+  ['After you complete the step, select "完成并下一步".', '完成当前步骤后，点击“完成并下一步”。']
+]);
+figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑科研记录'], [
+  ['Enter the record title.', '填写记录标题。'],
+  ['Enter the record content.', '填写科研记录内容。'],
+  ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
+]);
 module.exports = {
-  version: '1.1.0', updated: '2026-10-08',
+  version: '1.1.1', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

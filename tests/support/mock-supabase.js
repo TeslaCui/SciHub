@@ -1,7 +1,8 @@
 /* Local preview only. Fictional data; never contacts Supabase. */
 (function () {
   const parallelFixture = typeof document !== 'undefined' && /parallel=1/.test(document.currentScript && document.currentScript.src || '');
-  const key = parallelFixture ? 'scihub-parallel-fixtures-v1' : 'scihub-audit-fixtures-v1';
+  const guideFixture = typeof document !== 'undefined' && /guide=1/.test(document.currentScript && document.currentScript.src || '');
+  const key = guideFixture ? 'scihub-guide-fixtures-v1' : parallelFixture ? 'scihub-parallel-fixtures-v1' : 'scihub-audit-fixtures-v1';
   const userId = '00000000-0000-0000-0000-000000000001';
   const stamp = () => new Date().toISOString();
   const load = () => JSON.parse(localStorage.getItem(key) || 'null');
@@ -13,6 +14,15 @@
     experiment_runs: [], run_steps: [],
   } };
   store.tables.experiment_merge_groups ||= [];
+  if (guideFixture && !saved) {
+    store.session = { user: { id: userId, email: 'guide@example.test' } };
+    store.tables.research_profiles = [{ user_id: userId, username: '示例用户', email: 'guide@example.test' }];
+    store.tables.experiment_plans[0].title = '[示例]材料干燥方案';
+    store.tables.experiment_plans[0].source = '材料干燥方案.docx';
+    store.tables.experiment_runs = [{ id: 1, user_id: userId, plan_id: 1, title: '[示例]材料干燥实验', status: 'running', current_step: 0, started_at: stamp(), created_at: stamp(), updated_at: stamp() }];
+    store.tables.run_steps = store.tables.plan_steps.map(step => ({ ...step, run_id: 1, status: 'pending', values: {}, images: [], note: '', updated_at: stamp() }));
+    store.tables.research_records = [{ id: 1, user_id: userId, title: '[示例]溶液配制记录', category: '实验日志', occurred_on: '2026-10-08', content: '目标：配制 100 mL、0.1 mol/L 硝酸。\n使用前核对瓶签上的原液浓度和密度。', created_at: stamp(), updated_at: stamp() }];
+  }
   store.tables.experiment_merge_members ||= [];
   for (const group of store.tables.experiment_merge_groups) {
     const member = store.tables.experiment_merge_members.find((row) => row.group_id === group.id);
