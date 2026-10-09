@@ -1,11 +1,12 @@
 {
-  "version": "1.0.6",
+  "version": "1.0.7",
   "reviewed": "2026-10-08",
-  "guideSourceHash": "e04c18b6c2263058f38278f7a6feefde6594ebda80b67552bf6167c889f5ae5c",
+  "guideSourceHash": "8528659fa99a15a92631015363b3539028f91cad8a137b5877bb01da7600a04b",
   "sourceHashes": {
-    "index.html": "9d3d13115bec7550c826edaf0b8d95c7adcdfb19da275c46d598094a4805afe2",
-    "app.js": "af149b299fe37234ce51a138925e17abdf62e00a1abd37b844d104ddf0f289f5",
+    "index.html": "919dbf2f6b08d56bf5f04b4e2d2d17508bd17d380cb78d976c8ac1f258dda34d",
+    "app.js": "e869249121071f1ce9034fd59cee63edfc56a0bf98da589d1a96fece3d009ce6",
     "experiment.js": "22630221c0ea3c51616eb12c63bb892c4f9c293a4427f480cbacd7845951270f",
+    "platinum.js": "b5673fd0a97074ce7b0e7bc834d4d8c58f91808d61299a66eb7d68442f99a11a",
     "merge.js": "f537fecafb71fa5d57e083b791bc61007f4ef3fbf1b6ac370723f9ff7e241336",
     "data-safety.js": "d6f6602c4226bb8161b898c235900dcbcbcdf2d526d067aad91ac875dd856648",
     "supabase_schema.sql": "bf5b616cacdd68191aab94b06ec0d60025e01f6c60a9a163506eef3a39ed6669",

@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const SOURCE = 'docs/user-guide.source.cjs';
 const REVIEW = 'docs/user-guide-review.json';
-const REVIEW_SOURCES = ['index.html', 'app.js', 'experiment.js', 'merge.js', 'data-safety.js', 'supabase_schema.sql',
+const REVIEW_SOURCES = ['index.html', 'app.js', 'experiment.js', 'platinum.js', 'merge.js', 'data-safety.js', 'supabase_schema.sql',
   'guide.js', 'supabase/functions/_shared/ai.ts', 'supabase/functions/parse-plan/index.ts',
   'supabase/functions/match-params/index.ts', 'supabase/functions/check-link/index.ts', 'supabase/functions/todo-plan/index.ts'];
 const normalize = text => text.replace(/\r\n/g, '\n');

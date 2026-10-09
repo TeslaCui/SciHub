@@ -634,11 +634,11 @@ if ($('user-menu-btn')) {
   $('user-menu-btn').addEventListener('click', (e) => { e.stopPropagation(); toggleUserMenu(); });
 }
 
-/* 右上角「小工具」：目前是热解程序计算器，以后新增的也挂在这里 */
+/* 右上角「小工具」：独立试算入口 */
 if ($('tools-btn')) {
   $('tools-btn').addEventListener('click', () => {
     closeUserMenu();
-    if (window.Tools && window.Tools.openPyroCalculator) window.Tools.openPyroCalculator();
+    if (window.LabTools && window.LabTools.open) window.LabTools.open();
     else setStatus('小工具还没加载好，请刷新页面重试。', 'warn');
   });
 }
@@ -669,7 +669,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.6';
+const APP_VERSION = '1.0.7';
 
 async function checkVersion() {
   const label = $('app-version');

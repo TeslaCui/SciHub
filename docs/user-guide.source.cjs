@@ -489,6 +489,7 @@ p('legacy-links', 'merge', 'Use an old experiment association', '处理旧版实
 ]);
 p('pyro-tool', 'tools', 'Use the pyrolysis program calculator', '使用热解程序计算器', ['Have the approved instrument program and process conditions.', '准备已确认的仪器程序和工艺条件。'], [
   ['Select "小工具" (Tools) in the top bar.', '选择顶栏的“小工具”。'],
+  ['Select "热解程序计算器" (Pyrolysis program calculator).', '选择“热解程序计算器”。'],
   ['Enter the pyrolysis program.', '输入热解程序。'],
   ['Enter the initial temperature.', '输入初始温度。'],
   ['Enter the heating rate in ℃/min.', '输入升温速率，单位为 ℃/min。'],
@@ -502,6 +503,25 @@ p('pyro-tool', 'tools', 'Use the pyrolysis program calculator', '使用热解程
 ], [
   ['Check the generated program against your instrument instructions before use.', '使用前，按照仪器说明核对生成的程序。'],
   ['SciHub does not control a furnace or verify laboratory safety.', 'SciHub 不控制炉体，也不验证实验室安全。']
+]);
+p('platinum-tool', 'tools', 'Calculate the platinum reagent mass', '使用铂氯酸计算器', ['Have the Fe content, target molar ratio, and reagent Pt mass fraction.', '准备 Fe 含量、目标摩尔比和试剂 Pt 质量分数。'], [
+  ['Select "小工具" (Tools) in the top bar.', '选择顶栏的“小工具”。'],
+  ['Select "铂氯酸计算器" (Platinum reagent calculator).', '选择“铂氯酸计算器”。'],
+  ['Enter the FeNC mass and select mg or g.', '输入 FeNC 用量，并选择 mg 或 g。'],
+  ['Enter Fe wt% as a percentage; enter 1 for 1%.', 'Fe wt% 填百分数；1 表示 1%。'],
+  ['Enter the Pt:Fe molar ratio, such as 2 or 2:1.', '输入 Pt:Fe 摩尔比，例如 2 或 2:1。'],
+  ['Open "试剂参数与计算公式" and check the reagent Pt mass fraction.', '展开“试剂参数与计算公式”，核对试剂 Pt 质量分数。'],
+  ['Change that percentage if your reagent has a different Pt mass fraction.', '实际试剂 Pt 质量分数不同时，修改该百分数。'],
+  ['Read the required reagent mass and the intermediate Fe and Pt amounts.', '读取需加入的试剂质量，以及 Fe 和 Pt 的中间计算量。'],
+  ['Record the Fe content source, reagent fraction, and actual dose in your experiment notes.', '在实验备注中记录 Fe 含量来源、试剂分数及实际投料。']
+], ['The calculator updates the reagent mass in mg and g when you change an input.', '修改输入时，计算器自动更新以 mg 和 g 表示的试剂质量。'], [
+  ['The default reagent Pt mass fraction is 3.80761816451526%, from the reference calculation sheet.', '默认试剂 Pt 质量分数为参考计算表中的 3.80761816451526%。'],
+  ['The molar masses are 55.845 g/mol for Fe and 195.084 g/mol for Pt.', '摩尔质量为 Fe 55.845 g/mol、Pt 195.084 g/mol。'],
+  ['Trial inputs stay in this page session; they are not saved to experiment records.', '试算输入仅保留在当前页面会话，不保存到实验记录。'],
+  ['Blank or invalid inputs show a message and remove the previous result.', '缺少输入或输入无效时显示提示，不保留上次结果。']
+], [
+  ['Use the actual reagent Pt mass fraction, not reagent purity or an assumed acid concentration.', '使用实际试剂 Pt 质量分数，不使用试剂纯度或猜测的酸浓度。'],
+  ['The result is mass; solution volume requires its density.', '结果为质量；溶液体积换算还需要密度。']
 ]);
 p('pyro-step', 'tools', 'Read a calculator inside an experiment step', '查看步骤中的热解计算器', ['Open a step that contains a pyrolysis program.', '打开包含热解程序的步骤。'], [
   ['Expand "热解程序计算器".', '展开“热解程序计算器”。'],
@@ -558,7 +578,7 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
 module.exports = {
-  version: '1.0.6', updated: '2026-10-08',
+  version: '1.0.7', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },
