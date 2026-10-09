@@ -5,9 +5,9 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-版本 **v1.0.8**（2026-10-08）。实验方案卡片支持右键、手机长按或 Shift+F10 打开重命名与删除菜单；详情页移除重命名入口，编辑保存或取消后返回方案预览。删除前须确认，已开始实验及其快照保留。本次沿用现有数据库，不进行迁移或旧数据转换。“小工具”保留铂氯酸计算器。方案导入按化学实验步骤书整理中文版。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明范围与旧数据兼容。平行实验合并设计详见 [说明](docs/PARALLEL-MERGE.md)，此前项目检查详见 [审计报告](docs/AUDIT-2026-10-08.md)。
+版本 **v1.0.9**（2026-10-08）。统一软件与教程的功能命名，精简说明和提示。方案支持卡片菜单、编辑预览、平行实验合并及 Word 导入；小工具提供铂氯酸和热解程序计算器。本次仅更新界面文案，保留既有科研记录和实验数据。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
 
-**使用教程：[网站版](https://teslacui.github.io/SciHub/guide.html?v=1.0.8) · [GitHub 版](docs/USER-GUIDE.md)**。英文采用 ASD-STE100 简明技术写作原则，中文逐项对照；完整词典符合性尚未经独立审核。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
+**使用教程：[网站版](https://teslacui.github.io/SciHub/guide.html?v=1.0.9) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
 
 后续功能更新须遵循 [维护规则](AGENTS.md) 中的旧数据兼容与迁移要求：兼容增量升级、明确映射、转换前核实私密备份与恢复方案，并验证旧版本数据升级路径。
 

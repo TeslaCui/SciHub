@@ -12,11 +12,7 @@ p('guide', 'start', 'Use this guide', '使用本教程', ['Open SciHub in a brow
   ['Enter a word in the search field to find a task.', '在搜索框中输入关键词查找任务。'],
   ['Select the language view that you need.', '选择需要的语言显示方式。'],
   ['Compare the guide version with the version in the SciHub footer.', '核对教程版本与 SciHub 页脚的版本。']
-], ['You can read the guide without an account.', '无需登录即可阅读教程。'], [
-  ['The English instructions use short sentences and consistent technical terms.', '英文操作说明使用短句和一致的技术术语。'],
-  ['Chinese text is a translation of the English instructions.', '中文是英文操作说明的对照翻译。'],
-  ['Quoted Chinese text identifies the exact controls in SciHub.', '引号内的中文是 SciHub 控件的实际名称。']
-]);
+], ['You can read the guide without an account.', '无需登录即可阅读教程。']);
 p('register', 'account', 'Create an account', '注册账号', ['Use an email address that you can access.', '准备一个可以收取邮件的邮箱。'], [
   ['Select "注册" (Register).', '选择“注册”。'],
   ['Enter your email address.', '填写邮箱。'],
@@ -159,19 +155,17 @@ p('record-delete', 'records', 'Delete a research record', '删除科研记录', 
 ]);
 p('plan-import', 'plans', 'Import a Word plan', '导入 Word 实验方案', ['Prepare a .docx file that contains the plan.', '准备包含方案的 .docx 文件。'], [
   ['Select "实验方案" (Experiment plans).', '选择“实验方案”。'],
-  ['In "导入 Word 方案（.docx）", select the file.', '在“导入 Word 方案（.docx）”中选择文件。'],
+  ['In "导入 Word 方案", select the file.', '在“导入 Word 方案”中选择文件。'],
   ['Wait for the plan draft.', '等待方案草稿出现。'],
-  ['Open "查看导入原文（核对用）".', '展开“查看导入原文（核对用）”。'],
+  ['Open "查看导入原文".', '展开“查看导入原文”。'],
   ['Compare all draft steps with the source document.', '将全部草稿步骤与原文件逐项核对。'],
   ['Correct the draft before you save it.', '保存前修正草稿。']
 ], ['SciHub opens "核对导入结果" (Check import results).', 'SciHub 打开“核对导入结果”。'], [
-  ['SciHub tries AI parsing first; it uses rule parsing if AI is not available.', 'SciHub 优先尝试 AI 解析；AI 不可用时改用规则解析。'],
   ['AI parsing can send plan text to the configured AI service.', 'AI 解析可能把方案文本发送到配置的 AI 服务。'],
-  ['AI produces a Chinese chemical procedure with reagents, conditions, operations, and endpoints from the source.', 'AI 按化学实验步骤书整理原文中的试剂、条件、操作和终点，不提供英文对照。'],
+  ['The imported procedure uses Chinese instructions.', '导入后的步骤使用中文。'],
   ['Keep source values, units, conditions, negative instructions, and instrument codes unchanged.', '保留原文数值、单位、条件、否定指令及仪器代码，不擅自更改。'],
-  ['Rule fallback keeps the source text; manually check its chemical operations.', '规则回退保留原文；需要手工核对化学工序、条件和记录项。'],
+  ['Check all operations, conditions, and data fields against the source.', '对照原文核对全部操作、条件和记录项。'],
   ['An unnumbered source needs manual process boundaries before you save.', '无编号原文须在保存前手工核对并划分工序。'],
-  ['Import instructions do not require STE sentence limits.', '导入说明不强制采用 STE 的句长限制。'],
   ['PDF, .doc, and image imports are not available.', '目前不支持 PDF、.doc 和图片导入。']
 ]);
 p('plan-review', 'plans', 'Check and save a plan draft', '核对并保存方案草稿', ['Open an imported draft or select "编辑方案".', '打开导入草稿，或选择“编辑方案”。'], [
@@ -229,7 +223,7 @@ p('plan-version', 'plans', 'Upload a new plan version', '上传方案新版本',
   ['Select the new .docx file.', '选择新版 .docx 文件。'],
   ['Check the new, retained, and manually added steps in the draft.', '核对草稿中新增、保留以及手动添加的步骤。'],
   ['Correct the field names, units, and conditions.', '修正字段名称、单位和条件。'],
-  ['Compare the Chinese instructions with "查看导入原文（核对用）".', '对照“查看导入原文（核对用）”核对中文指令。'],
+  ['Compare the Chinese instructions with "查看导入原文".', '对照“查看导入原文”核对中文指令。'],
   ['Select "保存修改" (Save changes).', '选择“保存修改”。'],
   ['Read the save and experiment synchronization messages.', '阅读保存和实验同步提示。']
 ], ['The dated plan log identifies the saved update.', '按日期记录的方案日志标识此次更新。'], [
@@ -261,7 +255,7 @@ p('plan-delete', 'plans', 'Delete a saved plan', '删除已保存方案', ['Open
   ['Existing experiments retain their steps, measured values, notes, and attachment references.', '既有实验保留步骤、实测值、备注及附件引用。'],
   ['A deleted plan is no longer available for new experiments.', '删除的方案不能再用于开始新实验。'],
   ['If deletion fails, keep the page and read the error before retrying.', '删除失败时保留页面，阅读错误后再重试。'],
-  ['The database blocks deletion when the plan still links to a locked merged branch.', '方案仍关联已合并的只读支路时，数据库会拒绝删除。']
+  ['A plan cannot be deleted while a locked merged branch still uses it.', '已合并的只读支路仍使用此方案时，无法删除方案。']
 ], [
   ['Deletion cannot be undone; there is no plan recycle bin.', '删除无法撤销；目前没有方案回收站。'],
   ['Deletion also removes the saved plan steps.', '删除会同时移除已保存的方案步骤。'],
@@ -274,7 +268,7 @@ p('plan-reparse', 'plans', 'Update an old plan parser result', '更新旧方案�
   ['Confirm a transfer only after you check the field meanings and units.', '核对字段含义和单位后，才确认迁移。'],
   ['Read the result message.', '阅读结果提示。'],
   ['Check the updated plan fields and affected experiment values.', '检查更新后的方案字段和受影响的实验值。']
-], ['SciHub marks the plan with the current parser version after a successful update.', '更新成功后，SciHub 将方案标记为当前解析版本。'], [
+], ['SciHub updates the plan steps and fields.', 'SciHub 更新方案步骤和字段。'], [
   ['Parser updates and website updates are different operations.', '方案解析更新与网站版本更新是不同操作。']
 ], [
   ['A parser update can change field definitions; do not treat it as a preview.', '解析更新可能更改字段定义，不能把它当作只读预览。']
@@ -307,7 +301,7 @@ p('run-resume', 'runs', 'Continue or browse an experiment', '继续实验或浏�
   ['Select a numbered step to read that step.', '选择步骤编号以查看该步。'],
   ['Use "上一步" to read the previous step if necessary.', '如有需要，使用“上一步”查看前一步。']
 ], ['SciHub shows the selected step; it does not mark that step complete.', 'SciHub 显示所选步骤，不会仅因浏览就标记完成。'], [
-  ['If you select "记为我做到这里", SciHub changes the saved progress pointer.', '选择“记为我做到这里”会更改已保存的进度位置。'],
+  ['If you select "设为当前步骤", SciHub changes the saved progress pointer.', '选择“设为当前步骤”会更改已保存的进度位置。'],
   ['That control does not confirm completion of every earlier step.', '该操作不会确认全部前置步骤已完成。']
 ]);
 p('run-data', 'runs', 'Record step data', '填写步骤数据', ['Open an active experiment step.', '打开进行中实验的某一步。'], [
@@ -459,11 +453,11 @@ p('merge-review', 'merge', 'Review and confirm a merge', '审核并确认混合�
 ], ['Each branch keeps its original data; one new stage owns the later records.', '各支路保留原数据，新共同阶段单独保存后续记录。'], [
   ['The home page merge icon opens the same review window.', '主页合并图标可打开同一审核窗口。'],
   ['If selected experiments or data change after review, repeat the review.', '审核后选择或数据发生变化时，需要重新审核。'],
-  ['The database checks the merge again when you submit.', '提交时数据库再次检查合并条件。']
+  ['SciHub checks the merge again when you submit.', '提交时再次检查合并条件。']
 ], [
   ['A confirmed mix locks the original branches.', '确认混合后，原支路锁定。'],
   ['There is no direct split or delete operation for a confirmed merged chain.', '已确认合并的链路没有直接拆分或删除操作。'],
-  ['The review is a technical check plus operator confirmation, not an independent reviewer approval.', '当前审核是技术校验加操作者确认，不是独立审核员审批。']
+  ['The operator must confirm the records and mixing boundary after the checks pass.', '检查通过后，操作者须确认记录和混合边界。']
 ]);
 p('merge-use', 'merge', 'Use the branch and common stage diagram', '查看支路和共同阶段流程图', ['Open a merged experiment.', '打开合并实验。'], [
   ['Select a branch card to read its original data.', '选择支路卡片查看原始数据。'],
@@ -493,7 +487,7 @@ p('merge-errors', 'merge', 'Correct a rejected merge', '处理合并审核失败
   ['If data changed after review, open the review again.', '审核后数据变化时，重新打开审核。']
 ], ['You preserve the evidence while you resolve the rejection.', '在处理拒绝原因的同时保留实验事实。'], [], [
   ['Do not erase actual measurements merely to pass a merge check.', '不要仅为通过合并检查而清空真实测量记录。'],
-  ['AI cannot authorize a rejected merge.', 'AI 不能批准未通过的合并。']
+  ['A rejected merge cannot proceed.', '审核未通过时，无法继续合并。']
 ]);
 p('legacy-links', 'merge', 'Use an old experiment association', '处理旧版实验关联', ['The experiments must already have an old association.', '实验须已有旧版关联关系。'], [
   ['Read the associated experiment card on the home page.', '在主页查看旧关联实验卡片。'],
@@ -536,7 +530,7 @@ p('platinum-tool', 'tools', 'Calculate the platinum reagent mass', '使用铂氯
   ['Read the required reagent mass and the intermediate Fe and Pt amounts.', '读取需加入的试剂质量，以及 Fe 和 Pt 的中间计算量。'],
   ['Record the Fe content source, reagent fraction, and actual dose in your experiment notes.', '在实验备注中记录 Fe 含量来源、试剂分数及实际投料。']
 ], ['The calculator updates the reagent mass in mg and g when you change an input.', '修改输入时，计算器自动更新以 mg 和 g 表示的试剂质量。'], [
-  ['The default reagent Pt mass fraction is 3.80761816451526%, from the reference calculation sheet.', '默认试剂 Pt 质量分数为参考计算表中的 3.80761816451526%。'],
+  ['The default reagent Pt mass fraction is 3.80761816451526%.', '默认试剂 Pt 质量分数为 3.80761816451526%。'],
   ['The molar masses are 55.845 g/mol for Fe and 195.084 g/mol for Pt.', '摩尔质量为 Fe 55.845 g/mol、Pt 195.084 g/mol。'],
   ['Trial inputs stay in this page session; they are not saved to experiment records.', '试算输入仅保留在当前页面会话，不保存到实验记录。'],
   ['Blank or invalid inputs show a message and remove the previous result.', '缺少输入或输入无效时显示提示，不保留上次结果。']
@@ -599,7 +593,7 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
 module.exports = {
-  version: '1.0.8', updated: '2026-10-08',
+  version: '1.0.9', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

@@ -77,7 +77,7 @@
     byId('tool-platinum').addEventListener('click', openCalculator);
     byId('tool-pyro').addEventListener('click', () => {
       if (window.Tools && window.Tools.openPyroCalculator) window.Tools.openPyroCalculator();
-      else setStatus('热解计算器还没加载好，请刷新页面重试。', 'warn');
+      else setStatus('热解计算器暂不可用，请刷新重试。', 'warn');
     });
   }
 
@@ -87,13 +87,13 @@
       '<div class="platinum-input-grid">',
       '<label>FeNC 用量<input id="pt-mass" type="number" inputmode="decimal" min="0" step="any" placeholder="输入用量" value="' + escape(inputs.mass) + '"></label>',
       '<label>用量单位<select id="pt-mass-unit"><option value="mg"' + (inputs.massUnit === 'mg' ? ' selected' : '') + '>mg</option><option value="g"' + (inputs.massUnit === 'g' ? ' selected' : '') + '>g</option></select></label>',
-      '<label>Fe wt%（%）<input id="pt-fe-percent" type="number" inputmode="decimal" min="0" max="100" step="any" placeholder="1 表示 1%" value="' + escape(inputs.fePercent) + '"></label>',
+      '<label>Fe wt%<input id="pt-fe-percent" type="number" inputmode="decimal" min="0" max="100" step="any" placeholder="1 表示 1%" value="' + escape(inputs.fePercent) + '"></label>',
       '<label>Pt:Fe 摩尔比<input id="pt-ratio" type="text" inputmode="text" placeholder="如 2 或 2:1" value="' + escape(inputs.ratio) + '"></label>',
       '</div>',
       '<p class="hint">Fe wt% 填百分数；Pt:Fe 按物质的量计算。例如 2:1 表示 n(Pt)/n(Fe) = 2。</p>',
       '<details class="platinum-parameters"><summary>试剂参数与计算公式</summary>',
       '<label>试剂 Pt 质量分数（%）<input id="pt-reagent-percent" type="number" inputmode="decimal" min="0" max="100" step="any" value="' + escape(inputs.ptPercent) + '"></label>',
-      '<p class="hint">默认值为参考表中的 3.80761816451526%。按实际试剂或溶液的 Pt 质量分数修改；此项不是试剂纯度。</p>',
+      '<p class="hint">请按实际试剂或溶液的 Pt 质量分数设置。此项不是试剂纯度。</p>',
       '<p class="hint">Fe = 55.845 g/mol；Pt = 195.084 g/mol。</p>',
       '<p class="platinum-formula">m(试剂) = m(FeNC) × Fe wt% ÷ 100 ÷ 55.845 × n(Pt)/n(Fe) × 195.084 ÷ (试剂 Pt 质量分数 ÷ 100)</p>',
       '</details>',
@@ -114,7 +114,7 @@
           + '<div><dt>Fe 物质的量</dt><dd>' + show(r.feMmol) + ' mmol</dd></div>'
           + '<div><dt>目标 Pt 物质的量</dt><dd>' + show(r.ptMmol) + ' mmol</dd></div>'
           + '<div><dt>目标 Pt 质量</dt><dd>' + show(r.ptMassMg) + ' mg</dd></div>'
-          + '<div><dt>采用的试剂 Pt 质量分数</dt><dd>' + show(r.ptPercent) + '%</dd></div></dl>';
+          + '<div><dt>试剂 Pt 质量分数</dt><dd>' + show(r.ptPercent) + '%</dd></div></dl>';
       } catch (err) {
         out.innerHTML = '<p class="platinum-error">' + escape(err.message) + '</p>';
       }

@@ -570,8 +570,8 @@
         // 有新版本时，像页脚那个版本号提示一样标出来，更新按钮就放在提示旁边
         stale ? [
           '  <div class="plan-stale">',
-          '    <span class="ver-stale" title="这个方案是用旧版解析规则导入的">有新版本</span>',
-          '    <button type="button" class="ver-update" data-upgrade="' + p.id + '" title="按最新规则重新解析（不影响已开始的实验）">更新</button>',
+          '    <span class="ver-stale" title="方案可更新">有新版本</span>',
+          '    <button type="button" class="ver-update" data-upgrade="' + p.id + '" title="更新方案步骤和字段">更新</button>',
           '  </div>',
         ].join('\n') : '',
         '</article>',
@@ -581,12 +581,12 @@
     host.innerHTML = [
       '<div class="section-title">实验方案</div>',
       '<div class="card" style="margin-bottom:14px">',
-      '  <label>导入 Word 方案（.docx）',
+      '  <label>导入 Word 方案',
       '    <input type="file" id="docx-input" accept=".docx">',
       '  </label>',
-      '  <p class="hint small">按化学实验步骤书整理中文版。导入后请对照原文核对工序、试剂用量、条件和记录项。</p>',
+      '  <p class="hint small">支持 .docx 文件。导入后请对照原文核对步骤、用量、条件和记录项。</p>',
       '</div>',
-      cards || '<div class="empty">还没有实验方案，先导入一份 .docx 吧。</div>',
+      cards || '<div class="empty">暂无实验方案。请选择 Word 文件导入。</div>',
       cards ? '<p class="hint small">在方案卡片上右键或手机长按，可重命名或删除；键盘可使用 Shift+F10。</p>' : '',
     ].join('\n');
 
@@ -672,9 +672,9 @@
     if (markErr) throw markErr;
 
     if (!changedFields && !addedNotices && !migrated) {
-      setStatus('解析规则已是最新（v' + PARSE_VERSION + '），内容没有需要补充的地方。', 'ok');
+      setStatus('方案内容已是最新。', 'ok');
     } else {
-      setStatus('已按最新规则重建（v' + PARSE_VERSION + '）：更新 ' + changedFields + ' 个步骤的字段、补 ' + addedNotices + ' 条注意事项'
+      setStatus('方案已更新：更新 ' + changedFields + ' 个步骤的字段、补 ' + addedNotices + ' 条注意事项'
         + (migrated ? '，并迁移了 ' + migrated + ' 个步骤的已填数据' : '') + '。', 'ok');
     }
     return changedFields + addedNotices;
@@ -851,7 +851,7 @@
     const ok = window.confirm(
       '有 ' + running.length + ' 个进行中的实验使用这个方案。\n\n'
       + '要把它们已填的数据迁移到新参数上吗？\n'
-      + '（先按名称匹配，再由 AI 判断同义参数；匹配不到的会原样保留，不会丢失）'
+      + '请核对字段含义和单位。无法匹配的原始值会保留。'
     );
     if (!ok) return 0;
 
@@ -904,10 +904,10 @@
       let plan = await parsePlanSmart(paras.join('\n'));
       const usedAI = !!plan;
       if (plan) {
-        setStatus('已按化学实验步骤书整理中文版，请对照原文核对试剂、用量、条件和记录项。', 'ok');
+        setStatus('方案已导入，请核对步骤、用量、条件和记录项。', 'ok');
       } else {
         plan = parsePlan(name, paras);
-        setStatus('已保留原文并按标点分行（AI 不可用或校验未通过）；请手工核对中文指令及全部字段。', 'warn');
+        setStatus('方案已导入，请对照原文核对全部步骤和记录项。', 'warn');
       }
 
       draft = plan;
@@ -921,7 +921,7 @@
       route('plan');
     } catch (err) {
       console.error('[SciHub] docx 解析失败：', err);
-      setStatus(err.message || '解析失败，请确认是 Word（.docx）文件。', 'error');
+      setStatus(err.message || '导入失败，请选择 .docx 文件。', 'error');
     }
   }
 
@@ -991,11 +991,8 @@
         : '可修改标题、增删步骤与字段，确认后保存。') + '</p>',
       '</div>',
       draft.sourceText ? '<div class="card import-review" style="margin-bottom:14px">'
-        + '<p class="hint small">' + (draft.importMethod === 'ai'
-          ? '化学实验步骤书：核对试剂与用量、操作顺序、条件、终点判断和注意事项。'
-          : '规则回退：保留原文并按标点分行；请手工核对工序、条件和记录项。')
-        + ' 保存前逐项核对；“待确认”内容须由你确认。</p>'
-        + '<details><summary>查看导入原文（核对用）</summary><pre class="import-source">' + esc(draft.sourceText) + '</pre></details></div>' : '',
+        + '<p class="hint small">保存前请对照原文核对步骤、用量、条件和记录项，并补全“待确认”项。</p>'
+        + '<details><summary>查看导入原文</summary><pre class="import-source">' + esc(draft.sourceText) + '</pre></details></div>' : '',
       draft.steps.map((s, si) => [
         '<div class="step-card" data-step="' + si + '">',
         '  <div class="step-head">',
@@ -1004,11 +1001,11 @@
         '    <span class="step-no">' + (si + 1) + '</span>',
         '    <input class="step-title-text" data-title="' + si + '" value="' + esc(s.title) + '" placeholder="步骤标题">',
         (s._mark === 'new' ? '    <span class="tag-mini">新增</span>'
-          : s._mark === 'kept' ? '    <span class="tag-mini">保留（有你的手动修改）</span>'
-          : s._mark === 'user' ? '    <span class="tag-mini">你之前加的</span>' : ''),
+          : s._mark === 'kept' ? '    <span class="tag-mini">已保留</span>'
+          : s._mark === 'user' ? '    <span class="tag-mini">手动添加</span>' : ''),
         '    <button type="button" class="ghost" data-drop-step="' + si + '">删除步骤</button>',
         '  </div>',
-        '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长提示（如：约 24 小时）" style="margin-bottom:8px">',
+        '  <input data-duration="' + si + '" value="' + esc(s.duration_hint || '') + '" placeholder="时长" style="margin-bottom:8px">',
         '  <textarea data-instruction="' + si + '" rows="3" placeholder="步骤说明">' + esc(s.instruction || '') + '</textarea>',
 
         // ── 板块：只渲染这一步实际拥有的。
@@ -1056,7 +1053,7 @@
           '    <div class="line-row">',
           '      <span></span>',
           // 生成/试算统一走右上角「小工具」里的热解计算器，这里只负责保存这一串程序
-          '      <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="粘贴程序串，或用右上角小工具算好再粘过来">',
+          '      <input class="pyro-input" data-pyro="' + si + '" value="' + esc(s.pyro_seq || '') + '" spellcheck="false" placeholder="输入热解程序">',
           '      <button type="button" class="icon-btn del" data-drop-block="' + si + '-pyro" title="移除「热解程序」板块" aria-label="移除「热解程序」板块">×</button>',
           '    </div>',
           '  </div>',
@@ -1562,7 +1559,7 @@
     let deleting = false;
     openModal('删除方案', '<p>确认删除方案“' + esc(name) + '”？</p>'
       + '<p>方案定义及其步骤会删除，且无法撤销。已开始实验的步骤、实测值、备注和附件引用保留。</p>'
-      + '<p class="hint small">若方案仍关联已合并的只读支路，数据库会拒绝删除并保留原数据。</p>'
+      + '<p class="hint small">已合并的只读支路仍使用此方案时，无法删除方案。</p>'
       + '<p id="plan-delete-error" role="status"></p>', [
       { label: '取消', onClick: closeModal },
       { label: '确认删除', onClick: async () => {
@@ -1675,7 +1672,7 @@
       renderDraft();
       showView('plan');
       setStatus('已从实验「' + (best.run.title || '未命名实验') + '」搬回 ' + steps.length
-        + ' 个步骤（步骤内容，不含当时填的数据）。请核对后点「保存方案」。', 'ok');
+        + ' 个步骤。实测值不复制到方案。请核对后保存。', 'ok');
     } catch (err) {
       console.error('[SciHub] 从实验快照恢复方案失败：', err);
       setStatus('恢复失败：' + errorText(err), 'error');
@@ -1699,7 +1696,7 @@
     const vlog = (plan.version_log || []).slice().reverse();
     const versionLogHtml = vlog.length ? [
       '<div class="card" style="margin-bottom:14px">',
-      '  <div class="sub-head"><span>🕓 更新日志（按日期区分版本）</span></div>',
+      '  <div class="sub-head"><span>🕓 更新日志</span></div>',
       vlog.map((e, i) => {
         const dateTxt = e.at ? fmt(e.at) : '未知日期';
         const badge = i === 0 ? '<b class="tag-mini">当前 · ' + dateTxt + '</b>' : '<span class="tag-mini">旧版本 · ' + dateTxt + '</span>';
@@ -1717,9 +1714,9 @@
       // 步骤被清空时（v1.0.1 及更早的保存会「先删后写」，写入失败就清空）给一条明路
       (steps || []).length ? '' : [
         '<div class="card" style="margin-bottom:14px;border-left:3px solid #d97706">',
-        '  <div class="sub-head"><span>⚠ 这个方案现在有 0 个步骤</span></div>',
-        '  <p class="hint small">v1.0.1 及更早版本的保存是「先把旧步骤删掉、再写新步骤」，写入失败或被刷新打断就会清空步骤，而更新日志仍会记一条「已保存」。现已改成先写新步骤、成功后再删旧步骤。</p>',
-        '  <p class="hint small">恢复：这个方案开过实验 → 点「从实验快照恢复步骤」核对后保存；没开过实验 → 用「上传新版本」重新导入原来的 docx。</p>',
+        '  <div class="sub-head"><span>⚠ 方案暂无步骤</span></div>',
+        '  <p class="hint small">可从已有实验恢复步骤，或重新上传 Word 方案。</p>',
+        '  <p class="hint small">选择“从实验快照恢复步骤”或“上传新版本”，核对草稿后保存。</p>',
         '</div>',
       ].join('\n'),
       versionLogHtml,
@@ -1728,7 +1725,7 @@
       '<div class="run-actions" style="margin-top:0;margin-bottom:16px;flex-wrap:wrap">',
       '  <button type="button" class="primary" id="plan-start">开始实验</button>',
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
-      (steps || []).length ? '' : '  <button type="button" class="fresh-btn" id="plan-restore" title="从用这个方案开过的实验里，把步骤快照搬回编辑器">从实验快照恢复步骤</button>',
+      (steps || []).length ? '' : '  <button type="button" class="fresh-btn" id="plan-restore" title="恢复已有实验的步骤">从实验快照恢复步骤</button>',
       '  <button type="button" class="ghost" id="plan-upload-ver">上传新版本</button>',
       '  <input type="file" id="ver-input" accept=".docx" hidden>',
       canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
@@ -1788,7 +1785,7 @@
             at: new Date().toISOString(),
             type: '上传新版本',
             source: name,
-            summary: '新增 ' + merged.stats.newCount + ' 步、保留并更新 ' + merged.stats.keptCount + ' 步、保留你之前加的 ' + merged.stats.userKept + ' 步',
+            summary: '新增 ' + merged.stats.newCount + ' 步、保留并更新 ' + merged.stats.keptCount + ' 步、保留手动添加 ' + merged.stats.userKept + ' 步',
           },
           steps: merged.steps.map((s) => ({
             title: s.title || '',
@@ -1804,7 +1801,7 @@
         };
         renderDraft();
         showView('plan');
-        setStatus((usedAI ? '已按化学实验步骤书整理中文新版本' : 'AI 不可用或校验未通过，已保留原文并按标点分行')
+        setStatus('新版本已导入'
           + '；已有手动修改已保留。请对照原文核对后保存；结构不兼容的实验保留原快照。', usedAI ? 'ok' : 'warn');
       } catch (err) {
         console.error('[SciHub] 解析新版本失败：', err);
@@ -2447,7 +2444,7 @@
     // 与方案的同步状态：不一致时把差异逐条列出来，配一个「立即同步」
     const diffRows = [];
     if (d.added.length) diffRows.push('方案新增 ' + d.added.length + ' 步：' + d.added.map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.title) + '」').join('、'));
-    if (d.removed.length) diffRows.push('方案已删 ' + d.removed.length + ' 步（实验里还有）：' + d.removed.map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.title) + '」').join('、'));
+    if (d.removed.length) diffRows.push('方案已删 ' + d.removed.length + ' 步，实验中仍保留：' + d.removed.map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.title) + '」').join('、'));
     if (d.changed.length) diffRows.push('内容有改动 ' + d.changed.length + ' 步：' + d.changed.map((x) => '第 ' + (x.position + 1) + ' 步（' + esc(x.what) + '）').join('、'));
     if (d.fieldAdded.length) {
       const show = d.fieldAdded.slice(0, 6).map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.label) + '」').join('、');
@@ -2455,13 +2452,13 @@
     }
     if (d.fieldRemoved.length) {
       const show = d.fieldRemoved.slice(0, 6).map((x) => '第 ' + (x.position + 1) + ' 步「' + esc(x.label) + '」').join('、');
-      diffRows.push('方案已删 ' + d.fieldRemoved.length + ' 个字段（已填的值仍保留）：' + show + (d.fieldRemoved.length > 6 ? ' 等' : ''));
+      diffRows.push('方案已删 ' + d.fieldRemoved.length + ' 个字段，实测值仍保留：' + show + (d.fieldRemoved.length > 6 ? ' 等' : ''));
     }
 
     host.innerHTML = [
       '<div class="run-head">',
       '  <div><b>' + esc(run.data.title) + '</b>',
-      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + (run.data._mergedInto ? ' · 已合并（支路只读）' : ' · 已进行 ' + sinceText(run.data.started_at)) + (run.data.status === 'done' ? ' · 已完成（只读）' : '') + '</div>',
+      '    <div class="hc-meta">开始于 ' + fmt(run.data.started_at) + (run.data._mergedInto ? ' · 已合并 · 只读' : ' · 已进行 ' + sinceText(run.data.started_at)) + (run.data.status === 'done' ? ' · 已完成 · 只读' : '') + '</div>',
       '  </div>',
       '  <div class="hc-actions">',
       // 导出统一放在主页的「进行中的实验」卡片上，这里不再重复一个入口
@@ -2490,7 +2487,7 @@
         if (run.linkAt != null && i >= run.linkAt) cls.push('linked');   // 合并点之后：共同做的步骤，标黄
         return '<button type="button" class="' + cls.join(' ') + '" data-goto="' + i + '"'
           + ' title="第 ' + stepNumber(i) + ' 步：' + esc(x.title)
-          + (run.linkAt != null && i >= run.linkAt ? '（合并后共同做）' : '') + '">' + stepNumber(i) + '</button>';
+          + (run.linkAt != null && i >= run.linkAt ? ' · 共同阶段' : '') + '">' + stepNumber(i) + '</button>';
       }).join(''),
       '</div>',
 
@@ -2503,13 +2500,13 @@
       // 待办跟着显示错（v5 显示到第 9 步就是这么来的）。
       run.pos !== (run.data.current_step || 0)
         ? '<div class="run-status"><button type="button" class="ghost tiny" id="set-progress"'
-            + ' title="把「进行到这里」改成你现在浏览的这一步">记为我做到这里（第 ' + stepNumber(run.pos) + ' 步）</button></div>'
+            + ' title="将当前浏览步骤设为实验进度">设为当前步骤</button></div>'
         : '',
       // 关联子实验：说清楚为什么只看到这里
       cut != null
         ? [
             '<div class="merge-note">',
-            '  <b>⇄ 独立支路（共同阶段从第 ' + (cut + 1) + ' 步）</b>',
+            '  <b>⇄ 独立支路 · 共同阶段从第 ' + (cut + 1) + ' 步开始</b>',
             '  <span>第 ' + (cut + 1) + ' 步及之后只在共同阶段记录，这条支路显示前 ' + total + ' 步；合并后的完整数据在主页那一栏查看 / 导出。</span>',
             '</div>',
           ].join('\n')
@@ -2658,7 +2655,7 @@
         .eq('id', st.id);
       if (error) {
         console.error('[SciHub] 关联写入失败：', error);
-        setStatus('关联失败：请确认已在 Supabase 给 run_steps 加上 link_run_id / link_note 两列。', 'error');
+        setStatus('实验关联暂不可用，请联系维护者。', 'error');
         return false;
       }
       st.link_run_id = linkRunId;
@@ -3598,7 +3595,7 @@
           for (const [label, checked] of Object.entries(step.checks || {})) paragraphs.push({ text: label + '：' + (checked ? '已完成' : '未完成'), size: 10 });
           if (step.note) paragraphs.push({ text: '备注：' + step.note, size: 10 });
           for (const image of step.images || []) {
-            if (isVideoFile(image)) { paragraphs.push({ text: '视频附件（未嵌入）：' + (image.name || image.path) + (image.caption ? ' · ' + image.caption : ''), size: 9 }); continue; }
+            if (isVideoFile(image)) { paragraphs.push({ text: '视频附件：' + (image.name || image.path) + (image.caption ? ' · ' + image.caption : '') + ' · 请在实验中查看', size: 9 }); continue; }
             const binary = await fetchImageForDocx(image.path, urls);
             if (!binary) { missingImages++; paragraphs.push({ text: '图片暂无法读取：' + (image.name || image.path), size: 9 }); continue; }
             imageTotal++;
@@ -3667,7 +3664,7 @@
       many ? '<button type="button" class="lb-btn lb-next" data-lb="next" title="下一个（→）">›</button>' : '',
       '<div class="lb-foot">',
       many ? '  <div class="lb-count" id="lb-count"></div>' : '',
-      '  <button type="button" class="ghost" id="lb-save" title="会弹出系统面板供你存储到相册">⬇ 存到相册</button>',
+      '  <button type="button" class="ghost" id="lb-save" title="保存照片或视频">⬇ 存到相册</button>',
       '</div>',
     ].join(''));
 
@@ -3920,7 +3917,7 @@
         updated_at: new Date().toISOString(),
       }).eq('id', run.id);
       if (pointerError) throw pointerError;
-      setStatus('已做到合并点（第 ' + total + ' 步）。第 ' + (cut + 1) + ' 步及之后由合并后的实验一起做。', 'ok');
+      setStatus('已到合并点：第 ' + total + ' 步。第 ' + (cut + 1) + ' 步及之后由合并后的实验一起做。', 'ok');
       drawRun();
       return;
     }

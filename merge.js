@@ -110,7 +110,7 @@
     if (window.Run && (window.Run.busy() || !await window.Run.flush())) return;
     try {
       await refresh();
-      if (!loaded) throw Error('合并数据库接口尚未部署，请先完成迁移。');
+      if (!loaded) throw Error('合并功能暂不可用，请联系维护者。');
       const owner = state.user.id;
       const modalId = ++modalSequence;
       const { data, error } = await client.from('experiment_runs').select('*').eq('status', 'running').order('started_at');
@@ -184,7 +184,7 @@
             setStatus('合并成功：前置记录已锁定，请在共同阶段填写后续步骤。', 'ok');
             route('run', resultId);
           } catch (err) {
-            review = null; $('merge-review').textContent = '合并未确认：' + (err.message || err) + '。请刷新核对；未成功的事务不会留下半组数据。';
+            review = null; $('merge-review').textContent = '合并未确认：' + (err.message || err) + '。请刷新核对合并结果后再重试。';
             document.querySelectorAll('#modal input, #modal select, #modal textarea, #modal button').forEach((node) => { node.disabled = false; });
             $('merge-confirm').checked = false; $('merge-confirm').disabled = true;
             updateSubmit();

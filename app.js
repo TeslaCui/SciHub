@@ -639,7 +639,7 @@ if ($('tools-btn')) {
   $('tools-btn').addEventListener('click', () => {
     closeUserMenu();
     if (window.LabTools && window.LabTools.open) window.LabTools.open();
-    else setStatus('小工具还没加载好，请刷新页面重试。', 'warn');
+    else setStatus('小工具暂不可用，请刷新重试。', 'warn');
   });
 }
 
@@ -669,7 +669,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.8';
+const APP_VERSION = '1.0.9';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1440,7 +1440,7 @@ async function renderHome() {
                 '          <div class="sub-info">',
                 '            <b>' + esc(x.run.title) + '</b>',
                 '            <span>已到 第 ' + (x.reached + 1) + ' 步 · 共 ' + x.total + ' 步'
-                  + (linkAt != null ? '（合并点：第 ' + (linkAt + 1) + ' 步）' : '') + '</span>',
+                  + (linkAt != null ? ' · 合并点：第 ' + (linkAt + 1) + ' 步' : '') + '</span>',
                 '          </div>',
                 x.doneAll
                   ? '          <span class="sub-done">✓ 已完成</span>'
@@ -1473,7 +1473,7 @@ async function renderHome() {
             '</article>',
           ].join('\n');
         }).join('\n')
-      : '<div class="empty">当前没有进行中的实验。上轮没做完的实验会一直留在这里，点「继续」就能接着做。</div>',
+      : '<div class="empty">暂无进行中的实验。</div>',
 
     completedMerges.length ? '<div class="section-title">最近完成的合并实验</div>' + completedMerges.map((item) =>
       '<article class="home-card"><div class="hc-main"><b>' + esc(item.title) + '</b><div class="hc-meta">已完成 · 各支路与共同阶段均只读</div></div>'
@@ -1495,7 +1495,7 @@ async function renderHome() {
     '<div class="quick-grid">',
     '  <button type="button" class="quick" data-go="plans"><b>方案管理</b><span>导入、查看详情、编辑或删除实验方案</span></button>',
     '  <button type="button" class="quick" data-go="records"><b>科研记录</b><span>查看与检索已保存的记录</span></button>',
-    '  <button type="button" class="quick" data-new-record><b>新建记录</b><span>随手记一条实验日志或文献笔记</span></button>',
+    '  <button type="button" class="quick" data-new-record><b>新建记录</b><span>记录实验日志或文献笔记</span></button>',
     '</div>',
 
     '<div class="section-title">最近记录</div>',
@@ -1580,7 +1580,7 @@ async function renderHome() {
     addTodoBtn.addEventListener('click', () => {
       openModal('添加待办', [
         '<label>内容<input id="todo-title" maxlength="120" placeholder="如：明天 10:00 取样品"></label>',
-        '<label>截止时间（可留空）<input id="todo-due" type="datetime-local"></label>',
+        '<label>截止时间<input id="todo-due" type="datetime-local"></label>',
         '<p class="hint small">留空就是一条没有截止时间的待办。</p>',
       ].join(''), [
         { label: '取消', onClick: closeModal },
@@ -1601,7 +1601,7 @@ async function renderHome() {
 
             if (error) {
               console.error('[SciHub] 添加待办失败：', error);
-              setStatus('添加待办失败：请确认已在 Supabase 建好 research_todos 表。', 'error');
+              setStatus('添加待办暂不可用，请联系维护者。', 'error');
               return;
             }
             closeModal();
