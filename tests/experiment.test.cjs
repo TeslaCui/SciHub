@@ -22,7 +22,7 @@ function harness() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'support/mock-supabase.js'), 'utf8'), context);
   context.client = window.supabase.createClient();
   let source = fs.readFileSync(path.join(__dirname, '..', 'experiment.js'), 'utf8');
-  source = source.replace('  window.Run = {', '  window.__test = { run, saveStep, nextStep, finishRun, migrateStepValues, planDiff, dropExtraSteps, syncRunNow, buildLog };\n  window.Run = {');
+  source = source.replace('  window.Run = {', '  window.__test = { run, saveStep, nextStep, finishRun, migrateStepValues, planDiff, dropExtraSteps, syncRunNow, buildLog, editPlan, getDraft: () => draft };\n  window.Run = {');
   vm.runInContext(source, context);
   return { context, api: window.__test, messages, element };
 }
@@ -120,4 +120,20 @@ test('extra-step deletion warning has the original values and attachments', asyn
   const diff = await h.api.planDiff(h.api.run.data);
   assert.equal(diff.removed[0].values.质量, '3');
   assert.equal(diff.removed[0].images.length, 1);
+});
+test('a delayed plan edit cannot reopen a page after newer navigation', async () => {
+  const h = harness(); const client = h.context.client;
+  h.context.navigationSequence = 1;
+  let release;
+  const original = client.from.bind(client);
+  client.from = table => {
+    const query = original(table);
+    if (table === 'experiment_plans') query.maybeSingle = () => new Promise(resolve => release = resolve);
+    return query;
+  };
+  const editing = h.api.editPlan(17);
+  h.context.navigationSequence++;
+  release({ data: { id:17, title:'虚构方案', updated_at:'2026-10-08' }, error:null });
+  await editing;
+  assert.equal(h.api.getDraft(), null);
 });

@@ -39,6 +39,8 @@ const state = {
   tableMissing: false,
   calOffset: 0,     // 实验日历的月份偏移：0 本月，-1 上月，+1 下月
 };
+let savingRecord = false;
+let recordFormTarget = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -101,8 +103,9 @@ function applyUser(user) {
   const changed = (state.user && state.user.id) !== (user && user.id);
   state.user = user || null;
 
-  $('auth-view').hidden = !!state.user;
-  $('app-view').hidden = !state.user;
+  const guideOpen = currentRoute.name === 'guide';
+  $('auth-view').hidden = guideOpen || !!state.user;
+  $('app-view').hidden = guideOpen || !state.user;
   $('user-box').hidden = !state.user;
   if (changed) { state.profile = null; state.records = []; state.calOffset = 0; healedPlansOnce.clear(); }
   if (state.user) { updateUserChip(); loadProfile(); }
@@ -111,7 +114,7 @@ function applyUser(user) {
   if (state.user) {
     if (changed || !state.records.length) loadRecords();
     if (changed) ensureProfile();
-    if (changed) route('home');
+    if (changed) routeFromLocation('replace');
     subscribeHomeRealtime();
   } else {
     unsubscribeHomeRealtime();
@@ -120,6 +123,7 @@ function applyUser(user) {
     state.editingId = null;
     closeForm();
     renderRecords();
+    if (changed) route(currentRoute.name === 'guide' ? 'guide' : 'home', currentRoute.name === 'guide' ? currentRoute.param : undefined, { replace: true, skipGuard: true });
   }
 }
 
@@ -269,6 +273,7 @@ function readPendingProfile() {
 }
 
 async function logout() {
+  if (savingRecord) { setStatus('正在保存，请稍候。', 'warn'); return; }
   if (!client) return;
   if (window.Run && (window.Run.busy() || !await window.Run.flush())) return;
   const { error } = await client.auth.signOut();
@@ -304,7 +309,7 @@ async function loadRecords() {
 
 async function submitRecord(event) {
   event.preventDefault();
-  if (!client || !state.user) return;
+  if (!client || !state.user || savingRecord) return;
 
   const title = $('f-title').value.trim();
   if (!title) {
@@ -319,24 +324,33 @@ async function submitRecord(event) {
     tags: $('f-tags').value.split(',').map((s) => s.trim()).filter(Boolean),
     content: $('f-content').value,
   };
+  const userId = state.user.id;
 
+  savingRecord = true;
   try {
     if (state.editingId === null) {
       payload.user_id = state.user.id;
       const { error } = await client.from(TABLE).insert(payload);
       if (error) throw error;
+      if (!state.user || state.user.id !== userId) return;
       setStatus('记录已创建。', 'ok');
     } else {
       const { error } = await client.from(TABLE).update(payload).eq('id', state.editingId);
       if (error) throw error;
+      if (!state.user || state.user.id !== userId) return;
       setStatus('记录已更新。', 'ok');
     }
     closeForm();
     await loadRecords();
+    if (!state.user || state.user.id !== userId) return;
+    savingRecord = false;
+    route('records', undefined, { replace: true });
   } catch (error) {
     state.tableMissing = isMissingTable(error);
     setStatus(friendly(error), 'error');
     renderRecords();
+  } finally {
+    savingRecord = false;
   }
 }
 
@@ -356,6 +370,10 @@ async function removeRecord(id) {
 /* ── 表单开关 ──────────────────────────────────────────── */
 
 function openForm(record) {
+  return route('record', record ? record.id : 'new');
+}
+function showRecordForm(record) {
+  recordFormTarget = record ? record.id : 'new';
   state.editingId = record ? record.id : null;
   $('form-title').textContent = record ? '编辑科研记录' : '新建科研记录';
   $('f-title').value = record ? record.title : '';
@@ -368,6 +386,7 @@ function openForm(record) {
 }
 
 function closeForm() {
+  recordFormTarget = null;
   state.editingId = null;
   $('record-form').hidden = true;
   $('record-form').reset();
@@ -494,7 +513,7 @@ function bindEvents() {
 
   $('auth-form').addEventListener('submit', submitAuth);
   $('new-btn').addEventListener('click', () => openForm(null));
-  $('cancel-btn').addEventListener('click', closeForm);
+  $('cancel-btn').addEventListener('click', () => { closeForm(); route('records'); });
   $('record-form').addEventListener('submit', submitRecord);
   $('search').addEventListener('input', (e) => { state.q = e.target.value; renderRecords(); });
   $('category-filter').addEventListener('change', (e) => { state.category = e.target.value; renderRecords(); });
@@ -669,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.9';
+const APP_VERSION = '1.1.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -719,7 +738,7 @@ if ($('update-btn')) {
 checkVersion();
 setInterval(checkVersion, 5 * 60 * 1000);
 
-const ROUTES = ['home', 'plans', 'plan', 'run', 'records'];
+const ROUTES = ['home', 'plans', 'plan', 'draft', 'run', 'records', 'record', 'guide'];
 
 function fmtText(ts) {
   if (!ts) return '';
@@ -730,12 +749,17 @@ function fmtText(ts) {
 
 function showView(name) {
   if (window.Plans) window.Plans.closeMenu();
+  const viewName = name === 'draft' ? 'plan' : name === 'record' ? 'records' : name;
   ROUTES.forEach((r) => {
     const node = $('view-' + r);
-    if (node) node.hidden = r !== name;
+    if (node) node.hidden = r !== viewName;
   });
+  $('auth-view').hidden = name === 'guide' || !!state.user;
+  $('app-view').hidden = name === 'guide' || !state.user;
+  document.body.classList.toggle('guide-shell', name === 'guide');
 
-  const navMap = { plan: 'plans', run: 'home' };
+  $('record-form').hidden = name !== 'record';
+  const navMap = { plan: 'plans', draft: 'plans', record: 'records', run: 'home' };
   const navTarget = navMap[name] || name;
   document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.route === navTarget);
@@ -744,21 +768,123 @@ function showView(name) {
 }
 
 let navigationSequence = 0;
-async function route(name, param) {
-  if (!state.user) return;
-  const sequence = ++navigationSequence;
-  if (window.Run) {
-    if (window.Run.busy()) { setStatus('正在保存，请稍候。', 'warn'); return; }
-    if (!await window.Run.flush()) return;
+let currentRoute = { name: 'home' };
+let historyIndex = Number.isInteger(history.state && history.state.scihubIndex) ? history.state.scihubIndex : 0;
+let restoringHistory = false;
+let guideLoading = null;
+let guideController = null;
+function readRoute() {
+  const match = location.hash.match(/^#(home|plans|plan|draft|run|records|record|guide)(?:\/([a-zA-Z0-9-]+))?$/);
+  if (!match) return { name: 'home' };
+  const name = match[1];
+  const param = ['plan', 'draft', 'run'].includes(name) || (name === 'record' && match[2] !== 'new') ? Number(match[2]) || undefined : match[2];
+  return { name, param };
+}
+function routeHash(target) {
+  return '#' + target.name + (target.param ? '/' + target.param : '');
+}
+function writeHistory(target, replace) {
+  if (!replace) historyIndex++;
+  history[replace ? 'replaceState' : 'pushState']({ scihubIndex: historyIndex }, '', routeHash(target));
+}
+async function renderGuide(anchor) {
+  const host = $('view-guide');
+  if (!guideController) {
+    if (!guideLoading) guideLoading = (async () => {
+      host.innerHTML = '<div class="empty">教程加载中…</div>';
+      const response = await fetch('guide.html?v=' + APP_VERSION);
+      if (!response.ok) throw Error('教程暂不可用，请稍后重试。');
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const layout = page.querySelector('.guide-layout');
+      if (!layout || !window.SciHubGuide) throw Error('教程暂不可用，请刷新重试。');
+      const content = document.createElement('div');
+      content.className = 'guide-layout';
+      content.append(...layout.childNodes);
+      host.replaceChildren(content);
+      guideController = window.SciHubGuide.mount(host, id => route('guide', id), APP_VERSION);
+    })().catch(error => {
+      host.innerHTML = '<div class="empty">' + esc(error.message) + '<br><button type="button" class="ghost" id="guide-retry">重试</button></div>';
+      $('guide-retry').addEventListener('click', () => route('guide', anchor, { replace: true }));
+    }).finally(() => { guideLoading = null; });
+    await guideLoading;
   }
-  if (sequence !== navigationSequence || !state.user) return;
-  const target = ROUTES.indexOf(name) === -1 ? 'home' : name;
+  if (currentRoute.name === 'guide' && currentRoute.param === anchor && guideController) guideController.open(anchor);
+}
+async function route(name, param, options = {}) {
+  if (['plan', 'draft', 'run'].includes(name)) param = Number.isSafeInteger(Number(param)) && Number(param) > 0 ? Number(param) : undefined;
+  else if (name === 'record') param = param === 'new' ? param : Number(param) || undefined;
+  else if (name !== 'guide') param = undefined;
+  const sequence = ++navigationSequence;
+  if (savingRecord && !options.skipGuard) { setStatus('正在保存，请稍候。', 'warn'); return false; }
+  if (window.Run && !options.skipGuard) {
+    if (window.Run.busy()) { setStatus('正在保存，请稍候。', 'warn'); return false; }
+    if (!await window.Run.flush()) return false;
+  }
+  if (sequence !== navigationSequence) return false;
+  if (options.pop && routeHash(readRoute()) !== routeHash({name, param})) return false;
+  if (currentRoute.name === 'draft' && window.Plans) window.Plans.stashDraft();
+  let target = ROUTES.includes(name) ? name : 'home';
+  if (!state.user && target !== 'guide') { target = 'home'; param = undefined; }
+  if (target === 'draft' && (!window.Plans || !window.Plans.hasDraft(param))) { target = param ? 'plan' : 'plans'; }
+  if (['plan', 'run'].includes(target) && !param) target = target === 'plan' ? 'plans' : 'home';
+  if (target === 'record' && !param) target = 'records';
+  const next = { name: target, param };
+  const same = routeHash(next) === routeHash(currentRoute);
+  if (!options.pop) writeHistory(next, options.replace || same);
+  else if (routeHash(next) !== routeHash(readRoute())) history.replaceState({ scihubIndex: Number.isInteger(options.index) ? options.index : historyIndex }, '', routeHash(next));
+  currentRoute = next;
+  closeModal(); closeUserMenu();
   showView(target);
 
-  if (target === 'home') renderHome();
+  if (target === 'guide') await renderGuide(param);
+  else if (!state.user) return true;
+  else if (target === 'home') renderHome();
   else if (target === 'plans' && window.Plans) window.Plans.list();
-  else if (target === 'plan' && param && window.Plans) window.Plans.editor(param);
+  else if (target === 'plan' && param && window.Plans) window.Plans.editor(param, () => sequence === navigationSequence);
+  else if (target === 'draft' && window.Plans) window.Plans.showDraft();
   else if (target === 'run' && param && window.Run) window.Run.render(param);
+  else if (target === 'record' && recordFormTarget !== param) {
+    if (param === 'new') showRecordForm(null);
+    else {
+      if (!state.records.some(item => item.id === param)) await loadRecords();
+      if (sequence !== navigationSequence || !state.user) return false;
+      const record = state.records.find(item => item.id === param);
+      if (record) showRecordForm(record);
+      else { setStatus('记录暂不可用，请返回记录列表后重试。', 'warn'); return route('records', undefined, { replace: true }); }
+    }
+  }
+  return true;
+}
+function routeFromLocation(mode) {
+  const target = readRoute();
+  return route(target.name, target.param, { replace: mode === 'replace' });
+}
+window.addEventListener('popstate', async () => {
+  if (restoringHistory) { restoringHistory = false; return; }
+  const target = readRoute();
+  const index = history.state && history.state.scihubIndex;
+  const sequence = navigationSequence + 1;
+  const ok = await route(target.name, target.param, { pop: true, index });
+  if (sequence !== navigationSequence) return;
+  if (ok) { if (Number.isInteger(index)) historyIndex = index; }
+  else {
+    const actualIndex = history.state && history.state.scihubIndex;
+    if (Number.isInteger(actualIndex) && actualIndex !== historyIndex) {
+      restoringHistory = true;
+      history.go(historyIndex - actualIndex);
+    } else writeHistory(currentRoute, true);
+  }
+});
+document.addEventListener('click', event => {
+  const link = event.target.closest('#brand-home, .guide-link');
+  if (!link || event.button || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  route(link.id === 'brand-home' ? 'home' : 'guide');
+});
+if (readRoute().name === 'guide') routeFromLocation('replace');
+else {
+  currentRoute = readRoute();
+  writeHistory(currentRoute, true);
 }
 
 /* experiment.js 执行完会广播 scihub:ready。
@@ -766,6 +892,7 @@ async function route(name, param) {
 window.addEventListener('scihub:ready', () => {
   const home = $('view-home');
   if (state.user && home && !home.hidden) renderHome();
+  else if (state.user && ['plan', 'draft', 'run', 'plans'].includes(currentRoute.name)) route(currentRoute.name, currentRoute.param, { replace: true });
 });
 
 /* 进行中实验卡片上的「取消关联 / 关联 / 导出 / 重命名 / 删除」用事件委托，避免每次重绘都要重新绑定 */

@@ -894,14 +894,22 @@
   /* ══ docx 导入 → 校对草稿 ═══════════════════════════════ */
 
   let draft = null;
+  function planNavigationGuard() {
+    const owner = state.user && state.user.id;
+    const sequence = typeof navigationSequence === 'number' ? navigationSequence : 0;
+    return () => owner && state.user && state.user.id === owner
+      && (typeof navigationSequence !== 'number' || sequence === navigationSequence);
+  }
 
   async function startImport(file) {
+    const isCurrent = planNavigationGuard();
     setStatus('正在解析方案…');
     try {
       const { name, paras } = await readDocx(file);
 
       // 优先用 AI 解析（能区分同名药品、能读表格）；不可用时回退规则解析
       let plan = await parsePlanSmart(paras.join('\n'));
+      if (!isCurrent()) return;
       const usedAI = !!plan;
       if (plan) {
         setStatus('方案已导入，请核对步骤、用量、条件和记录项。', 'ok');
@@ -918,7 +926,7 @@
       draft.steps.forEach((s) => { s.noticeRows = noticeRowsOf(s); });
       draft.source = file.name;
       renderDraft();
-      route('plan');
+      route('draft');
     } catch (err) {
       console.error('[SciHub] docx 解析失败：', err);
       setStatus(err.message || '导入失败，请选择 .docx 文件。', 'error');
@@ -1585,8 +1593,10 @@
 
   /* 进入编辑模式：把已有方案载入可编辑草稿 */
   async function editPlan(planId) {
+    const isCurrent = planNavigationGuard();
     const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
     const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (!isCurrent()) return;
     if (!plan) { setStatus('方案不存在。', 'error'); return; }
 
     draft = {
@@ -1607,7 +1617,7 @@
       })),
     };
     renderDraft();
-    showView('plan');
+    route('draft', planId);
   }
 
   /* 抢救：方案步骤被清空后，从「用这个方案开过的实验」里把步骤快照搬回编辑器。
@@ -1616,6 +1626,7 @@
      只把内容填进编辑器、不直接写库 —— 你核对无误后自己点「保存方案」，
      走的是非破坏性保存，不会再出现「一保存就清空」。 */
   async function restorePlanFromRun(planId) {
+    const isCurrent = planNavigationGuard();
     setStatus('正在找这个方案的实验快照…');
     try {
       const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
@@ -1644,6 +1655,7 @@
 
       const { data: steps } = await client.from(RUN_STEP)
         .select('*').eq('run_id', best.run.id).order('position');
+      if (!isCurrent()) return;
       if (!steps || !steps.length) { setStatus('没读到实验快照里的步骤。', 'warn'); return; }
 
       draft = {
@@ -1670,7 +1682,7 @@
         })),
       };
       renderDraft();
-      showView('plan');
+      route('draft', planId);
       setStatus('已从实验「' + (best.run.title || '未命名实验') + '」搬回 ' + steps.length
         + ' 个步骤。实测值不复制到方案。请核对后保存。', 'ok');
     } catch (err) {
@@ -1681,12 +1693,13 @@
 
   /* ══ 方案查看 / 编辑 ════════════════════════════════════ */
 
-  async function renderEditor(planId) {
+  async function renderEditor(planId, isCurrent = () => true) {
     const host = $('view-plan');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
 
     const { data: plan } = await client.from(PLAN).select('*').eq('id', planId).maybeSingle();
     const { data: steps } = await client.from(STEP).select('*').eq('plan_id', planId).order('position');
+    if (!isCurrent()) return;
     if (!plan) { host.innerHTML = '<div class="empty">方案不存在。</div>'; return; }
 
     // 按解析版本判断：落后于当前规则才显示「重新解析」
@@ -1758,6 +1771,7 @@
     const verInput = $('ver-input');
     $('plan-upload-ver').addEventListener('click', () => verInput.click());
     verInput.addEventListener('change', async (e) => {
+      const isCurrent = planNavigationGuard();
       const f = e.target.files && e.target.files[0];
       e.target.value = '';   // 允许连续选同一个文件
       if (!f) return;
@@ -1773,6 +1787,7 @@
         // 智能合并：没改的部分和用户手动编辑过的部分（字段名/单位/类型/注意事项/
         // 热解程序/勾选条目/自己加的步骤）都保留，只有新文档里确实变了的才更新。
         const merged = await mergePlanVersions(steps || [], parsed.steps);
+        if (!isCurrent()) return;
         draft = {
           id: plan.id,
           sourceText: text,
@@ -1800,7 +1815,7 @@
           })),
         };
         renderDraft();
-        showView('plan');
+        route('draft', planId);
         setStatus('新版本已导入'
           + '；已有手动修改已保留。请对照原文核对后保存；结构不兼容的实验保留原快照。', usedAI ? 'ok' : 'warn');
       } catch (err) {
@@ -1896,7 +1911,8 @@
     } finally { startingRun = false; }
   }
 
-  window.Plans = { list: listPlans, editor: renderEditor, start: startRun, bindContextMenu: bindPlanContextMenu, closeMenu: closePlanContextMenu };
+  window.Plans = { list: listPlans, editor: renderEditor, start: startRun, bindContextMenu: bindPlanContextMenu, closeMenu: closePlanContextMenu,
+    hasDraft: id => !!draft && (draft.id || undefined) === id, stashDraft: () => { if (draft && $('draft-title')) collectDraft(); }, showDraft: () => { if (draft) renderDraft(); } };
 
   /* ══ 执行界面 ═══════════════════════════════════════════ */
 
@@ -4103,7 +4119,7 @@
     }
   }
 
-  window.Run = { flush: flushSaves, hasPending: saveQueue.hasPending, busy: () => advancingRun || finishingRun || savingDraft || syncingRun || startingRun || (window.Merges && window.Merges.busy()), reset: () => { runRenderSequence++; unsubscribeRun(); unsubscribePlan(); run.id = null; run.data = null; run.steps = []; }, render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
+  window.Run = { flush: flushSaves, hasPending: saveQueue.hasPending, busy: () => advancingRun || finishingRun || savingDraft || syncingRun || startingRun || (window.Merges && window.Merges.busy()), reset: () => { draft = null; runRenderSequence++; unsubscribeRun(); unsubscribePlan(); run.id = null; run.data = null; run.steps = []; }, render: renderRun, running: runningRuns, rename: renameRun, remove: removeRun, export: exportRunData, link: linkRun, unlink: unlinkRun };
 
   // 通知 app.js：实验模块已就绪（两个脚本并行下载，首页靠这个信号补渲染）
   window.dispatchEvent(new CustomEvent('scihub:ready'));

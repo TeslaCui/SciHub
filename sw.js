@@ -6,19 +6,19 @@
  *
  * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
  */
-const CACHE = 'scihub-research-v1.0.9';
+const CACHE = 'scihub-research-v1.1.0';
 const ASSETS = [
   './index.html',
-  './style.css?v=1.0.9',
-  './data-safety.js?v=1.0.9',
-  './app.js?v=1.0.9',
-  './experiment.js?v=1.0.9',
-  './platinum.js?v=1.0.9',
-  './merge.js?v=1.0.9',
-  './manifest.json?v=1.0.9',
-  './guide.html?v=1.0.9',
-  './guide.css?v=1.0.9',
-  './guide.js?v=1.0.9',
+  './style.css?v=1.1.0',
+  './data-safety.js?v=1.1.0',
+  './app.js?v=1.1.0',
+  './experiment.js?v=1.1.0',
+  './platinum.js?v=1.1.0',
+  './merge.js?v=1.1.0',
+  './manifest.json?v=1.1.0',
+  './guide.html?v=1.1.0',
+  './guide.css?v=1.1.0',
+  './guide.js?v=1.1.0',
 ];
 
 self.addEventListener('install', (event) => {
@@ -59,7 +59,7 @@ self.addEventListener('fetch', (event) => {
         const hit = await caches.match(request);
         if (hit) return hit;
         if (isDocument) {
-          const fallback = url.pathname.endsWith('/guide.html') ? './guide.html?v=1.0.9' : './index.html';
+          const fallback = url.pathname.endsWith('/guide.html') ? './guide.html?v=1.1.0' : './index.html';
           const page = await caches.match(fallback);
           if (page) return page;
         }

@@ -13,6 +13,22 @@ p('guide', 'start', 'Use this guide', '使用本教程', ['Open SciHub in a brow
   ['Select the language view that you need.', '选择需要的语言显示方式。'],
   ['Compare the guide version with the version in the SciHub footer.', '核对教程版本与 SciHub 页脚的版本。']
 ], ['You can read the guide without an account.', '无需登录即可阅读教程。']);
+p('navigation', 'start', 'Move between pages', '切换页面与返回主页', ['Open SciHub in a browser.', '在浏览器中打开 SciHub。'], [
+  ['Select a task to open its page in the current tab.', '选择任务，在当前标签打开对应页面。'],
+  ['Use the browser Back button to return to the previous page.', '使用浏览器后退按钮返回上一页。'],
+  ['Use the browser Forward button to open the next visited page.', '使用浏览器前进按钮打开下一条已访问页面。'],
+  ['Select the SciHub logo in the top bar to return home.', '选择顶部栏左侧的 SciHub 图标返回主页。'],
+  ['Use "小工具" or the account menu from the same top bar.', '在同一顶部栏使用“小工具”或账号菜单。']
+], ['SciHub keeps the top bar while you move between pages.', '切换页面时，SciHub 保留顶部栏。'], [
+  ['The guide opens in the current tab and uses the same top bar.', '教程在当前标签打开，并使用同一顶部栏。'],
+  ['Private pages require login; the guide does not.', '私人页面需要登录；教程无需登录。'],
+  ['An unsaved plan draft stays in this page session when you navigate away.', '切换页面时，未保存的方案草稿保留在当前页面会话中。'],
+  ['Use Back or Forward to return to the draft before you save it.', '保存前，可使用后退或前进返回草稿。'],
+  ['Refresh, logout, and closing the tab can discard an unsaved draft.', '刷新、退出登录或关闭标签可能丢失未保存草稿。'],
+  ['Navigation waits for record and experiment saves.', '切页会等待科研记录和实验数据保存。'],
+  ['Resolve a save error before you leave.', '保存失败时，先处理错误再离开。'],
+  ['An unsaved record form stays in this page session when you use Back or Forward.', '使用后退或前进时，未保存的科研记录表单保留在当前页面会话中。']
+]);
 p('register', 'account', 'Create an account', '注册账号', ['Use an email address that you can access.', '准备一个可以收取邮件的邮箱。'], [
   ['Select "注册" (Register).', '选择“注册”。'],
   ['Enter your email address.', '填写邮箱。'],
@@ -163,6 +179,7 @@ p('plan-import', 'plans', 'Import a Word plan', '导入 Word 实验方案', ['Pr
 ], ['SciHub opens "核对导入结果" (Check import results).', 'SciHub 打开“核对导入结果”。'], [
   ['AI parsing can send plan text to the configured AI service.', 'AI 解析可能把方案文本发送到配置的 AI 服务。'],
   ['The imported procedure uses Chinese instructions.', '导入后的步骤使用中文。'],
+  ['If you leave before import completes, select the file again when you return.', '导入完成前若切换页面，返回后需重新选择文件。'],
   ['Keep source values, units, conditions, negative instructions, and instrument codes unchanged.', '保留原文数值、单位、条件、否定指令及仪器代码，不擅自更改。'],
   ['Check all operations, conditions, and data fields against the source.', '对照原文核对全部操作、条件和记录项。'],
   ['An unnumbered source needs manual process boundaries before you save.', '无编号原文须在保存前手工核对并划分工序。'],
@@ -593,7 +610,7 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
 module.exports = {
-  version: '1.0.9', updated: '2026-10-08',
+  version: '1.1.0', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

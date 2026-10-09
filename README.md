@@ -5,9 +5,9 @@
 
 线上地址：<https://teslacui.github.io/SciHub/>
 
-版本 **v1.0.9**（2026-10-08）。统一软件与教程的功能命名，精简说明和提示。方案支持卡片菜单、编辑预览、平行实验合并及 Word 导入；小工具提供铂氯酸和热解程序计算器。本次仅更新界面文案，保留既有科研记录和实验数据。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
+版本 **v1.1.0**（2026-10-08）。站内页面支持浏览器后退和前进，教程在当前标签打开。所有站内页面复用固定顶部栏，点击 SciHub 图标返回主页。切页等待实验数据保存，未保存方案草稿在当前页面会话中保留；刷新前仍须保存草稿。本次不修改数据库或历史数据。[中文导入规则](docs/CHINESE-PLAN-WRITING.md) 说明旧数据兼容。
 
-**使用教程：[网站版](https://teslacui.github.io/SciHub/guide.html?v=1.0.9) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
+**使用教程：[网站版](https://teslacui.github.io/SciHub/index.html?v=1.1.0#guide) · [GitHub 版](docs/USER-GUIDE.md)**。[教程维护与发布](docs/GUIDE-MAINTENANCE.md) 说明生成和同步检查。
 
 后续功能更新须遵循 [维护规则](AGENTS.md) 中的旧数据兼容与迁移要求：兼容增量升级、明确映射、转换前核实私密备份与恢复方案，并验证旧版本数据升级路径。
 

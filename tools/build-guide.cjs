@@ -71,7 +71,7 @@ function render(guide) {
 <html lang="zh-CN" data-guide-view="both"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="guide-version" content="${guide.version}"><meta name="description" content="SciHub 使用教程：账号、方案、实验、附件、合并与数据保护。">
 <title>SciHub 使用教程 · v${guide.version}</title><link rel="stylesheet" href="guide.css?v=${guide.version}"><script src="guide.js?v=${guide.version}" defer></script></head>
-<body><a class="guide-skip" href="#guide-content">跳到操作说明 / Skip to procedures</a>
+<body class="guide-page"><a class="guide-skip" href="#guide-content">跳到操作说明 / Skip to procedures</a>
 <header class="guide-header"><a class="guide-brand" href="./index.html"><span class="guide-logo">Sci</span><span>SciHub <small>使用教程 · User guide</small></span></a>
 <nav aria-label="教程链接"><a href="./index.html">返回软件</a><a href="https://github.com/TeslaCui/SciHub/blob/master/docs/USER-GUIDE.md" target="_blank" rel="noopener">GitHub 教程</a></nav></header>
 <main class="guide-layout"><aside class="guide-sidebar"><div class="guide-controls"><label for="guide-search">搜索操作 / Find a procedure</label>
@@ -85,7 +85,7 @@ function render(guide) {
 <div class="guide-quick"><a href="#plan-import">导入方案</a><a href="#run-data">填写数据</a><a href="#merge-review">合并审核</a><a href="#save-recovery">保存失败</a></div></div>
 <p id="guide-empty" hidden>没有匹配的操作。清空搜索或换一个关键词。 / No matching procedure. Change the search text.</p>
 ${sections}<section id="glossary" class="guide-glossary"><h2>术语表 / Technical terms</h2><dl>${guide.glossary.map(item => `<div><dt>${dual(item.term)}</dt><dd>${dual(item.definition,'p')}</dd></div>`).join('')}</dl></section>
-<footer class="guide-footer">SciHub · v${guide.version}</footer></article></main></body></html>
+<footer class="guide-footer">SciHub · v${guide.version} · <a href="https://github.com/TeslaCui/SciHub/blob/master/docs/USER-GUIDE.md">GitHub 教程</a></footer></article></main></body></html>
 `;
   const mdPair = value => `${value.en}\n\n${value.zh}`;
   const mdList = items => items.map(item => `- ${item.en}\n\n  ${item.zh}`).join('\n\n');

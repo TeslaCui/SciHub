@@ -48,7 +48,13 @@ body {
   z-index: 10;
 }
 
-.brand { display: flex; align-items: center; gap: 10px; }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+.brand:focus-visible { outline: 2px solid var(--brand); outline-offset: 5px; border-radius: 4px; }
+html { scroll-padding-top: 90px; }
+body.guide-shell > main { max-width: 1280px; padding: 0; }
+@media print {
+  body.guide-shell > .topbar, body.guide-shell > .footer { display: none; }
+}
 
 .logo {
   width: 34px; height: 34px;

@@ -1,6 +1,8 @@
 # 教程维护与发布
 
-`docs/user-guide.source.cjs` 是唯一内容源。`node tools/build-guide.cjs` 生成 GitHub 可读的 `docs/USER-GUIDE.md` 和网站的 `guide.html`。页面不需要账号，不读取科研数据，也不调用 AI。
+`docs/user-guide.source.cjs` 是唯一内容源。`node tools/build-guide.cjs` 生成 GitHub 可读的 `docs/USER-GUIDE.md` 和网站的 `guide.html`。教程内容不需要账号，不读取科研数据，也不调用 AI。
+
+网站教程通过 `index.html#guide` 在软件外壳中显示，复用固定顶部栏、工具和账号菜单。`guide.html` 保留完整静态内容供缓存和无 JavaScript 阅读；已有教程链接及流程锚点进入外壳中的相同流程。`guide.js` 的挂载只初始化一次，样式限定在 `.guide-page` 内，避免影响软件表单。软件外壳沿用正常认证流程；有登录会话时仍会加载该账号的工作台数据。
 
 教程首页直接显示“使用教程”，提供版本、目录和操作入口。写作规范、技术选型和符合性说明只在本维护文档中记录，不作为网站或 GitHub 使用教程的开场内容。用户可见的命名遵循 `AGENTS.md` 的发行版文案规则；必要的输入格式、单位和操作影响仍须明确。
 
