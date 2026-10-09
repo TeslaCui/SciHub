@@ -88,10 +88,36 @@
       while (used.has(finalLabel)) { finalLabel = base + '（' + n + '）'; n += 1; }
       used.add(finalLabel);
 
-      fields.push({ label: finalLabel, unit: unit });
+      fields.push({ label: finalLabel, unit: unit, type: unit ? 'number' : 'text' });
+    });
+
+    // Accept a documented recording item when the source uses a unit in brackets
+    // instead of an underscore, for example “记录最终质量（g）”.
+    const MEASURE = /(?:记录|测量|测定|检测|称量|读取|测得|产率|收率)\s*([^，。；：:（）()]{1,24}?)\s*[（(]\s*([A-Za-z%℃°·\/]+)\s*[）)]/g;
+    [...String(text || '').matchAll(MEASURE)].forEach((m) => {
+      const label = String(m[1] || '').trim();
+      const unit = String(m[2] || '').trim();
+      if (!label || !unit || fields.some((field) => field.label === label && field.unit === unit)) return;
+      fields.push({ label, unit, type: 'number' });
     });
 
     return fields;
+  }
+
+  function hasObservationCue(text) {
+    return /记录|测量|测定|检测|称量|读取|测得|观察|现象|颜色|状态|沉淀|分层|澄清|气泡|形貌|晶体|产率|收率/.test(String(text || ''));
+  }
+
+  function recordingFields(text, detected, checks) {
+    const fields = withChecklistFields(detected, checks);
+    if (hasObservationCue(text) && /颜色|状态|沉淀|分层|澄清|气泡|形貌|晶体|现象/.test(String(text || ''))
+      && !fields.some((field) => /现象|颜色|状态|沉淀|分层|澄清|气泡|形貌|晶体/.test(String(field.label || '')))) {
+      fields.push({ label: '实验现象', unit: '', type: 'text' });
+    }
+    if (fields.length) return fields;
+    // A step with no data item still needs an explicit completion check.
+    if (!hasObservationCue(text)) return [{ label: '步骤完成', unit: '', type: 'check' }];
+    return [{ label: '实验现象', unit: '', type: 'text' }];
   }
 
   /* Only split at sentence punctuation outside parentheses. Keep conditions, commas, decimals and codes intact. */
@@ -143,7 +169,7 @@
           position: i,
           title: s.title,
           instruction: formatChineseInstructions(text),
-          fields: withChecklistFields(detectFields(text), guessDuration(text) ? [] : checklistOf(null, text)),
+          fields: recordingFields(text, detectFields(text), checklistOf(null, text)),
           duration_hint: guessDuration(text),
           notice: extractNotice(text),
           // 只有真的写了热解程序的步骤才会带上「热解板块」（马弗炉/管式炉的升温曲线）
@@ -270,6 +296,22 @@
     });
     return out;
   }
+
+  function normalizeRecordingFields(fields, text) {
+    const source = Array.isArray(fields) ? fields : [];
+    const useful = source.filter((field) => {
+      const label = String((field && field.label) || '').trim();
+      if (!label) return false;
+      if (String((field && field.type) || '').toLowerCase() === 'check') return true;
+      // Operation quantities belong in the instruction. Keep fields that clearly
+      // describe an actual measurement or an observed result.
+      if (/^(?:加入|添加|取用|取|称取|量取|移取|使用|设置|保持|加热|升温|降温|搅拌|离心|洗涤|干燥|反应)/.test(label)
+        && !/实际|记录|测量|测定|检测|结果|产率|收率|现象|颜色|状态/.test(label)) return false;
+      return true;
+    });
+    const checks = useful.filter((field) => String((field && field.type) || '').toLowerCase() === 'check').map((field) => field.label);
+    return recordingFields(text, useful.filter((field) => String((field && field.type) || '').toLowerCase() !== 'check'), checks);
+  }
   /* 这一步是否还有任何内容（空白行清完后，用来决定要不要保留这个步骤） */
   function stepHasContent(s) {
     if (!s) return false;
@@ -341,7 +383,7 @@
         // 热解程序：AI 给了就用，否则从说明里识别；都没有就留空（不显示热解板块）
         pyro_seq: String((s && s.pyro_seq) || '').trim() || detectPyroSeq(s && s.instruction),
         // 已完成勾选已并入数据字段：AI 给的 checklist / 规则识别出的条目都转成 check 字段
-        fields: withChecklistFields(fields, checklistOf(s && s.checklist, s && s.instruction)),
+        fields: normalizeRecordingFields(withChecklistFields(fields, checklistOf(s && s.checklist, s && s.instruction)), s && s.instruction),
         checklist: [],
       };
     });

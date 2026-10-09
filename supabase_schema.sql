@@ -747,7 +747,7 @@ revoke all on function public.research_merge_normalize(text),public.research_mer
 grant execute on function public.research_merge_normalize(text),public.research_merge_schema(bigint),
   public.research_review_merge(bigint[],integer),public.research_merge_runs(bigint[],integer,text,jsonb) to authenticated;
 
--- v1.1.4: evidence-based merge review (additive function update)
+-- v1.1.5: evidence-based merge review (additive function update)
 -- Additive function update only: no existing rows, schema columns or policies change.
 -- Blank stored field keys and automatic start times are not experimental records.
 create or replace function public.research_has_recorded_value(p_value jsonb)

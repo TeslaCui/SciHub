@@ -36,6 +36,19 @@ test('fallback import preserves explicit process boundaries and measured field d
   assert.equal(plan.steps[1].instruction, '在 25 ℃ 称量。');
 });
 
+test('import fields keep recorded parameters and observations, and use a check for pure actions', () => {
+  const api = parser();
+  const plan = api.parsePlan('记录规则', [
+    '一、加料', '加入 120 mL 甲醇，搅拌 30 min。',
+    '二、观察', '反应后观察颜色和沉淀，记录最终质量：____ g。',
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(Array.from(plan.steps[0].fields, ({ label, unit, type }) => ({ label, unit, type })))), [{ label: '步骤完成', unit: '', type: 'check' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(Array.from(plan.steps[1].fields, ({ label, unit, type }) => ({ label, unit, type })))), [
+    { label: '记录最终质量', unit: 'g', type: 'number' },
+    { label: '实验现象', unit: '', type: 'text' },
+  ]);
+});
+
 test('new duration hints preserve explicit values and leave vague or multiple waits for confirmation', () => {
   const api = parser();
   assert.equal(api.guessDuration('干燥过夜。'), '过夜（时长待确认）');
