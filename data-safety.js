@@ -29,10 +29,20 @@
       || (Array.isArray(step.images) && step.images.length > 0)
       || Object.values(step.checks || {}).some(value => value === true || value === 'true');
   }
+  function stepRecordReasons(step) {
+    if (!step) return [];
+    const reasons = [];
+    if (stepHasInput(step)) reasons.push('有效填写');
+    if (checksHaveRecord(step.checks)) reasons.push('勾选记录');
+    if (meaningfulValue(step.images)) reasons.push('附件');
+    if (step.status === 'done') reasons.push('已完成');
+    if (step.finished_at) reasons.push('完成时间');
+    return reasons;
+  }
   // Completion is an explicit audit fact, even for a step with no measurements.
-  // Auto-created start times and browse positions are not experimental input.
+  // Auto-created start times, browse positions and legacy active states are not input.
   function stepHasRecord(step) {
-    return !!step && (stepHasInput(step) || checksHaveRecord(step.checks) || meaningfulValue(step.images) || (step.status != null && step.status !== 'pending') || !!step.finished_at);
+    return stepRecordReasons(step).length > 0;
   }
   function progressPosition(steps) {
     let reached = -1;
@@ -201,5 +211,5 @@
     return { schedule, save, flushAll, isDirty, hasPending: () => [...entries.values()].some((e) => e.saved < e.revision || !!e.promise) };
   }
 
-  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
+  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepRecordReasons, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
 });

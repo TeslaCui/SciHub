@@ -97,7 +97,8 @@
         if (step.link_run_id) throw Error('实验有旧关联，请先处理旧关系。');
         if (index <= after && step.status !== 'done') throw Error('「' + row.title + '」的第 ' + (index + 1) + ' 步尚未完成。');
         if (index > after && SciHubSafety.stepHasRecord(step)) {
-          throw Error('「' + row.title + '」的第 ' + (index + 1) + ' 步已有后续记录，不能合并。');
+          const reasons = SciHubSafety.stepRecordReasons ? SciHubSafety.stepRecordReasons(step).join('、') : '有效记录';
+          throw Error('「' + row.title + '」的第 ' + (index + 1) + ' 步已有后续记录（' + reasons + '），不能合并。请打开该步骤核对并清除不应保留的记录后再审核。');
         }
       }
     }

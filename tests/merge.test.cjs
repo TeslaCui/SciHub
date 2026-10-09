@@ -50,6 +50,9 @@ test('browsing a pending suffix with empty field keys and auto times permits rev
   f.steps[1][3].checks = { 已完成: false };
   assert.equal(api.reviewLocal(f.rows,f.steps,2).firstShared,4);
   assert.equal(safety.progressPosition(f.steps[1]),2);
+  const legacyActive = fixture(); legacyActive.steps[1][3].status = 'active';
+  legacyActive.steps[1][3].started_at = '2026-10-09T02:00:00Z';
+  assert.equal(api.reviewLocal(legacyActive.rows, legacyActive.steps, 2).firstShared, 4);
   for (const item of [{values:{质量:0}},{values:{质量:'0'}},{note:'实际操作'},
     {images:[{path:'fictional/photo.jpg'}]},{checks:{核对:true}},{status:'done'},
     {finished_at:'2026-10-09T03:00:00Z'},{checks:{unexpected:0}},{checks:'legacy-record'}]) {
