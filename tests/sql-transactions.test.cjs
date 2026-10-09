@@ -39,7 +39,10 @@ test('real PostgreSQL: atomic writes, idempotency, RLS and stale versions', { sk
     await assert.rejects(save(id, version, [step]), /无权/);
     await db.exec(`set request.jwt.claim.sub='${uid}';`);
     const runId = (await db.query("insert into experiment_runs(user_id,title) values(auth.uid(),'测试实验') returning id")).rows[0].id;
+    // Seed a deliberately completed legacy fixture as database owner, not through production grants.
+    await db.exec('reset role;');
     await db.query("insert into run_steps(user_id,run_id,position,title,status) values(auth.uid(),$1,0,'称量','done')", [runId]);
+    await db.exec('set role authenticated;');
     const finish = (content = '成功日志') => db.query('select research_finish_run($1,$2,$3::date) as id', [runId, content, '2026-10-08']);
     await db.exec('reset role; alter table research_records add constraint test_log_failure check(content<>\'测试日志\'); set role authenticated;');
     await assert.rejects(finish('测试日志'), /check constraint/);

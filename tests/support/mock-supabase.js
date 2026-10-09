@@ -25,6 +25,7 @@
     store.tables.research_records = [{ id: 1, user_id: userId, title: '[示例]溶液配制记录', category: '实验日志', occurred_on: '2026-10-08', content: '目标：配制 100 mL、0.1 mol/L 硝酸。\n使用前核对瓶签上的原液浓度和密度。', created_at: stamp(), updated_at: stamp() }];
   }
   store.tables.experiment_merge_members ||= [];
+  store.tables.experiment_plan_update_audits ||= [];
   for (const group of store.tables.experiment_merge_groups) {
     const member = store.tables.experiment_merge_members.find((row) => row.group_id === group.id);
     group.schema_snapshot ||= store.tables.run_steps.filter((step) => member && step.run_id === member.parent_run_id);
@@ -131,6 +132,59 @@
       updateUser: () => result(),
     },
     async rpc(name, args) {
+      if (name === 'research_review_plan_update') {
+        const plan = store.tables.experiment_plans.find(row => row.id === args.p_id);
+        if (!plan) return { error: { message: '方案不存在' } };
+        const runs = store.tables.experiment_runs.filter(row => row.plan_id === args.p_id && row.status === 'running'
+          && (!args.p_run_id || row.id === args.p_run_id) && !store.tables.experiment_merge_members.some(member => member.parent_run_id === row.id));
+        if (args.p_run_id && !runs.length) return { error: { message: '实验不存在或已合并' } };
+        const map = Object.fromEntries(runs.map(row => [row.id, store.tables.run_steps.filter(step => step.run_id === row.id)]));
+        const reviewed = window.SciHubSafety.reviewPlanUpdate(args.p_steps, runs, map);
+        return { data: { ...reviewed, plan_id: plan.id, plan_updated_at: plan.updated_at, run_id: args.p_run_id || null,
+          candidate: args.p_steps.map(window.SciHubSafety.updateStepSchema),
+          before_steps: args.p_run_id ? map[args.p_run_id] : store.tables.plan_steps.filter(step => step.plan_id === plan.id).sort((a,b)=>a.position-b.position) }, error: null };
+      }
+      if (name === 'research_commit_plan_update') {
+        const checked = await client.rpc('research_review_plan_update', { ...args, p_run_id: null });
+        if (checked.error) return checked;
+        if (JSON.stringify(checked.data) !== JSON.stringify(args.p_expected_review)) return { error: { message: '审核后方案或实验已变化，请重新审核' } };
+        return client.rpc('research_save_plan', args);
+      }
+      if (name === 'research_start_run') {
+        const plan = store.tables.experiment_plans.find(row => row.id === args.p_plan_id);
+        if (!plan || plan.updated_at !== args.p_expected_updated_at) return { error: { message: '方案已变化，请刷新' } };
+        const made = (await new Query('experiment_runs').insert({ user_id: userId, plan_id: plan.id, title: plan.title, status: 'running', current_step: 0 }).single()).data;
+        const rows = store.tables.plan_steps.filter(step => step.plan_id === plan.id);
+        for (const step of rows) {
+          const { checklist = [], plan_id, ...definition } = step;
+          await new Query('run_steps').insert({ ...definition, id: newId('run_steps'), run_id: made.id, values: {}, images: [], note: '', status: 'pending', checks: Object.fromEntries(checklist.map(item => [item,false])) });
+        }
+        return { data: made.id, error: null };
+      }
+      if (name === 'research_adopt_plan_update') {
+        const run = store.tables.experiment_runs.find(row => row.id === args.p_run_id);
+        const candidates = store.tables.plan_steps.filter(step => step.plan_id === run?.plan_id).sort((a,b)=>a.position-b.position);
+        const checked = await client.rpc('research_review_plan_update', { p_id: run?.plan_id, p_steps: candidates, p_run_id: args.p_run_id });
+        if (checked.error) return checked;
+        if (JSON.stringify(checked.data) !== JSON.stringify(args.p_expected_review)) return { error: { message: '审核后方案或实验已变化，请重新审核' } };
+        if (!checked.data.allowed) return { error: { message: '采用审核不通过' } };
+        const locked = checked.data.runs[0].locked_through;
+        const before = {run:structuredClone(run),steps:structuredClone(store.tables.run_steps.filter(step=>step.run_id===run.id))};
+        const removed = store.tables.run_steps.filter(step => step.run_id === run.id && step.position >= candidates.length);
+        if (removed.length && !args.p_confirm_remove) return { error: { message: '未批准移除尾步' } };
+        for (const step of candidates.filter(step=>step.position>locked)) {
+          const old = store.tables.run_steps.find(row=>row.run_id===run.id && row.position===step.position);
+          const { checklist, ...schema } = window.SciHubSafety.updateStepSchema(step);
+          const checks = Object.fromEntries(checklist.map(item => [item,false]));
+          if (old) Object.assign(old,schema,{checks,updated_at:timestamp()});
+          else await new Query('run_steps').insert({ ...schema, user_id:userId, run_id:run.id, position:step.position, values:{}, images:[], checks });
+        }
+        store.tables.run_steps = store.tables.run_steps.filter(step=>!removed.includes(step));
+        run.updated_at=timestamp();
+        store.tables.experiment_plan_update_audits.push({id:newId('experiment_plan_update_audits'),user_id:userId,plan_id:run.plan_id,run_id:run.id,action:'adopt_tail',created_at:timestamp(),
+          before_snapshot:before,after_snapshot:{run:structuredClone(run),steps:structuredClone(store.tables.run_steps.filter(step=>step.run_id===run.id))},review_snapshot:checked.data});
+        persist(); return {data:run.id,error:null};
+      }
       if (name === 'research_review_merge') {
         const runs = store.tables.experiment_runs.filter((row) => args.p_run_ids.includes(row.id));
         const steps = Object.fromEntries(runs.map((row) => [row.id, store.tables.run_steps.filter((step) => step.run_id === row.id)]));
@@ -161,11 +215,22 @@
       if (name === 'research_lookup_login_email') return { data: 'audit@example.test', error: null };
       if (name === 'research_save_plan') {
         let plan = store.tables.experiment_plans.find((row) => row.id === args.p_id);
+        const before = {plan:plan?structuredClone(plan):null,steps:structuredClone(store.tables.plan_steps.filter(step=>step.plan_id===args.p_id))};
+        let reviewed={runs:[]};
         if (args.p_id && (!plan || plan.updated_at !== args.p_expected_updated_at)) return { error: { message: '方案已在其他设备修改' } };
+        if (args.p_id) {
+          const checked = await client.rpc('research_review_plan_update', {...args,p_run_id:null});
+          if (checked.error) return checked;
+          if (!checked.data.allowed) return {error:{message:'更新审核不通过：已执行步骤不匹配'}};
+          reviewed=checked.data;
+        }
         if (!plan) { plan = { id: newId('experiment_plans'), user_id: userId, created_at: timestamp() }; store.tables.experiment_plans.push(plan); }
         Object.assign(plan, { title: args.p_title, source: args.p_source, parse_version: args.p_parse_version, version_log: args.p_version_log, updated_at: timestamp() });
+        const oldSteps = store.tables.plan_steps.filter(row => row.plan_id === plan.id);
         store.tables.plan_steps = store.tables.plan_steps.filter((row) => row.plan_id !== plan.id);
-        for (const [position, item] of args.p_steps.entries()) store.tables.plan_steps.push({ ...item, id: newId('plan_steps'), plan_id: plan.id, user_id: userId, position, checklist: [] });
+        for (const [position, item] of args.p_steps.entries()) store.tables.plan_steps.push({ ...item, id: oldSteps.find(row=>row.position===position)?.id || newId('plan_steps'), plan_id: plan.id, user_id: userId, position });
+        store.tables.experiment_plan_update_audits.push({id:newId('experiment_plan_update_audits'),user_id:userId,plan_id:plan.id,action:'save_plan',created_at:timestamp(),
+          before_snapshot:before,after_snapshot:{plan:structuredClone(plan),steps:structuredClone(store.tables.plan_steps.filter(step=>step.plan_id===plan.id))},review_snapshot:reviewed});
         persist(); return { data: plan.id, error: null };
       }
       if (name === 'research_finish_run') {

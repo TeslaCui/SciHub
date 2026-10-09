@@ -1070,6 +1070,14 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 /* 校验不通过时把「确认关联」置灰，避免误点 */
 .modal-card .actions .primary:disabled { opacity: .45; cursor: not-allowed; }
+
+.update-review-list { display: grid; gap: 8px; min-width: 0; }
+.update-review-list details { padding: 10px; border: 1px solid var(--border, #dce4e8); border-radius: 8px; min-width: 0; }
+.update-review-list summary { cursor: pointer; overflow-wrap: anywhere; }
+.update-review-list pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: #f5f8fa; padding: 8px; }
+.review-issues { color: #b42318; overflow-wrap: anywhere; }
+.update-remove-confirm { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; }
+.update-remove-confirm input { width: auto; flex: 0 0 auto; }
 /* Parallel branches converge into a single shared continuation. */
 .merge-flow { padding: 16px; margin: 16px 0; border: 1px solid #d7e5e1; border-radius: 14px; background: #f5faf8; }
 .merge-flow-scroll { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; padding-bottom: 5px; }

@@ -21,10 +21,12 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
     await db.exec(source); await db.exec(source);
     await db.exec(`set role authenticated; set request.jwt.claim.sub='${owner}';`);
     async function fixture(label, count = 6) {
+      await db.exec('reset role;');
       const id = (await db.query('insert into experiment_runs(user_id,title) values(auth.uid(),$1) returning id', [label])).rows[0].id;
       for (let position = 0; position < count; position++) await db.query(`insert into run_steps(user_id,run_id,position,title,instruction,fields,values,status)
         values(auth.uid(),$1,$2,$3,'80 ℃ 12 h','[{"label":"质量","unit":"g","type":"number"}]',$4::jsonb,$5)`,
       [id, position, '操作 '+position, position<3 ? JSON.stringify({ 质量: label }) : '{}', position<3 ? 'done' : 'pending']);
+      await db.exec('set role authenticated;');
       return id;
     }
     const review = async (ids, after = 2) => (await db.query('select research_review_merge($1::bigint[],$2) as review', [ids,after])).rows[0].review;
@@ -55,9 +57,13 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
     await assert.rejects(review([a,a]), /不同/);
     await assert.rejects(review([a,b],5), /保留一个共同步骤/);
     for (const position of [0,5]) {
+      await db.exec('reset role;');
       await db.query("update run_steps set instruction='120 ℃ 12 h' where run_id=$1 and position=$2", [b,position]);
+      await db.exec('set role authenticated;');
       await assert.rejects(review([a,b]), /前置或后置步骤不一致/);
+      await db.exec('reset role;');
       await db.query("update run_steps set instruction='80 ℃ 12 h' where run_id=$1 and position=$2", [b,position]);
+      await db.exec('set role authenticated;');
     }
     await db.query("update run_steps set status='pending' where run_id=$1 and position=2", [b]);
     await assert.rejects(review([a,b]), /完成合并前/);
@@ -78,7 +84,7 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
     await assert.rejects(review([a,b]), /重复或嵌套/);
     await assert.rejects(db.query("update run_steps set note='改写历史' where run_id=$1 and position=0",[a]), /只读/);
     await assert.rejects(db.query("update experiment_runs set title='改写支路' where id=$1",[a]), /不可修改/);
-    await assert.rejects(db.query("update run_steps set instruction='改写共同步骤' where run_id=$1 and position=0",[result]), /定义已经锁定/);
+    await assert.rejects(db.query("update run_steps set instruction='改写共同步骤' where run_id=$1 and position=0",[result]), /定义已经锁定|permission denied/);
     await assert.rejects(db.query("update experiment_runs set status='done' where id=$1",[result]), /所有步骤必须完成/);
     await assert.rejects(db.query("insert into experiment_merge_members(group_id,user_id,parent_run_id) values(1,auth.uid(),$1)",[result]), /permission denied/);
     await db.query("update run_steps set status='done',values='{\"质量\":12}' where run_id=$1",[result]);

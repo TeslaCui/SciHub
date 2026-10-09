@@ -12,7 +12,7 @@ function parser(upstream) {
     client: { functions: { invoke: async () => ({ data: upstream, error: null }) } },
     document: { getElementById: () => element, addEventListener() {} }, CustomEvent: class {} });
   const source = fs.readFileSync(path.join(__dirname, '../experiment.js'), 'utf8').replace('  window.Run = {',
-    '  window.__parser = { parsePlan, parsePlanSmart, normalizePlan, formatChineseInstructions, guessDuration, mergePlanVersions };\n  window.Run = {');
+    '  window.__parser = { parsePlan, parsePlanSmart, normalizePlan, formatChineseInstructions, guessDuration, mergePlanVersions, calcPyro, buildPyroSeq };\n  window.Run = {');
   vm.runInContext(source, context);
   return window.__parser;
 }
@@ -69,9 +69,12 @@ test('version upload never swaps adjacent steps with similar titles or guesses a
   assert.deepEqual(Array.from(result.steps, step => step.fields[0].label), ['干燥温度', '干燥后质量']);
   const ambiguous = await api.mergePlanVersions(old, [{ title: '干燥处理新工序', instruction: '120 ℃ 干燥 4 h。', fields: [] }]);
   assert.equal(ambiguous.stats.newCount, 1);
-  assert.equal(ambiguous.stats.userKept, 2);
+  assert.equal(ambiguous.stats.userKept, 0);
   assert.equal(ambiguous.steps[0].fields.length, 0);
-  assert.equal(ambiguous.steps[1].title, old[0].title);
+  assert.equal(ambiguous.steps.length, 1);
+  const changed = await api.mergePlanVersions(old, [{...old[0], title:'改名后的工序', fields:[{label:'干燥温度',unit:'K',type:'number'}]}]);
+  assert.equal(changed.steps[0].title,'改名后的工序');
+  assert.equal(changed.steps[0].fields[0].unit,'K');
 });
 
 test('a new client falls back while the old parser is deployed and accepts the marked Chinese protocol response', async () => {
@@ -81,4 +84,15 @@ test('a new client falls back while the old parser is deployed and accepts the m
   const plan = await parser({ ...output, writing_format: 'chemical-procedure-zh-v1' }).parsePlanSmart('在 80 ℃ 干燥 2 h。');
   assert.equal(plan.steps[0].instruction, output.steps[0].instruction);
   assert.equal(parser().normalizePlan({ ...output, steps: [{ ...output.steps[0], duration_hint: '过夜' }] }).steps[0].duration_hint, '过夜（时长待确认）');
+});
+
+test('pyro calculator accepts zero Celsius and rejects missing or non-positive inputs', () => {
+  const api = parser();
+  const sequence = 'C25-T55-C300-T60-C300';
+  assert.equal(api.calcPyro(sequence, 0, 5, 300).total, 120);
+  assert.equal(api.buildPyroSeq(sequence, 0, 5, 300), 'C0-T60-C300-T60-C300');
+  for (const values of [['', 5, 300], [0, '', 300], [0, -1, 300], [0, 5, '']]) {
+    assert.equal(api.calcPyro(sequence, ...values), null);
+    assert.equal(api.buildPyroSeq(sequence, ...values), '');
+  }
 });
