@@ -96,8 +96,7 @@
         if (step.position !== index || signatures[index] !== SciHubSafety.stepSignature(step)) throw Error('第 ' + (index + 1) + ' 步不一致，不能合并。请核对前置和后置的顺序、说明、条件、字段及单位。');
         if (step.link_run_id) throw Error('实验有旧关联，请先处理旧关系。');
         if (index <= after && step.status !== 'done') throw Error('「' + row.title + '」的第 ' + (index + 1) + ' 步尚未完成。');
-        if (index > after && (step.status !== 'pending' || Object.keys(step.values || {}).length || (step.images || []).length
-          || String(step.note || '').trim() || step.finished_at || Object.values(step.checks || {}).some(Boolean))) {
+        if (index > after && SciHubSafety.stepHasRecord(step)) {
           throw Error('「' + row.title + '」的第 ' + (index + 1) + ' 步已有后续记录，不能合并。');
         }
       }

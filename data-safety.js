@@ -11,6 +11,35 @@
     return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
   }
 
+  function meaningfulValue(value) {
+    if (value == null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value === 'boolean') return true;
+    if (typeof value === 'object') return Object.values(value).some(meaningfulValue);
+    return false;
+  }
+  function checksHaveRecord(checks) {
+    const values = checks && typeof checks === 'object' && !Array.isArray(checks) ? Object.values(checks) : [checks];
+    return values.some(value => value !== false && value !== 'false' && meaningfulValue(value));
+  }
+  function stepHasInput(step) {
+    if (!step) return false;
+    return meaningfulValue(step.values) || String(step.note || '').trim().length > 0
+      || (Array.isArray(step.images) && step.images.length > 0)
+      || Object.values(step.checks || {}).some(value => value === true || value === 'true');
+  }
+  // Completion is an explicit audit fact, even for a step with no measurements.
+  // Auto-created start times and browse positions are not experimental input.
+  function stepHasRecord(step) {
+    return !!step && (stepHasInput(step) || checksHaveRecord(step.checks) || meaningfulValue(step.images) || (step.status != null && step.status !== 'pending') || !!step.finished_at);
+  }
+  function progressPosition(steps) {
+    let reached = -1;
+    (steps || []).forEach((step, i) => { if (stepHasInput(step)) reached = i; });
+    return reached;
+  }
+
   function csvCell(value) {
     let text = String(value == null ? '' : value);
     // Quoting alone does not prevent Excel from executing a formula.
@@ -135,5 +164,5 @@
     return { schedule, save, flushAll, isDirty, hasPending: () => [...entries.values()].some((e) => e.saved < e.revision || !!e.promise) };
   }
 
-  return { localDate, csvCell, validateFields, assertSafeStepSync, stepSignature, groupsOf, createSaveQueue };
+  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, groupsOf, createSaveQueue };
 });

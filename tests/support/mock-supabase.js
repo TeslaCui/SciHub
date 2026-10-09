@@ -2,7 +2,8 @@
 (function () {
   const parallelFixture = typeof document !== 'undefined' && /parallel=1/.test(document.currentScript && document.currentScript.src || '');
   const guideFixture = typeof document !== 'undefined' && /guide=1/.test(document.currentScript && document.currentScript.src || '');
-  const key = guideFixture ? 'scihub-guide-fixtures-v1' : parallelFixture ? 'scihub-parallel-fixtures-v1' : 'scihub-audit-fixtures-v1';
+  const progressFixture = typeof document !== 'undefined' && /progress=1/.test(document.currentScript && document.currentScript.src || '');
+  const key = progressFixture ? 'scihub-progress-fixtures-v1' : guideFixture ? 'scihub-guide-fixtures-v1' : parallelFixture ? 'scihub-parallel-fixtures-v1' : 'scihub-audit-fixtures-v1';
   const userId = '00000000-0000-0000-0000-000000000001';
   const stamp = () => new Date().toISOString();
   const load = () => JSON.parse(localStorage.getItem(key) || 'null');
@@ -40,6 +41,20 @@
     store.tables.run_steps = store.tables.experiment_runs.flatMap((run,index) => store.tables.plan_steps.map((step) => ({ ...step,
       id: 1000+index*10+step.position, run_id: run.id, status: step.position<3 ? 'done' : 'pending',
       values: step.position<3 ? { 质量: index ? '5' : '3' } : {}, images: [], note: '', updated_at: stamp() })));
+  }
+  if (progressFixture && !saved) {
+    store.session = { user: { id: userId, email: 'progress@example.test' } };
+    store.tables.research_profiles = [{ user_id: userId, username: 'Progress example', email: 'progress@example.test' }];
+    store.tables.experiment_plans[0].title = '[TEST] Nine-step protocol';
+    store.tables.plan_steps = Array.from({length:9}, (_,position) => ({id:position+1,user_id:userId,plan_id:1,position,
+      title:'Operation '+(position+1),instruction:'Record actual operation',fields:[{label:'Mass',unit:'g',type:'number'}],
+      duration_hint:'',notice:'',pyro_seq:'',checklist:[]}));
+    store.tables.experiment_runs = ['[TEST] v5','[TEST] v5.1'].map((title,index) => ({id:100+index,title,user_id:userId,plan_id:1,
+      status:'running',current_step:7+index,started_at:stamp(),created_at:stamp(),updated_at:stamp()}));
+    store.tables.run_steps = store.tables.experiment_runs.flatMap((run,index) => store.tables.plan_steps.map(step => ({...step,
+      id:1000+index*10+step.position,run_id:run.id,status:step.position<7?'done':'pending',
+      values:step.position<7?{Mass:step.position===6?0:2+index}:{Mass:'',Time:null},
+      checks:{check:false},started_at:stamp(),images:[],note:'',updated_at:stamp()})));
   }
   const persist = () => localStorage.setItem(key, JSON.stringify(store));
   const newId = (table) => Math.max(0, ...store.tables[table].map((row) => Number(row.id) || 0)) + 1;

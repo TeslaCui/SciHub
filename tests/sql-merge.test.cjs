@@ -30,6 +30,28 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
     const review = async (ids, after = 2) => (await db.query('select research_review_merge($1::bigint[],$2) as review', [ids,after])).rows[0].review;
     const merge = async (ids, checked) => (await db.query('select research_merge_runs($1::bigint[],2,$2,$3::jsonb) as id', [ids,'混合 A/B 样品',JSON.stringify(checked.versions)])).rows[0].id;
     const a = await fixture('A'), b = await fixture('B');
+    // Reproduce the legacy client: merely visiting a suffix stored empty keys.
+    await db.query(`update run_steps set values='{"质量":"","时间":null}',checks='{"核对":false}',started_at=now() where run_id=$1 and position=3`,[a]);
+    await assert.rejects(review([a,b]), /已有记录/);
+    const legacy = (await db.query('select * from run_steps order by id')).rows;
+    const upgradeFile = path.join(__dirname, '../supabase/migrations/20261009080000_merge_record_evidence.sql');
+    const upgrade = fs.readFileSync(fs.existsSync(upgradeFile) ? upgradeFile : path.join(__dirname,'../docs/proposals/merge-record-evidence.sql'),'utf8');
+    await db.exec(`reset role;`); await db.exec(upgrade); await db.exec(upgrade);
+    await db.exec(`set role authenticated;`);
+    assert.deepEqual((await db.query('select * from run_steps order by id')).rows,legacy);
+    assert.equal((await review([a,b])).allowed,true);
+    for (const checks of [{check:0}, 'legacy-record', {check:true}, {check:'true'}]) {
+      await db.query('update run_steps set checks=$1::jsonb where run_id=$2 and position=3',[JSON.stringify(checks),a]);
+      await assert.rejects(review([a,b]), /已有记录/);
+    }
+    for (const checks of [{check:false}, {check:'false'}, {check:null}, {check:'  '}, {}]) {
+      await db.query('update run_steps set checks=$1::jsonb where run_id=$2 and position=3',[JSON.stringify(checks),a]);
+      assert.equal((await review([a,b])).allowed,true);
+    }
+    const safety = require('../data-safety.js');
+    for (const value of [null,'',' \t\n','　','\u00a0','\ufeff',0,'0',false,true,{质量:''},[null,''],{质量:{值:0}}]) {
+      assert.equal((await db.query('select research_has_recorded_value($1::jsonb) as yes',[JSON.stringify(value)])).rows[0].yes,safety.meaningfulValue(value));
+    }
     await assert.rejects(review([a,a]), /不同/);
     await assert.rejects(review([a,b],5), /保留一个共同步骤/);
     for (const position of [0,5]) {

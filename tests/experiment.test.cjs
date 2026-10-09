@@ -22,7 +22,7 @@ function harness() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, 'support/mock-supabase.js'), 'utf8'), context);
   context.client = window.supabase.createClient();
   let source = fs.readFileSync(path.join(__dirname, '..', 'experiment.js'), 'utf8');
-  source = source.replace('  window.Run = {', '  window.__test = { run, saveStep, nextStep, finishRun, migrateStepValues, planDiff, dropExtraSteps, syncRunNow, buildLog, editPlan, getDraft: () => draft };\n  window.Run = {');
+  source = source.replace('  window.Run = {', '  window.__test = { run, refreshProgress, saveStep, nextStep, finishRun, migrateStepValues, planDiff, dropExtraSteps, syncRunNow, buildLog, editPlan, getDraft: () => draft };\n  window.Run = {');
   vm.runInContext(source, context);
   return { context, api: window.__test, messages, element };
 }
@@ -136,4 +136,22 @@ test('a delayed plan edit cannot reopen a page after newer navigation', async ()
   release({ data: { id:17, title:'虚构方案', updated_at:'2026-10-08' }, error:null });
   await editing;
   assert.equal(h.api.getDraft(), null);
+});
+
+
+test('blank saves and browsing cannot advance data progress, but zero can', async () => {
+  const h = harness(); const {client,run,steps} = await fixture(h);
+  h.api.run.pos=1;
+  steps[1].values = { Mass:'', Time:null, Blank:'  ' };
+  steps[1].started_at = '2026-10-09T02:00:00Z';
+  steps[1].checks = { Check:false };
+  assert.equal(await h.api.saveStep(steps[1]),true);
+  assert.equal((await client.from('experiment_runs').select().eq('id',run.id).single()).data.current_step,0);
+  assert.equal(safety.progressPosition(h.api.run.steps),-1);
+  steps[1].values.Mass=0;
+  h.api.refreshProgress(steps[1]);
+  assert.match(h.element('run-progress-status').innerHTML, /第 2 步/);
+  assert.equal(await h.api.saveStep(steps[1]),true);
+  assert.equal(safety.progressPosition(h.api.run.steps),1);
+  assert.equal((await client.from('experiment_runs').select().eq('id',run.id).single()).data.current_step,1);
 });

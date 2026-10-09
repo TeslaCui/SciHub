@@ -322,8 +322,9 @@ p('run-resume', 'runs', 'Continue or browse an experiment', '继续实验或浏�
   ['Select a numbered step to read that step.', '选择步骤编号以查看该步。'],
   ['Use "上一步" to read the previous step if necessary.', '如有需要，使用“上一步”查看前一步。']
 ], ['SciHub shows the selected step; it does not mark that step complete.', 'SciHub 显示所选步骤，不会仅因浏览就标记完成。'], [
-  ['If you select "设为当前步骤", SciHub changes the saved progress pointer.', '选择“设为当前步骤”会更改已保存的进度位置。'],
-  ['That control does not confirm completion of every earlier step.', '该操作不会确认全部前置步骤已完成。']
+  ['Browsing a step does not change recorded progress.', '浏览步骤不会改变已记录进度。'],
+  ['Progress uses the last step with values, notes, attachments, or checked items.', '进度以最后一个有有效值、备注、附件或已勾选条目的步骤为准。'],
+  ['An experiment without input shows "尚未记录".', '没有填写信息的实验显示“尚未记录”。']
 ]);
 p('run-data', 'runs', 'Record step data', '填写步骤数据', ['Open an active experiment step.', '打开进行中实验的某一步。'], [
   ['Read the instruction and notices before the laboratory work.', '实验操作前阅读说明和注意事项。'],
@@ -334,7 +335,9 @@ p('run-data', 'runs', 'Record step data', '填写步骤数据', ['Open an active
   ['Stop text input and wait for the saved status.', '停止输入并等待已保存状态。']
 ], ['SciHub saves the values and notes for this step.', 'SciHub 保存该步的数据和备注。'], [
   ['SciHub normally starts a save about one second after input stops.', '通常在停止输入约一秒后开始保存。'],
-  ['A zero value is a value; leave an unknown value empty.', '零是有效值；未知值应留空。']
+  ['A zero value is a value; leave an unknown value empty.', '零是有效值；未知值应留空。'],
+  ['Empty fields and automatic start times do not advance recorded progress.', '空字段和自动开始时间不会增加已记录进度。'],
+  ['A completion status remains protected even without measured values.', '即使没有测量值，完成状态仍受保护。']
 ], [
   ['An input on the screen is not proof of a successful cloud save.', '屏幕上已有输入不代表云端已保存成功。']
 ]);
@@ -403,7 +406,7 @@ p('run-export', 'runs', 'Export an experiment to Word', '导出实验为 Word', 
   ['Check the step data and any unavailable image notices.', '检查步骤数据和无法读取图片的提示。'],
   ['Save video attachments separately if you need them.', '需要视频时，单独保存视频附件。']
 ], ['The document contains saved step data and available images.', '文档包含已保存的步骤数据和可读取的图片。'], [
-  ['An active experiment export includes steps through its saved progress pointer.', '进行中实验的导出包含截至已保存进度位置的步骤。'],
+  ['An active export follows recorded progress and also keeps explicit completion records.', '进行中实验按实际记录进度导出，并保留明确的完成记录。'],
   ['A merged export lists each separate branch and the common stage once.', '合并实验导出分别列出各支路，并只列一次共同阶段。'],
   ['Word exports identify video files but do not embed them.', 'Word 导出列出视频文件信息，但不嵌入视频。'],
   ['An export is not a complete database backup.', '导出文件不是完整数据库备份。']
@@ -458,7 +461,8 @@ p('merge-prepare', 'merge', 'Prepare parallel experiments', '准备平行实验�
 ], ['The experiments can enter the merge review.', '实验可以进入合并审核。'], [
   ['Measured values can differ; plan definitions must match.', '实测值可以不同，方案定义必须一致。'],
   ['Unit case matters: M and m are different.', '单位大小写有意义，M 与 m 不等同。'],
-  ['At least one separate step and one common step must remain.', '至少保留一个前置独立步骤和一个后续共同步骤。']
+  ['At least one separate step and one common step must remain.', '至少保留一个前置独立步骤和一个后续共同步骤。'],
+  ['Browsing later steps with empty fields does not prevent a merge.', '仅浏览后续空白步骤不会阻止合并。']
 ]);
 p('merge-review', 'merge', 'Review and confirm a merge', '审核并确认混合合并', ['Complete the parallel experiment preparation procedure.', '先完成平行实验合并准备流程。'], [
   ['Open one experiment.', '打开其中一个实验。'],
@@ -474,7 +478,9 @@ p('merge-review', 'merge', 'Review and confirm a merge', '审核并确认混合�
 ], ['Each branch keeps its original data; one new stage owns the later records.', '各支路保留原数据，新共同阶段单独保存后续记录。'], [
   ['The home page merge icon opens the same review window.', '主页合并图标可打开同一审核窗口。'],
   ['If selected experiments or data change after review, repeat the review.', '审核后选择或数据发生变化时，需要重新审核。'],
-  ['SciHub checks the merge again when you submit.', '提交时再次检查合并条件。']
+  ['SciHub checks the merge again when you submit.', '提交时再次检查合并条件。'],
+  ['Later values, notes, attachments, checked items, or completion records prevent a merge.', '后续步骤已有值、备注、附件、已勾选条目或完成记录时，不能合并。'],
+  ['Keep unexpected stored records and check them before a merge.', '保留异常历史记录，核对清楚后再合并。']
 ], [
   ['A confirmed mix locks the original branches.', '确认混合后，原支路锁定。'],
   ['There is no direct split or delete operation for a confirmed merged chain.', '已确认合并的链路没有直接拆分或删除操作。'],
@@ -676,13 +682,23 @@ figure('run-data', 'run', 1265, 1301, ['Enter experiment measurements', '填写�
   ['Enter actual operations and deviations in the notes.', '填写实际操作情况及偏差备注。'],
   ['After you complete the step, select "完成并下一步".', '完成当前步骤后，点击“完成并下一步”。']
 ]);
+figure('run-resume', 'run-progress', 1265, 865, ['Recorded progress and step browsing', '实际记录进度与步骤浏览'], [
+  ['The recorded progress is step 7 while the operator reads step 8.', '实际记录到第 7 步，当前浏览第 8 步。'],
+  ['Leave unknown data empty; zero is a valid record.', '未填写的数据保持空白，零是有效记录。'],
+  ['Select a step number to browse without advancing recorded progress.', '点击步骤编号只切换浏览，不增加已记录进度。']
+]);
+figure('merge-review', 'merge-review', 1265, 865, ['Review a merge after step 7', '审核第 7 步之后的合并'], [
+  ['Select the boundary after step 7; the common stage starts at step 8.', '选择第 7 步之后混合，共同阶段从第 8 步开始。'],
+  ['The review checks actual records; browsing empty steps does not advance progress.', '审核检查实际记录，浏览空白步骤不会增加进度。'],
+  ['If selections or data change, select "审核合并条件" again.', '选择或数据改变后，点击“审核合并条件”重新审核。']
+]);
 figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑科研记录'], [
   ['Enter the record title.', '填写记录标题。'],
   ['Enter the record content.', '填写科研记录内容。'],
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.1.1', updated: '2026-10-08',
+  version: '1.1.2', updated: '2026-10-09',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

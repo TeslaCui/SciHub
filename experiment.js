@@ -1422,7 +1422,7 @@
     const doomed = rows.filter((rs) => !planPositions.has(rs.position));
 
     if (doomed.length) {
-      const withData = doomed.filter((rs) => stepHasProgress(rs));
+      const withData = doomed.filter((rs) => SciHubSafety.stepHasRecord(rs));
       const list = doomed.map((rs) => '· 第 ' + (rs.position + 1) + ' 步：' + (rs.title || '')).join('\n');
       const warn = withData.length
         ? '\n\n⚠ 其中 ' + withData.length + ' 个步骤已经填过数据 / 传过照片，会一并丢失：\n'
@@ -2109,7 +2109,7 @@
     const list = (fresh && fresh.removed) || [];
     if (!list.length) { setStatus('没有方案里已删掉的步骤，不用清理。', 'ok'); drawRun(); return; }
 
-    const withData = list.filter((x) => stepHasProgress(x));
+    const withData = list.filter((x) => SciHubSafety.stepHasRecord(x));
     const lines = list.map((x) => '· 第 ' + (x.position + 1) + ' 步：' + (x.title || '')).join('\n');
     const warn = withData.length
       ? '\n\n⚠ 其中 ' + withData.length + ' 步已经填过数据 / 传过照片，会一起永久删除，无法恢复：\n'
@@ -2382,18 +2382,9 @@
     planChannel = null;
   }
 
-  /* 这一步是否已经「有进展」：填了数据、附了照片、写了备注，或标记完成。
+  /* 这一步是否已经「有进展」：填了有效数据、附了照片、写了备注或勾选条目。
      用来算「实验进行位置」—— 它和「当前浏览位置」是两回事。 */
-  function stepHasProgress(x) {
-    if (!x) return false;
-    if (x.status === 'done') return true;
-    if ((x.images || []).length) return true;
-    if (String(x.note || '').trim()) return true;
-    const checks = x.checks || {};
-    if (Object.keys(checks).some((k) => !!checks[k])) return true;   // 勾选过也算做过
-    const vals = x.values || {};
-    return Object.keys(vals).some((k) => { const v = vals[k]; return v !== '' && v != null; });
-  }
+  const stepHasProgress = SciHubSafety.stepHasInput;
 
   /* 已完成勾选：把 run_steps.checks 渲染成可勾选清单；勾选/取消直接写库，
      勾过任意一条就算这一步有进展（进度条、待办、日历会跟着动）。 */
@@ -2445,12 +2436,11 @@
     const readOnly = (run.data.status !== 'running' || !!run.data._mergedInto);
     const done = run.steps.slice(0, total).filter((x) => x.status === 'done').length;
 
-    // 实验进行位置：最后一个「有数据 / 有照片 / 有备注 / 已完成」的步骤（只在可见范围内看）。
-    // 翻看后面的步骤不会推进它 —— 进度由填写的数据决定，不由浏览位置决定。
-    let reached = 0;
-    run.steps.slice(0, total).forEach((x, i) => { if (stepHasProgress(x)) reached = i; });
+    // Browsing and automatic timestamps do not count as recorded input.
+    const recorded = SciHubSafety.progressPosition(run.steps.slice(0, total));
+    const reached = Math.max(0, recorded);
 
-    const reachedPct = total > 1 ? Math.round((reached / (total - 1)) * 100) : 100;
+    const reachedPct = recorded < 0 ? 0 : total > 1 ? Math.round((reached / (total - 1)) * 100) : 100;
     const posPct = total > 1 ? Math.round((run.pos / (total - 1)) * 100) : 100;
 
     const isLast = run.pos === total - 1;
@@ -2488,7 +2478,7 @@
       // 进度条：绿色实心＝实验进行到的位置（按数据算）；空心圆环＝当前正在浏览的位置
       '<div class="progress">',
       '  <i style="width:' + reachedPct + '%"></i>',
-      '  <span class="prog-mark prog-reached" style="left:' + reachedPct + '%" title="已进行到第 ' + stepNumber(reached) + ' 步"></span>',
+      '  <span class="prog-mark prog-reached" style="left:' + reachedPct + '%" title="' + (recorded < 0 ? '尚未记录' : '已进行到第 ' + stepNumber(reached) + ' 步') + '"></span>',
       '  <span class="prog-mark prog-pos" style="left:' + posPct + '%" title="正在浏览第 ' + stepNumber(run.pos) + ' 步"></span>',
       '</div>',
 
@@ -2498,7 +2488,7 @@
       run.steps.slice(0, total).map((x, i) => {
         const cls = ['step-dot'];
         if (stepHasProgress(x)) cls.push('done');
-        if (i === reached) cls.push('reached');
+        if (i === recorded) cls.push('reached');
         if (i === run.pos) cls.push('cur');
         if (run.linkAt != null && i >= run.linkAt) cls.push('linked');   // 合并点之后：共同做的步骤，标黄
         return '<button type="button" class="' + cls.join(' ') + '" data-goto="' + i + '"'
@@ -2507,17 +2497,10 @@
       }).join(''),
       '</div>',
 
-      '<div class="hc-meta run-status">已进行到 <b>第 ' + stepNumber(reached) + ' 步</b> · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
+      '<div class="hc-meta run-status" id="run-progress-status">' + (recorded < 0 ? '<b>尚未记录</b>' : '已进行到 <b>第 ' + stepNumber(reached) + ' 步</b>') + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
 
-      // 进度与「正在浏览」不一致时，给一个一键改正的入口：
-      // current_step 只在点「完成并下一步」时前进，点快了就会落在没真正做的步骤上，
-      // 待办跟着显示错（v5 显示到第 9 步就是这么来的）。
-      run.pos !== (run.data.current_step || 0)
-        ? '<div class="run-status"><button type="button" class="ghost tiny" id="set-progress"'
-            + ' title="将当前浏览步骤设为实验进度">设为当前步骤</button></div>'
-        : '',
       // 关联子实验：说清楚为什么只看到这里
       cut != null
         ? [
@@ -2709,24 +2692,6 @@
     if (syncBtn) syncBtn.addEventListener('click', syncRunNow);
     const dropExtraBtn = $('run-drop-extra');
     if (dropExtraBtn) dropExtraBtn.addEventListener('click', dropExtraSteps);
-
-    // 「记为我做到这里」：把云端的 current_step 改成当前浏览的这一步
-    const setProgBtn = $('set-progress');
-    if (setProgBtn) setProgBtn.addEventListener('click', async () => {
-      setProgBtn.disabled = true;
-      const { error } = await client.from(RUN)
-        .update({ current_step: run.pos, updated_at: new Date().toISOString() })
-        .eq('id', run.id);
-      if (error) {
-        setProgBtn.disabled = false;
-        setStatus('设置进度失败：' + errorText(error), 'error');
-        return;
-      }
-      run.data.current_step = run.pos;
-      run.data.updated_at = new Date().toISOString();
-      setStatus('已把「进行到这里」记为第 ' + stepNumber(run.pos) + ' 步。', 'ok');
-      drawRun();
-    });
 
     $('photo-input').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
@@ -3594,8 +3559,8 @@
         paragraphs.push('', { text: member.title, bold: true, size: 13 });
         paragraphs.push({ text: '开始：' + fmt(member.started_at) + (member.finished_at ? ' · 结束：' + fmt(member.finished_at) : '') + ' · ' + (member._mergedInto ? '独立支路已合并（只读）' : member.status === 'done' ? '已完成' : '进行中'), size: 10 });
         const savedSteps = stepsById[member.id] || [];
-        const position = member._mergedInto ? member._merge.after_position : member.status === 'done' ? Infinity : Number(member.current_step) || 0;
-        for (const step of savedSteps.filter((item) => item.position <= position)) {
+        const position = member._mergedInto ? member._merge.after_position : member.status === 'done' ? Infinity : SciHubSafety.progressPosition(savedSteps);
+        for (const step of savedSteps.filter((item) => item.position <= position || SciHubSafety.stepHasRecord(item))) {
           paragraphs.push('', { text: '第 ' + (window.Merges ? window.Merges.number(member, step.position) : step.position + 1) + ' 步 · ' + step.title, bold: true, size: 12 });
           if (step.started_at || step.finished_at) paragraphs.push({ text: '步骤时间：' + fmt(step.started_at) + ' → ' + fmt(step.finished_at), size: 10 });
           if (step.instruction) paragraphs.push({ text: step.instruction, size: 10 });
@@ -3749,8 +3714,34 @@
     },
   });
 
+  // Update only progress nodes: preserve field focus and unsaved input.
+  function refreshProgress(step) {
+    if (!run.data || Number(run.id) !== Number(step.run_id)) return;
+    const stepNumber = i => window.Merges ? window.Merges.number(run.data, i) : i + 1;
+    const cut = run.mergeCut;
+    const total = cut == null ? run.steps.length : Math.max(1, Math.min(cut, run.steps.length));
+    const visible = run.steps.slice(0, total);
+    const recorded = SciHubSafety.progressPosition(visible);
+    const reached = Math.max(0, recorded);
+    const pct = total > 1 ? Math.round(reached / (total - 1) * 100) : (recorded < 0 ? 0 : 100);
+    const bar = document.querySelector('#view-run .progress i');
+    const marker = document.querySelector('#view-run .prog-reached');
+    if (bar) bar.style.width = pct + '%';
+    if (marker) { marker.style.left = pct + '%'; marker.title = recorded < 0 ? '尚未记录' : '已进行到第 ' + stepNumber(reached) + ' 步'; }
+    document.querySelectorAll('#view-run .step-dot').forEach(node => {
+      const i = Number(node.dataset.goto);
+      node.classList.toggle('done', stepHasProgress(visible[i]));
+      node.classList.toggle('reached', i === recorded);
+    });
+    const status = $('run-progress-status');
+    if (status) status.innerHTML = (recorded < 0 ? '<b>尚未记录</b>' : '已进行到 <b>第 ' + stepNumber(reached) + ' 步</b>')
+      + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + visible.filter(x => x.status === 'done').length + ' 步'
+      + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '');
+  }
+
   function scheduleSave(step) {
     if (run.data && (run.data.status !== 'running' || !!run.data._mergedInto)) return;
+    refreshProgress(step);
     autosaveStatus(step, '编辑中…');
     saveQueue.schedule(step);
   }
@@ -3782,6 +3773,7 @@
       if (progressError) throw progressError;
       if (progressed && Number(run.id) === Number(step.run_id)) Object.assign(run.data, progressed);
     }
+    refreshProgress(step);
     autosaveStatus(step, '已保存 · ' + fmt(now()));
   }
 

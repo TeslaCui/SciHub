@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.1';
+const APP_VERSION = '1.1.2';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1029,27 +1029,8 @@ async function renderHome() {
   }
 
   // ── 进度判定（必须先定义在这里：日历悬停要用它给每步打 ✓，而后面的待办/卡片也共用）──
-  // 「这一步填了几项数据」：只数真正的记录项 ——
-  // ① 时间类字段（日期/时间/时刻）不算（顺手记个开始时间不等于做过这一步）；
-  // ② **旧字段的残留值不算**：方案改版后旧键会留在 values 里（如 v5 第 9 步存着
-  //    「样品编号」「热解后样品质量」，但当前字段是分取 ICP/XRD…），不把这类旧键过滤掉，
-  //    进度就会被旧数据推到根本没做的步骤。
-  const fieldLabelSet = (x) => new Set(((x && x.fields) || []).map((f) => f.label));
-  // 「这一步有没有实质进展」：填了当前字段的值，或上传过照片，都算做过。
-  // 时间字段也算（v5.1 反应步只填了「反应开始时间」也是在做）；旧字段残留值不算；
-  // 但「只有 status=done 却没有照片也没有填写」不算 —— 那是点快留下的残留标记。
-  const stepTouchedAny = (x) => {
-    if ((x && (x.images || [])).length > 0) return true;
-    const checks = (x && x.checks) || {};
-    if (Object.keys(checks).some((k) => !!checks[k])) return true;   // 勾选过也算做过
-    const labels = fieldLabelSet(x);
-    const vals = (x && x.values) || {};
-    return Object.keys(vals).some((k) => {
-      if (!labels.has(k)) return false;
-      const v = vals[k];
-      return String(v == null ? '' : v).trim() !== '';
-    });
-  };
+  // Progress is actual input, independent of the saved browsing cursor.
+  const stepTouchedAny = SciHubSafety.stepHasInput;
 
   const byDay = {};
   monthRuns.forEach((r) => {
@@ -1192,13 +1173,7 @@ async function renderHome() {
     return '';
   };
 
-  // Progress is computed from current fields and stored step position.
-  const runProgressPos = (run) => {
-    const steps = stepMap[run.id] || [];
-    let lastFilled = -1;
-    steps.forEach((step, index) => { if (stepTouchedAny(step)) lastFilled = index; });
-    return Math.max(0, Math.min(Math.max(Number(run.current_step) || 0, lastFilled), Math.max(0, steps.length - 1)));
-  };
+  const runProgressPos = (run) => SciHubSafety.progressPosition(stepMap[run.id] || []);
 
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
@@ -1299,8 +1274,6 @@ async function renderHome() {
     // 一组只出一条待办，用组里第一个实验代表整组
     const r = g.runs[0];
     const steps = stepMap[r.id] || [];
-    // 当前进行到第几步：与主页卡片共用同一套判断
-    const curPos = runProgressPos(r);
 
     // 这一步的「时长」：优先用实验步骤自己的；实验里没有就回方案里同一步骤取
     const durOf = (x) => {
@@ -1311,40 +1284,16 @@ async function renderHome() {
     };
     const hoursOf = (x) => parseDurationHours(durOf(x));
 
-    // 指向哪一步 —— 关键是区分「正停在这一步」还是「已经点完成、往后走了」：
-    //   ① 已往后走（current_step 比"最后填过数据的步"更靠后）→ 报**下一步该做的动作**
-    //      （v5：第 7 步热解做完了、人在等酸洗 → 显示「等待下一步：1 M HNO3 预酸洗」）
-    //   ② 正停在这一步（没往后走）→ 报**这一步本身**；它写了时长就给结束时间
-    //      （v5.1：正在第 3 步反应 24 h → 显示「第 3 步 · 快速加入与室温反应 · 约 24 小时」+ 结束时间）
-    const curStepPos = Number(r.current_step) || 0;
-    let lastFilled = -1;
-    steps.forEach((x, k) => { if (stepTouchedAny(x)) lastFilled = k; });
-    const progressed = lastFilled >= 0 && curStepPos > lastFilled;
-    const at = (pos) => steps.find((x) => x.position === pos) || null;
-
-    let cur = null;
-    let isNext = false;
-    const lastDoneStep = at(lastFilled) || null;      // 已完成的那一步（用于文案）
-    const nextOfDone = (lastFilled >= 0 ? steps.find((x) => x.position > lastFilled) : null) || null;  // 下一步
-    if (progressed) {
-      cur = nextOfDone || lastDoneStep || steps[steps.length - 1];
-      isNext = !!nextOfDone;
-    } else {
-      const doing = at(Math.max(curStepPos, lastFilled)) || at(curStepPos) || steps[0];
-      if (doing && hoursOf(doing) > 0) {
-        cur = doing;
-      } else if (nextOfDone) {
-        cur = nextOfDone;
-        isNext = true;
-      } else {
-        cur = doing;
-      }
-    }
-    // 只有「正停在这一步、且这一步本身是等待/持续过程」才显示时间；
-    // 「已经完成、正在等下一步」一律不显示时间；时间完全由本地规则定 ——
-    // 不再采信 AI 的 kind / hours（浏览器里残留的旧 AI 缓存会把步骤和时长带到错误的地方）。
+    // A completed step proposes the next task; browsing does not start it.
+    const lastFilled = SciHubSafety.progressPosition(steps);
+    const at = pos => steps[pos] || null;
+    const lastDoneStep = at(lastFilled);
+    const nextOfDone = at(lastFilled + 1);
+    const progressed = !!lastDoneStep && lastDoneStep.status === 'done';
+    const isNext = !lastDoneStep || (progressed && !!nextOfDone);
+    const cur = isNext ? (nextOfDone || steps[0]) : lastDoneStep;
     let hours = 0;
-    if (!progressed && hoursOf(cur) > 0) hours = hoursOf(cur);
+    if (!isNext && cur && cur.status !== 'done') hours = hoursOf(cur);
 
     // 结束时间 =「这一步开始的时刻」+ 时长。开始时刻按可靠性取：
     //   ① 这一步里填过的「时间类字段」（如「反应开始时间」）—— 你亲手记的最准
@@ -1394,10 +1343,10 @@ async function renderHome() {
       why: '',
       // 待办文案统一用本地格式：无时间要求时一律「已完成第 X 步…，等待进行第 Y 步…」；
       // AI（todo-plan）只保留作后台参考，不再覆盖这句文案，避免出现和 v5 不一致的写法。
-      aiTxt: (lastDoneStep && nextOfDone
+      aiTxt: (progressed && lastDoneStep && nextOfDone
         ? '已完成第 ' + (window.Merges ? window.Merges.number(r, lastDoneStep.position) : lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
           + '，等待进行第 ' + (window.Merges ? window.Merges.number(r, nextOfDone.position) : nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
-        : (isNext ? '等待下一步：' + ((cur && cur.title) || '') : '')),
+        : (lastFilled < 0 ? '等待开始：' : progressed ? '已完成：' : '正在进行：') + ((cur && cur.title) || '')),
       anchorText: anchor ? fmtText(String(anchor)) : '',
       due: hours > 0
         ? new Date((anchor ? new Date(anchor) : new Date(r.started_at)).getTime() + hours * 3600 * 1000)
@@ -1524,10 +1473,10 @@ async function renderHome() {
           const subRows = g.runs.map((x) => {
             const st = stepMap[x.id] || [];
             const cut = linkAt == null ? st.length - 1 : linkAt - 1;
-            let reached = 0;
+            let reached = -1;
             st.forEach((s, i) => {
               if (i > cut) return;
-              if (s.status === 'done' || (s.images || []).length || String(s.note || '').trim() || stepTouchedAny(s)) reached = i;
+              if (stepTouchedAny(s)) reached = i;
             });
             const total = linkAt == null ? Math.max(1, st.length) : linkAt;   // 合并点之前的步数
             return {
@@ -1546,7 +1495,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + ' · 第 ' + (window.Merges ? window.Merges.number(r, runProgressPos(r)) : runProgressPos(r) + 1) + ' 步进行中'
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + (runProgressPos(r) < 0 ? ' · 尚未记录' : ' · 已记录到第 ' + (window.Merges ? window.Merges.number(r, runProgressPos(r)) : runProgressPos(r) + 1) + ' 步')
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             window.Merges ? window.Merges.card(r) : '',
@@ -1566,7 +1515,7 @@ async function renderHome() {
                 '          ' + progRing(x.pct),
                 '          <div class="sub-info">',
                 '            <b>' + esc(x.run.title) + '</b>',
-                '            <span>已到 第 ' + (x.reached + 1) + ' 步 · 共 ' + x.total + ' 步'
+                '            <span>' + (x.reached < 0 ? '尚未记录' : '已记录到第 ' + (x.reached + 1) + ' 步') + ' · 共 ' + x.total + ' 步'
                   + (linkAt != null ? ' · 合并点：第 ' + (linkAt + 1) + ' 步' : '') + '</span>',
                 '          </div>',
                 x.doneAll

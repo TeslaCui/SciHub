@@ -88,3 +88,17 @@ test('local date does not shift a calendar day through UTC conversion', () => {
   const date = { getFullYear: () => 2026, getMonth: () => 9, getDate: () => 8 };
   assert.equal(safety.localDate(date), '2026-10-08');
 });
+
+test('progress ignores browsing, blank keys, automatic times and completion alone', () => {
+  const steps = Array.from({length:9},(_,position)=>({position,status:'pending',values:{},note:'',images:[]}));
+  steps[6].values={质量:0};
+  steps[7].values={质量:'  ',时间:null};steps[7].started_at='2026-10-09T03:00:00Z';
+  steps[8].status='done';steps[8].finished_at='2026-10-09T04:00:00Z';
+  assert.equal(safety.progressPosition(steps),6);
+  assert.equal(safety.stepHasRecord(steps[8]),true);
+  assert.equal(safety.progressPosition([{values:{}}]),-1);
+  for(const evidence of [{values:{质量:'0'}},{note:'实际操作'},{images:[{path:'fake.jpg'}]},{checks:{核对:true}}]) {
+    Object.assign(steps[7],{values:{},note:'',images:[],checks:{}},evidence);
+    assert.equal(safety.progressPosition(steps),7);
+  }
+});

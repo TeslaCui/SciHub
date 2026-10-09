@@ -40,3 +40,20 @@ test('shared stage displays the original protocol numbering', () => {
   assert.equal(api.number({ _mergeOffset: 3 }, 0), 4);
   assert.equal(api.number({ _mergeOffset: 3 }, 2), 6);
 });
+
+test('browsing a pending suffix with empty field keys and auto times permits review', () => {
+  const f = fixture();
+  f.rows[0].current_step = 5;
+  f.rows[1].current_step = 4;
+  f.steps[1][3].values = { 质量: '', 时间: null, 备注: ' \n\t　' };
+  f.steps[1][3].started_at = '2026-10-09T02:00:00Z';
+  f.steps[1][3].checks = { 已完成: false };
+  assert.equal(api.reviewLocal(f.rows,f.steps,2).firstShared,4);
+  assert.equal(safety.progressPosition(f.steps[1]),2);
+  for (const item of [{values:{质量:0}},{values:{质量:'0'}},{note:'实际操作'},
+    {images:[{path:'fictional/photo.jpg'}]},{checks:{核对:true}},{status:'done'},
+    {finished_at:'2026-10-09T03:00:00Z'},{checks:{unexpected:0}},{checks:'legacy-record'}]) {
+    const g=fixture(); Object.assign(g.steps[1][3],item);
+    assert.throws(()=>api.reviewLocal(g.rows,g.steps,2),/已有后续记录/);
+  }
+});

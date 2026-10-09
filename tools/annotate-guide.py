@@ -1,6 +1,6 @@
 """Create annotated PNGs from browser captures of fictional local examples.
 
-Usage: python tools/annotate-guide.py CAPTURE_DIR
+Usage: python tools/annotate-guide.py CAPTURE_DIR [FIGURE ...]
 Requires Pillow. Captures must be reviewed for private data before this step.
 This tool adds annotations; it does not automate or alter the browser.
 """
@@ -39,6 +39,14 @@ FIGURES = {
         ([148, 544, 463, 595], [510, 571], '填写实际测量值，并核对字段单位。'),
         ([148, 642, 1117, 745], [1170, 689], '填写实际操作情况及偏差备注。'),
         ([235, 975, 367, 1026], [415, 1002], '完成当前步骤后，点击“完成并下一步”。')],
+    'merge-review': [
+        ([442, 349, 807, 390], [865, 370], '选择第 7 步之后混合，共同阶段从第 8 步开始。'),
+        ([442, 403, 807, 560], [865, 477], '审核检查实际记录，浏览空白步骤不会增加进度。'),
+        ([510, 588, 625, 656], [565, 682], '选择或数据改变后，点击“审核合并条件”重新审核。')],
+    'run-progress': [
+        ([133, 321, 950, 349], [1010, 336], '实际记录到第 7 步，当前浏览第 8 步。'),
+        ([144, 542, 460, 592], [510, 565], '未填写的数据保持空白，零是有效记录。'),
+        ([371, 281, 403, 314], [456, 295], '点击步骤编号只切换浏览，不增加已记录进度。')],
     'record': [
         ([150, 386, 1115, 434], [1170, 410], '填写记录标题。'),
         ([150, 634, 1115, 839], [1170, 730], '填写科研记录内容。'),
@@ -80,5 +88,5 @@ def build(name, annotations):
     out.save(dest, optimize=True)
     print(f'{name}: {out.width} x {out.height}')
 
-for name, annotations in FIGURES.items():
-    build(name, annotations)
+for name in (sys.argv[2:] or FIGURES):
+    build(name, FIGURES[name])
