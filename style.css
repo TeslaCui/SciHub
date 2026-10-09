@@ -299,6 +299,27 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .plan-card .hc-meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .plan-card .hc-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
+/* 方案操作菜单：桌面右键、触摸长按和键盘共用。 */
+.plan-context-menu {
+  position: fixed; z-index: 1000;
+  width: 168px; max-width: calc(100vw - 16px);
+  padding: 6px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--card); box-shadow: var(--shadow);
+}
+.plan-context-menu button {
+  display: block; width: 100%; min-height: 44px;
+  padding: 9px 12px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ink); text-align: left;
+}
+.plan-context-menu button:hover, .plan-context-menu button:focus-visible {
+  background: var(--bg); outline: 2px solid var(--brand); outline-offset: -2px;
+}
+.plan-context-menu button.danger { color: var(--danger); }
+#modal-actions button.danger { color: var(--danger); border: 1px solid var(--danger); }
+[data-open][aria-haspopup="menu"], [data-open-plan][aria-haspopup="menu"] {
+  -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+}
+
 /* 方案卡片上的「有新版本 + 更新」：与页脚版本号同一套视觉语言 */
 .plan-stale { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .plan-stale .ver-stale { margin-left: 0; }

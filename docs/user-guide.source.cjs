@@ -183,10 +183,11 @@ p('plan-review', 'plans', 'Check and save a plan draft', '核对并保存方案�
   ['Select "保存方案" or "保存修改".', '选择“保存方案”或“保存修改”。'],
   ['If empty rows remain, read the confirmation before you continue.', '如果存在空白行，先阅读确认提示再继续。'],
   ['Wait for the successful save message.', '等待保存成功提示。']
-], ['The saved plan appears in the plan list.', '已保存的方案出现在列表中。'], [
+], ['SciHub opens the saved plan preview.', 'SciHub 打开已保存方案的预览页。'], [
   ['Do not use the same field name twice in one step.', '同一步中不要重复使用同一字段名。'],
   ['Empty unnamed field rows do not become saved fields.', '没有名称的空白字段行不会保存为字段。'],
-  ['Select "取消" to discard the draft changes.', '选择“取消”放弃草稿修改。']
+  ['Select "取消" to discard the draft changes.', '选择“取消”放弃草稿修改。'],
+  ['Cancel an existing plan edit to return to its preview.', '取消已有方案编辑后，返回该方案的预览页。']
 ], [
   ['Plan edits can update compatible steps in active experiments.', '修改方案可能同步更新进行中实验中可安全对应的步骤。'],
   ['If the step structure changes, check the message about the retained experiment snapshot.', '步骤结构变化时，检查关于保留实验快照的提示。']
@@ -197,7 +198,7 @@ p('plan-edit', 'plans', 'Open and edit a plan', '查看并编辑方案', ['A sav
   ['Select "编辑方案" (Edit plan).', '选择“编辑方案”。'],
   ['Change the draft.', '修改草稿。'],
   ['Use the draft check procedure before you save.', '保存前执行草稿核对流程。']
-], ['SciHub saves the new plan definition after your confirmation.', '确认保存后，SciHub 保存新的方案定义。']);
+], ['SciHub saves the new plan definition and returns to its preview.', 'SciHub 保存新的方案定义，并返回该方案的预览页。']);
 p('plan-blocks', 'plans', 'Add fields and step content', '添加步骤、字段和板块', ['Open a plan draft.', '打开方案草稿。'], [
   ['Select "＋ 添加步骤" if you need another step.', '需要新增步骤时，选择“＋ 添加步骤”。'],
   ['In a step, open "＋ 添加板块".', '在某一步中展开“＋ 添加板块”。'],
@@ -217,7 +218,7 @@ p('plan-order', 'plans', 'Move or remove draft content', '调整顺序或移除�
   ['Compare the remaining draft with the source document.', '将剩余草稿与原文件核对。'],
   ['Save only after the draft is correct.', '仅在草稿正确后保存。']
 ], ['The saved plan uses the order and content that you checked.', '保存后的方案使用已核对的顺序和内容。'], [
-  ['There is no separate delete button for a saved plan in this version.', '此版本没有单独删除已保存方案的入口。']
+  ['Use the plan card menu to delete a saved plan.', '删除已保存方案时，使用方案卡片菜单。']
 ], [
   ['Draft remove buttons do not request confirmation for each row.', '草稿移除按钮不会对每一行分别弹出确认。'],
   ['Keep a copy before you remove content that an active experiment uses.', '移除进行中实验使用的内容前，先保留副本。']
@@ -238,13 +239,33 @@ p('plan-version', 'plans', 'Upload a new plan version', '上传方案新版本',
   ['A blocked structural change keeps the old experiment snapshot.', '无法安全同步的结构变化会保留原实验快照。'],
   ['If a step match is uncertain, check the retained old steps and the new steps.', '步骤对应关系不确定时，核对保留的旧步骤及新增步骤。']
 ]);
-p('plan-rename', 'plans', 'Rename a plan', '重命名方案', ['Open the saved plan.', '打开已保存方案。'], [
+p('plan-rename', 'plans', 'Rename a plan', '重命名方案', ['Open the home page or plan list.', '打开主页或方案列表。'], [
+  ['Right-click the plan card, or hold the card on a phone.', '在方案卡片上右键，或在手机上长按卡片。'],
   ['Select "重命名" (Rename).', '选择“重命名”。'],
   ['Enter the new plan name.', '填写新的方案名称。'],
-  ['Confirm the name.', '确认名称。'],
+  ['Select "保存名称" (Save name).', '选择“保存名称”。'],
   ['Check the plan list.', '检查方案列表。']
 ], ['SciHub changes the plan name.', 'SciHub 更改方案名称。'], [
-  ['Existing experiment titles have their own rename control.', '既有实验的名称使用独立的重命名入口。']
+  ['Existing experiment titles have their own rename control.', '既有实验的名称使用独立的重命名入口。'],
+  ['For keyboard access, focus the card and press Shift+F10.', '使用键盘时，将焦点移到卡片，再按 Shift+F10。'],
+  ['Press Escape to close the menu.', '按 Escape 关闭菜单。']
+]);
+p('plan-delete', 'plans', 'Delete a saved plan', '删除已保存方案', ['Open the home page or plan list.', '打开主页或方案列表。'], [
+  ['Right-click the plan card, or hold the card on a phone.', '在方案卡片上右键，或在手机上长按卡片。'],
+  ['Select "删除" (Delete).', '选择“删除”。'],
+  ['Read the plan name and deletion effects in the confirmation.', '阅读确认框中的方案名称及删除影响。'],
+  ['Cancel if you selected the wrong plan.', '选错方案时取消操作。'],
+  ['Select "确认删除" only if you want to delete this plan.', '仅在确定删除此方案时，选择“确认删除”。'],
+  ['Wait for the deletion result and check the plan cards.', '等待删除结果，并检查方案卡片。']
+], ['SciHub removes the plan definition and retains existing experiment snapshots.', 'SciHub 移除方案定义，并保留既有实验快照。'], [
+  ['Existing experiments retain their steps, measured values, notes, and attachment references.', '既有实验保留步骤、实测值、备注及附件引用。'],
+  ['A deleted plan is no longer available for new experiments.', '删除的方案不能再用于开始新实验。'],
+  ['If deletion fails, keep the page and read the error before retrying.', '删除失败时保留页面，阅读错误后再重试。'],
+  ['The database blocks deletion when the plan still links to a locked merged branch.', '方案仍关联已合并的只读支路时，数据库会拒绝删除。']
+], [
+  ['Deletion cannot be undone; there is no plan recycle bin.', '删除无法撤销；目前没有方案回收站。'],
+  ['Deletion also removes the saved plan steps.', '删除会同时移除已保存的方案步骤。'],
+  ['Keep the original document before you delete a plan.', '删除方案前保留原文件。']
 ]);
 p('plan-reparse', 'plans', 'Update an old plan parser result', '更新旧方案的解析结果', ['The plan must show "有新版本" or "重新解析".', '方案须显示“有新版本”或“重新解析”。'], [
   ['Keep a copy of the current plan and experiment data.', '保留当前方案和实验数据的副本。'],
@@ -578,7 +599,7 @@ p('limits', 'support', 'Check available operations', '核对当前功能边界',
   ['Laboratory work must follow your approved local procedures.', '实验室操作必须遵循本单位已批准的规程。']
 ]);
 module.exports = {
-  version: '1.0.7', updated: '2026-10-08',
+  version: '1.0.8', updated: '2026-10-08',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

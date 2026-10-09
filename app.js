@@ -669,7 +669,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.0.7';
+const APP_VERSION = '1.0.8';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -729,6 +729,7 @@ function fmtText(ts) {
 }
 
 function showView(name) {
+  if (window.Plans) window.Plans.closeMenu();
   ROUTES.forEach((r) => {
     const node = $('view-' + r);
     if (node) node.hidden = r !== name;
@@ -1515,8 +1516,10 @@ async function renderHome() {
     btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
   });
 
-  // 方案卡片：整卡点开详情（操作按钮统一放在详情页，这里不再重复）
+  // 方案卡片：点开预览，右键或手机长按打开名称与删除菜单。
   host.querySelectorAll('[data-open-plan]').forEach((el) => {
+    const plan = (plans || []).find((item) => String(item.id) === el.dataset.openPlan);
+    if (plan && window.Plans) window.Plans.bindContextMenu(el, plan);
     const open = () => route('plan', Number(el.dataset.openPlan));
     el.addEventListener('click', open);
     el.addEventListener('keydown', (e) => {

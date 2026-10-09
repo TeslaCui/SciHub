@@ -414,6 +414,107 @@
 
   /* ══ 方案列表 ═══════════════════════════════════════════ */
 
+  let planContextMenu = null;
+  let planLongPressTimer = null;
+  let planMenuCard = null;
+
+  function closePlanContextMenu(restoreFocus) {
+    clearTimeout(planLongPressTimer);
+    if (planContextMenu) planContextMenu.remove();
+    planContextMenu = null;
+    if (restoreFocus && planMenuCard && planMenuCard.isConnected) planMenuCard.focus();
+    planMenuCard = null;
+  }
+
+  function openPlanContextMenu(plan, x, y, card) {
+    closePlanContextMenu();
+    planMenuCard = card;
+    const menu = document.createElement('div');
+    menu.className = 'plan-context-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', '方案操作');
+    menu.innerHTML = '<button type="button" role="menuitem" data-action="rename">重命名</button>'
+      + '<button type="button" role="menuitem" data-action="delete" class="danger">删除</button>';
+    document.body.appendChild(menu);
+    const width = menu.offsetWidth || 150;
+    const height = menu.offsetHeight || 88;
+    menu.style.left = Math.max(8, Math.min(Number(x) || 8, window.innerWidth - width - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(Number(y) || 8, window.innerHeight - height - 8)) + 'px';
+    planContextMenu = menu;
+    menu.querySelector('[data-action="rename"]').addEventListener('click', () => {
+      closePlanContextMenu();
+      renamePlan(plan.id, plan.title);
+    });
+    menu.querySelector('[data-action="delete"]').addEventListener('click', () => {
+      closePlanContextMenu();
+      removePlan(plan.id, plan.title);
+    });
+    menu.addEventListener('keydown', (event) => {
+      const buttons = Array.from(menu.querySelectorAll('button'));
+      const index = buttons.indexOf(document.activeElement);
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next].focus();
+      } else if (event.key === 'Tab') closePlanContextMenu(true);
+    });
+    menu.querySelector('button').focus({ preventScroll: true });
+  }
+
+  function bindPlanContextMenu(card, plan) {
+    let suppressNextClick = false;
+    let touchStart = null;
+    const cancelLongPress = () => { clearTimeout(planLongPressTimer); touchStart = null; };
+    card.setAttribute('aria-haspopup', 'menu');
+    card.addEventListener('click', (event) => {
+      if (suppressNextClick && event.detail !== 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressNextClick = false;
+      }
+    }, true);
+    card.addEventListener('contextmenu', (event) => {
+      if (event.target.closest('button')) return;
+      event.preventDefault();
+      if (touchStart) suppressNextClick = true;
+      openPlanContextMenu(plan, event.clientX, event.clientY, card);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (event.target !== card) return;
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        event.preventDefault();
+        const rect = card.getBoundingClientRect();
+        openPlanContextMenu(plan, rect.left + 16, rect.top + 16, card);
+      }
+    });
+    card.addEventListener('pointerdown', (event) => {
+      suppressNextClick = false;
+      cancelLongPress();
+      if (event.pointerType !== 'touch' || !event.isPrimary || event.target.closest('button')) return;
+      touchStart = { x: event.clientX, y: event.clientY, id: event.pointerId };
+      planLongPressTimer = setTimeout(() => {
+        if (!card.isConnected) return;
+        suppressNextClick = true;
+        openPlanContextMenu(plan, event.clientX, event.clientY, card);
+      }, 550);
+    });
+    card.addEventListener('pointermove', (event) => {
+      if (touchStart && (event.pointerId !== touchStart.id
+        || Math.hypot(event.clientX - touchStart.x, event.clientY - touchStart.y) > 10)) cancelLongPress();
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((type) => card.addEventListener(type, cancelLongPress));
+  }
+
+  document.addEventListener('pointerdown', (event) => {
+    if (planContextMenu && !event.target.closest('.plan-context-menu')) closePlanContextMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && planContextMenu) { event.preventDefault(); closePlanContextMenu(true); }
+  });
+  window.addEventListener('resize', () => closePlanContextMenu());
+  document.addEventListener('scroll', () => closePlanContextMenu(), true);
+
   /* 字段名归一化：AI 解析与规则解析对同一项常给出不同叫法
      （「2-MIM 实际称量质量」 vs 「2-MIM 记录实际质量」），
      去掉只起修饰作用的字词后再比较，避免把同一个字段误判成「新增」。 */
@@ -449,6 +550,7 @@
   async function listPlans() {
     const host = $('view-plans');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
+    closePlanContextMenu();
 
     const { data, error } = await client.from(PLAN).select('id,title,source,created_at,parse_version').order('created_at', { ascending: false });
     if (error) {
@@ -485,6 +587,7 @@
       '  <p class="hint small">按化学实验步骤书整理中文版。导入后请对照原文核对工序、试剂用量、条件和记录项。</p>',
       '</div>',
       cards || '<div class="empty">还没有实验方案，先导入一份 .docx 吧。</div>',
+      cards ? '<p class="hint small">在方案卡片上右键或手机长按，可重命名或删除；键盘可使用 Shift+F10。</p>' : '',
     ].join('\n');
 
     $('docx-input').addEventListener('change', (e) => {
@@ -506,9 +609,10 @@
       }
     }));
 
-    // 卡片其余区域（以及键盘 Enter / 空格）进详情。
-    // 开始实验 / 编辑 / 重命名 / 删除 仍只放在方案详情页。
+    // 卡片其余区域（以及键盘 Enter / 空格）进详情。右键或手机长按打开方案操作菜单。
     host.querySelectorAll('[data-open]').forEach((card) => {
+      const plan = (data || []).find((item) => String(item.id) === String(card.dataset.open));
+      if (plan) bindPlanContextMenu(card, plan);
       const open = () => route('plan', Number(card.dataset.open));
       card.addEventListener('click', (e) => {
         if (e.target.closest('button')) return;   // 点按钮时不跳转
@@ -1180,7 +1284,11 @@
       renderDraft();
     });
 
-    $('draft-cancel').addEventListener('click', () => { draft = null; route('plans'); });
+    $('draft-cancel').addEventListener('click', () => {
+      const planId = draft && draft.id;
+      draft = null;
+      route(planId ? 'plan' : 'plans', planId || undefined);
+    });
 
     $('draft-save').addEventListener('click', saveDraft);
   }
@@ -1272,7 +1380,7 @@
         setStatus(doneMsg + '本次实验保留原快照：' + errorText(err), 'warn');
       }
       savingDraft = false;
-      route('plans');
+      route('plan', planId);
     } catch (err) {
       console.error('[SciHub] 保存方案失败：', err);
       setStatus('保存未确认：' + errorText(err) + '。草稿仍保留；请核对后重试。', 'error');
@@ -1410,22 +1518,72 @@
     return { updated: updated, added: added, removed: doomed.length, failed: failed };
   }
 
-  /* 重命名（方案列表与详情页共用） */
-  async function renamePlan(planId, currentTitle) {
-    const name = window.prompt('新的方案名称', currentTitle || '');
-    if (name == null) return;
-    const title = name.trim();
-    if (!title || title === currentTitle) return;
+  function refreshPlanCards() {
+    if (!$('view-home').hidden) renderHome();
+    else if (!$('view-plans').hidden) listPlans();
+  }
 
-    const { error } = await client.from(PLAN).update({ title: title }).eq('id', planId);
-    if (error) {
-      console.error('[SciHub] 重命名失败：', error);
-      setStatus('重命名失败，请稍后重试。', 'error');
-      return;
-    }
-    setStatus('已重命名为「' + title + '」。', 'ok');
-    if ($('view-plan').hidden) listPlans();
-    else route('plan', planId);
+  /* 方案卡片菜单：重命名不改变已开始实验的名称或快照。 */
+  function renamePlan(planId, currentTitle) {
+    if (!state.user) return;
+    const ownerId = state.user.id;
+    let saving = false;
+    openModal('重命名方案', '<label>新的方案名称<input id="plan-name-input" value="' + esc(currentTitle || '') + '"></label>'
+      + '<p class="hint small">已开始实验的名称与快照保留。</p><p id="plan-name-error" role="status"></p>', [
+      { label: '取消', onClick: closeModal },
+      { label: '保存名称', primary: true, onClick: async () => {
+        if (saving) return;
+        const title = $('plan-name-input').value.trim();
+        const errorNode = $('plan-name-error');
+        if (!title) { errorNode.textContent = '请输入方案名称。'; return; }
+        if (title === currentTitle) { closeModal(); return; }
+        if (!state.user || state.user.id !== ownerId) { closeModal(); return; }
+        saving = true;
+        try {
+          const { data, error } = await client.from(PLAN).update({ title: title }).eq('id', planId).eq('user_id', ownerId).select('id').maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error('方案已不存在或无法修改，请刷新后核对');
+          closeModal();
+          setStatus('已重命名为「' + title + '」。', 'ok');
+          refreshPlanCards();
+        } catch (error) {
+          errorNode.textContent = '重命名失败：' + errorText(error);
+          setStatus(errorNode.textContent, 'error');
+        } finally { saving = false; }
+      } },
+    ]);
+    $('plan-name-input').focus();
+  }
+
+  function removePlan(planId, title) {
+    if (!state.user) return;
+    const ownerId = state.user.id;
+    const name = String(title || '未命名方案');
+    let deleting = false;
+    openModal('删除方案', '<p>确认删除方案“' + esc(name) + '”？</p>'
+      + '<p>方案定义及其步骤会删除，且无法撤销。已开始实验的步骤、实测值、备注和附件引用保留。</p>'
+      + '<p class="hint small">若方案仍关联已合并的只读支路，数据库会拒绝删除并保留原数据。</p>'
+      + '<p id="plan-delete-error" role="status"></p>', [
+      { label: '取消', onClick: closeModal },
+      { label: '确认删除', onClick: async () => {
+        if (deleting || !state.user || state.user.id !== ownerId) return;
+        deleting = true;
+        const errorNode = $('plan-delete-error');
+        try {
+          const { data, error } = await client.from(PLAN).delete().eq('id', planId).eq('user_id', ownerId).select('id').maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error('方案已不存在或无法删除，请刷新后核对');
+          closeModal();
+          setStatus('方案“' + name + '”已删除；已开始实验及其快照仍保留。', 'ok');
+          refreshPlanCards();
+        } catch (error) {
+          errorNode.textContent = '删除方案失败：' + errorText(error);
+          setStatus('删除方案失败：' + errorText(error), 'error');
+        } finally { deleting = false; }
+      } },
+    ]);
+    $('modal-actions').querySelectorAll('button')[1].classList.add('danger');
+    $('modal-actions').querySelector('button').focus();
   }
 
   /* 进入编辑模式：把已有方案载入可编辑草稿 */
@@ -1574,7 +1732,6 @@
       '  <button type="button" class="ghost" id="plan-upload-ver">上传新版本</button>',
       '  <input type="file" id="ver-input" accept=".docx" hidden>',
       canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
-      '  <button type="button" class="ghost" id="plan-rename">重命名</button>',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',
 
@@ -1669,7 +1826,6 @@
         }
       });
     }
-    $('plan-rename').addEventListener('click', () => renamePlan(planId, plan.title));
   }
 
   /* ══ 开始一次实验（把方案快照进 run_steps）══════════════ */
@@ -1743,7 +1899,7 @@
     } finally { startingRun = false; }
   }
 
-  window.Plans = { list: listPlans, editor: renderEditor, start: startRun };
+  window.Plans = { list: listPlans, editor: renderEditor, start: startRun, bindContextMenu: bindPlanContextMenu, closeMenu: closePlanContextMenu };
 
   /* ══ 执行界面 ═══════════════════════════════════════════ */
 

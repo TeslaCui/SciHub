@@ -1,11 +1,11 @@
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "reviewed": "2026-10-08",
-  "guideSourceHash": "8528659fa99a15a92631015363b3539028f91cad8a137b5877bb01da7600a04b",
+  "guideSourceHash": "06b564d59e8babc83d9832664e19da43f4e39b703d7b3b162b318bf1b9736ae3",
   "sourceHashes": {
-    "index.html": "919dbf2f6b08d56bf5f04b4e2d2d17508bd17d380cb78d976c8ac1f258dda34d",
-    "app.js": "e869249121071f1ce9034fd59cee63edfc56a0bf98da589d1a96fece3d009ce6",
-    "experiment.js": "22630221c0ea3c51616eb12c63bb892c4f9c293a4427f480cbacd7845951270f",
+    "index.html": "9caecf75e43e0bf424a51787ea1d3e1197e07a3c350f871cbb37cdc8174dcb5b",
+    "app.js": "37e4a6766a20c5deb6ac8ab0c197a5a5719f5a7ae253b46038700d9d5213a318",
+    "experiment.js": "b1bb62dc1190735970372d6b0894f730a61c0fa493baf69b297b14d760eb441c",
     "platinum.js": "b5673fd0a97074ce7b0e7bc834d4d8c58f91808d61299a66eb7d68442f99a11a",
     "merge.js": "f537fecafb71fa5d57e083b791bc61007f4ef3fbf1b6ac370723f9ff7e241336",
     "data-safety.js": "d6f6602c4226bb8161b898c235900dcbcbcdf2d526d067aad91ac875dd856648",

@@ -70,7 +70,19 @@
           rows.push(row); return row;
         });
       } else if (this.action === 'update') selected.forEach((row) => Object.assign(row, this.payload, { updated_at: timestamp() }));
-      else if (this.action === 'delete') store.tables[this.table] = rows.filter((row) => !matches(row));
+      else if (this.action === 'delete') {
+        if (this.table === 'experiment_plans' && selected.some((plan) => store.tables.experiment_runs.some((run) =>
+          run.plan_id === plan.id && store.tables.experiment_merge_members.some((member) => member.parent_run_id === run.id)))) {
+          return { data: null, error: { message: '已合并的平行支路不可修改或删除' } };
+        }
+        store.tables[this.table] = rows.filter((row) => !matches(row));
+        // Match existing production foreign keys for plan deletion previews.
+        if (this.table === 'experiment_plans') {
+          const planIds = new Set(selected.map((row) => row.id));
+          store.tables.plan_steps = store.tables.plan_steps.filter((row) => !planIds.has(row.plan_id));
+          store.tables.experiment_runs.forEach((row) => { if (planIds.has(row.plan_id)) row.plan_id = null; });
+        }
+      }
       for (const [column, ascending] of this.sort.slice().reverse()) selected.sort((a, b) => (a[column] > b[column] ? 1 : a[column] < b[column] ? -1 : 0) * (ascending ? 1 : -1));
       selected = selected.slice(0, this.maximum);
       if (this.slice) selected = selected.slice(...this.slice);

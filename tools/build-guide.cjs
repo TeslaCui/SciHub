@@ -41,7 +41,7 @@ function validate(guide, release) {
     assert.ok(item.steps.length, '流程不能缺少步骤：' + item.id);
     item.steps.forEach(step => sentence(step, 20));
     [...item.notes, ...item.caution].forEach(note => sentence(note, 25));
-    if (['todo-remove', 'record-delete', 'plan-order', 'run-extra', 'run-delete', 'media-delete', 'merge-review'].includes(item.id)) {
+    if (['todo-remove', 'record-delete', 'plan-order', 'plan-delete', 'run-extra', 'run-delete', 'media-delete', 'merge-review'].includes(item.id)) {
       assert.ok(item.caution.length, '涉及删除或冻结的流程必须保留操作前提醒：' + item.id);
     }
   }
