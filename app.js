@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -951,6 +951,7 @@ async function renderHome() {
   let calendar = '';
   let todoCard = '';
   let homePhase = '初始化';
+  let homeRendered = false;
   try {
 
   // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
@@ -1504,6 +1505,7 @@ async function renderHome() {
   try { if (window.Merges) completedMerges = await window.Merges.completed(); }
   catch (error) { console.warn('[SciHub] 读取已完成合并实验失败：', error); }
   if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
+  homePhase = '主页渲染';
   host.innerHTML = [
     '<div class="home-top">' + calendar + todoCard + '</div>',
     '<div class="section-title">进行中的实验</div>',
@@ -1632,7 +1634,9 @@ async function renderHome() {
         ].join('\n')).join('\n')
       : '<div class="empty">还没有记录。</div>',
   ].join('\n');
+  homeRendered = true;
 
+  homePhase = '页面交互绑定';
   if (window.Merges) window.Merges.bind(host);
   host.querySelectorAll('[data-run]').forEach((btn) => {
     btn.addEventListener('click', () => route('run', Number(btn.dataset.run)));
@@ -1783,6 +1787,12 @@ async function renderHome() {
   } catch (error) {
     console.error('[SciHub] 主页加载失败：', error);
     if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
+    // The complete page is already visible. A late binding failure must not
+    // replace it with a misleading global retry panel.
+    if (homeRendered) {
+      console.warn('[SciHub] 主页已显示，但部分交互绑定失败：', error);
+      return;
+    }
     // Keep the records that were already read visible. A late failure in a
     // calendar, reminder, or optional card must never replace the experiment
     // list with an empty error page.
