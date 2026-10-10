@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.9';
+const APP_VERSION = '1.2.0';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -948,6 +948,9 @@ async function renderHome() {
   let plans = [];
   let recent = [];
   let monthRuns = [];
+  let calendar = '';
+  let todoCard = '';
+  let homePhase = '初始化';
   try {
 
   // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
@@ -1133,7 +1136,7 @@ async function renderHome() {
       + '><span>' + d + '</span></div>');
   }
 
-  const calendar = [
+  calendar = [
     '<div class="card cal-card">',
     '  <div class="cal-top">',
     '    <div class="cal-title">',
@@ -1227,7 +1230,15 @@ async function renderHome() {
   // ── 把有关联的实验合并成一组 ──────────────────────────
   // 某实验的某个步骤 link_run_id 指向另一个实验时（如 v5.1 第 7 步酸洗 → v5），
   // 这两个实验算一组：主页只显示一条「关联实验」，同一件事不重复出现。
-  const groups = SciHubSafety.groupsOf(runs || [], stepMap);
+  let groups = [];
+  try {
+    homePhase = '关联实验整理';
+    groups = SciHubSafety.groupsOf(runs || [], stepMap);
+  } catch (error) {
+    // A malformed legacy link must not hide the calendar or independent runs.
+    console.warn('[SciHub] 关联实验整理失败，按独立实验显示：', error);
+    groups = (runs || []).map((run) => ({ runs: [run], links: [] }));
+  }
 
   // 待办（自动）：所有「进行中」的实验都会进来，每个实验一条。
   // 取哪一步：当前步骤优先；若当前步骤没写时长，就往后找第一个
@@ -1291,6 +1302,7 @@ async function renderHome() {
   // AI 待办（todo-plan）已不再调用：v0.88 起待办文案完全由本地规则生成，
   // 每次刷新少一次 Edge Function 往返（这是主页变慢的另一大元凶），功能不丢。
 
+  homePhase = '待办生成';
   const todos = [];
   groups.forEach((g) => {
     // 一组只出一条待办，用组里第一个实验代表整组
@@ -1386,13 +1398,17 @@ async function renderHome() {
   // 手动待办（存在 research_todos 里）：与实验无关的事，比如「明天 10:00 取样品」
   let myTodos = [];
   if (client) {
+    try {
       const { data: manual, error: manualErr } = await withTimeout(client
-      .from('research_todos')
-      .select('*')
-      .eq('done', false)
-      .order('created_at', { ascending: false }), '待办读取');
-    if (manualErr) console.warn('[SciHub] 待办读取失败（表可能还没建）：', manualErr);
-    else myTodos = manual || [];
+        .from('research_todos')
+        .select('*')
+        .eq('done', false)
+        .order('created_at', { ascending: false }), '待办读取');
+      if (manualErr) console.warn('[SciHub] 待办读取失败（表可能还没建）：', manualErr);
+      else myTodos = manual || [];
+    } catch (error) {
+      console.warn('[SciHub] 待办读取失败，保留自动待办：', error);
+    }
   }
   myTodos.forEach((t) => {
     todos.push({
@@ -1412,7 +1428,7 @@ async function renderHome() {
   });
 
   const hhmm = (d) => p2(d.getHours()) + ':' + p2(d.getMinutes());
-  const todoCard = [
+  todoCard = [
     '<div class="card todo-card">',
     '  <div class="todo-title">待办 · 计时提醒</div>',
     todos.length
@@ -1483,6 +1499,7 @@ async function renderHome() {
     + '<circle class="ring-fg" cx="18" cy="18" r="15.9155" stroke-dasharray="' + Math.max(0, Math.min(100, pct)) + ', 100"/>'
     + '</svg>';
 
+  homePhase = '完成合并记录读取';
   let completedMerges = [];
   try { if (window.Merges) completedMerges = await window.Merges.completed(); }
   catch (error) { console.warn('[SciHub] 读取已完成合并实验失败：', error); }
@@ -1770,9 +1787,12 @@ async function renderHome() {
     // calendar, reminder, or optional card must never replace the experiment
     // list with an empty error page.
     const safeRuns = Array.isArray(runs) && runs.length ? runs : (Array.isArray(monthRuns) ? monthRuns : []);
-    host.innerHTML = '<div class="section-title">进行中的实验</div>'
+    const calendarFallback = calendar || '<div class="card cal-card"><div class="cal-title">实验日历</div><div class="empty">日历暂时无法加载，请稍后重试。</div></div>';
+    const todoFallback = todoCard || '<div class="card todo-card"><div class="todo-title">待办 · 计时提醒</div><div class="todo-empty">待办暂时无法加载，请稍后重试。</div></div>';
+    host.innerHTML = '<div class="home-top">' + calendarFallback + todoFallback + '</div>'
+      + '<div class="section-title">进行中的实验</div>'
       + (safeRuns.length ? '<div class="home-grid">' + safeRuns.map((item) => '<article class="home-card clickable" data-home-run="' + item.id + '"><div class="hc-main"><b>' + esc(item.title || '未命名实验') + '</b><div class="hc-meta">数据读取中断，点击继续查看</div></div></article>').join('') + '</div>' : '')
-      + '<div class="empty home-load-error"><b>主页部分内容暂时无法加载</b><br><span>请检查网络连接后重试。已有数据不会被修改。</span><br><button type="button" class="primary" data-home-retry>重试</button></div>';
+      + '<div class="empty home-load-error"><b>主页部分内容暂时无法加载</b><br><span>当前阶段：' + esc(homePhase) + '。请检查网络连接后重试。已有数据不会被修改。</span><br><button type="button" class="primary" data-home-retry>重试</button></div>';
     setStatus('主页部分内容加载失败，请检查网络后重试。', 'error');
     const retry = host.querySelector('[data-home-retry]');
     if (retry) retry.addEventListener('click', () => renderHome());

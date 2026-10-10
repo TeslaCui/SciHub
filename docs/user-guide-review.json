@@ -1,10 +1,10 @@
 {
-  "version": "1.1.9",
+  "version": "1.2.0",
   "reviewed": "2026-10-10",
-  "guideSourceHash": "ab843cb3f1b30c6b1d2fdaa5ea75289c49dd86af9d37150c2f43446c1d876034",
+  "guideSourceHash": "a85b292a0363f5366fb842848166ee63dd9fcd4196a2683bf2f62e38c57ba792",
   "sourceHashes": {
-    "index.html": "5622ae68bbab8449f046316b3c0d3c81ecc3acb917f56893c08d5fa166143e01",
-    "app.js": "b159eaeeff5c5c59f0895044f6db79ae6fc8e379923562bc1db288817295b6c0",
+    "index.html": "8c4d0df26542b59c3c20ac3fc8f7127a72d9e5846e98799a2f789a040f0ac90a",
+    "app.js": "f5515ae649d6b62189fbaf5d2af04f89081fa745633e2613f11ac5e5f916dffd",
     "experiment.js": "c7fe169fd59b9e883829d2e78d79c6381eca20eca7c63887d1567de6042cab96",
     "platinum.js": "2fa7c7c73e7b2086ce0bd33ad6d178e4b6d60f7966725b3b6fcc679c9642100b",
     "solution.js": "9746612a15da9548f7237590e4f4be05f9852811bc76dcb215ab541d96b2672a",
