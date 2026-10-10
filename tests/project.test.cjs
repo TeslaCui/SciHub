@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const migration = fs.readFileSync(path.join(root, 'supabase/migrations/20261010180000_projects.sql'), 'utf8');
+const mergedRunMigration = fs.readFileSync(path.join(root, 'supabase/migrations/20261010190000_project_migration_merged_runs.sql'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
 const experiment = fs.readFileSync(path.join(root, 'experiment.js'), 'utf8');
 
@@ -37,6 +38,9 @@ test('legacy project migration is explicit and preserves existing assignments', 
   assert.match(app, /p_migrate_unassigned: migrateUnassigned/);
   assert.match(migration, /project_id is null/);
   assert.match(migration, /on delete set null/);
+  assert.match(mergedRunMigration, /new\.project_id is distinct from old\.project_id/);
+  assert.match(mergedRunMigration, /已合并的平行支路不可修改或删除/);
+  assert.match(mergedRunMigration, /new\.title/);
 });
 
 test('plan import accepts text-based PDF files', () => {

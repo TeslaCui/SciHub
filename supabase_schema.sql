@@ -720,6 +720,15 @@ returns trigger language plpgsql security definer set search_path=public as $$
 declare v_common boolean;
 begin
   if exists(select 1 from public.experiment_merge_members where parent_run_id=old.id) then
+    if TG_OP='UPDATE'
+       and new.project_id is distinct from old.project_id
+       and row(new.user_id,new.plan_id,new.title,new.status,new.current_step,
+               new.started_at,new.finished_at,new.created_at)
+           is not distinct from
+           row(old.user_id,old.plan_id,old.title,old.status,old.current_step,
+               old.started_at,old.finished_at,old.created_at) then
+      return new;
+    end if;
     raise exception '已合并的平行支路不可修改或删除';
   end if;
   select exists(select 1 from public.experiment_merge_groups where result_run_id=old.id) into v_common;
