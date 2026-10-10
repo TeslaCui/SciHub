@@ -121,6 +121,57 @@
       (step.fields || []).map((field) => [normalize(field.label), normalize(field.unit), field.type || 'text']),
       step.checklist || []]);
   }
+
+  // Merge review allows harmless wording differences in parallel branches,
+  // while preserving a strict comparison for the shared suffix. Quantities
+  // in a completed branch can differ by scale; temperatures, times, pH,
+  // concentrations, atmosphere and other control conditions cannot.
+  function mergeText(value, stripBranchNumbers = false) {
+    let text = String(value == null ? '' : value).normalize('NFKC').toLowerCase();
+    const synonyms = [
+      [/称取/g, '称量'], [/加入/g, '添加'], [/倒入/g, '添加'],
+      [/添加到/g, '添加'], [/添加入/g, '添加'],
+      [/离心分离/g, '离心'], [/烘干/g, '干燥'], [/清洗/g, '洗涤'],
+      [/摄氏度/g, '℃'], [/°c/g, '℃'], [/度/g, '℃'], [/小时/g, 'h'], [/分钟/g, 'min'],
+    ];
+    synonyms.forEach(([from, to]) => { text = text.replace(from, to); });
+    if (stripBranchNumbers) text = text.replace(/[-+]?\d+(?:\.\d+)?/g, '#');
+    return text.replace(/[并将]/g, '').replace(/[\s，。；：、（）()【】\[\]{}「」『』<>《》,.;:!?！？/\\]+/g, '');
+  }
+
+  function mergeCriticalText(value) {
+    const text = String(value == null ? '' : value).normalize('NFKC').toLowerCase().replace(/摄氏度|°c/g, '℃');
+    const matches = text.match(/[-+]?\d+(?:\.\d+)?\s*(?:℃|°c|c\b|k\b|小时|h\b|天|分钟|min\b|秒|s\b|rpm|转(?:\/分钟)?|ph\b|%|mol(?:\/l)?|m\b|bar|kpa|mpa|pa\b)/gi) || [];
+    return matches.map((item) => item.replace(/\s+/g, '')).join('|');
+  }
+
+  function mergeStepSignature(step = {}, { branch = false } = {}) {
+    const text = [step.title, step.instruction, step.notice].join('|');
+    const fields = (step.fields || []).map((field) => [
+      mergeText(field.label), String(field.unit == null ? '' : field.unit).normalize('NFKC').replace(/\s+/g, ''), field.type || 'text',
+    ]);
+    return {
+      wording: mergeText(text, branch),
+      exactText: mergeText(text),
+      critical: mergeCriticalText(text),
+      pyro_seq: mergeText(step.pyro_seq),
+      duration_hint: mergeText(step.duration_hint),
+      fields,
+      checklist: (step.checklist || []).slice().sort(),
+    };
+  }
+
+  function mergeStepDifference(left, right, { branch = false } = {}) {
+    const a = mergeStepSignature(left, { branch }), b = mergeStepSignature(right, { branch });
+    const structural = ['pyro_seq', 'duration_hint', 'fields', 'checklist'];
+    const sameStructure = structural.every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
+    const sameOperation = a.wording === b.wording && a.critical === b.critical;
+    return {
+      same: sameStructure && sameOperation,
+      textOnly: sameStructure && sameOperation && a.exactText !== b.exactText,
+      a, b,
+    };
+  }
   function progressSummary(steps, currentStep = 0) {
     const list = steps || [];
     const inputPositions = [], completionOnly = [];
@@ -258,5 +309,5 @@
     return { schedule, save, flushAll, isDirty, hasPending: () => [...entries.values()].some((e) => e.saved < e.revision || !!e.promise) };
   }
 
-  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, valueHasRecordedInput, stepEvidence, stepRecordReasons, stepHasRecord, progressPosition, progressSummary, mergeEvidence, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
+  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, valueHasRecordedInput, stepEvidence, stepRecordReasons, stepHasRecord, progressPosition, progressSummary, mergeEvidence, csvCell, validateFields, assertSafeStepSync, stepSignature, mergeText, mergeCriticalText, mergeStepSignature, mergeStepDifference, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
 });

@@ -33,6 +33,9 @@ const state = {
   user: null,
   mode: 'login',
   records: [],
+  projects: [],
+  projectsUnavailable: false,
+  planProjectId: undefined,
   q: '',
   category: '',
   editingId: null,
@@ -107,12 +110,13 @@ function applyUser(user) {
   $('auth-view').hidden = guideOpen || !!state.user;
   $('app-view').hidden = guideOpen || !state.user;
   $('user-box').hidden = !state.user;
-  if (changed) { state.profile = null; state.records = []; state.calOffset = 0; healedPlansOnce.clear(); }
+  if (changed) { state.profile = null; state.records = []; state.projects = []; state.projectsUnavailable = false; state.planProjectId = undefined; state.calOffset = 0; healedPlansOnce.clear(); }
   if (state.user) { updateUserChip(); loadProfile(); }
   else { state.profile = null; closeUserMenu(); closeModal(); }
 
   if (state.user) {
     if (changed || !state.records.length) loadRecords();
+    if (changed || !state.projects.length) loadProjects();
     if (changed) ensureProfile();
     if (changed) routeFromLocation('replace');
     subscribeHomeRealtime();
@@ -120,6 +124,8 @@ function applyUser(user) {
     unsubscribeHomeRealtime();
     if (window.Run) window.Run.reset();
     state.records = [];
+    state.projects = [];
+    state.planProjectId = undefined;
     state.editingId = null;
     closeForm();
     renderRecords();
@@ -305,6 +311,82 @@ async function loadRecords() {
   state.tableMissing = false;
   state.records = data || [];
   renderRecords();
+}
+
+async function loadProjects() {
+  if (!client || !state.user) return;
+  const userId = state.user.id;
+  const { data, error } = await client.from('research_projects')
+    .select('id,name,created_at,updated_at')
+    .order('updated_at', { ascending: false });
+  if (!state.user || state.user.id !== userId) return;
+  if (error) {
+    state.projects = [];
+    state.projectsUnavailable = isMissingTable(error) || /project_id|research_projects/i.test(String(error.message || ''));
+    console.warn('[SciHub] 项目读取失败：', error);
+    return;
+  }
+  state.projectsUnavailable = false;
+  state.projects = data || [];
+  const home = $('view-home');
+  if (state.user && home && !home.hidden) renderHome();
+}
+
+function projectById(id) {
+  return (state.projects || []).find((item) => String(item.id) === String(id)) || null;
+}
+
+function openProjectCreate(defaultName, migrateLegacy) {
+  if (state.projectsUnavailable) {
+    setStatus('项目功能需要先完成数据库升级。', 'warn');
+    return;
+  }
+  const migrationOption = migrateLegacy
+    ? '<label class="check-row"><input id="project-migrate-legacy" type="checkbox" checked> 将旧版本中尚未归类的方案、实验和科研记录迁移到此项目</label><p class="hint small">旧版本没有项目字段。迁移只补充项目归属，不改实验内容、步骤、实测值、附件或时间；已有项目归属不会改变。</p>'
+    : '';
+  openModal(migrateLegacy ? '创建项目并迁移旧版本数据' : '新建项目', '<label>项目名称<input id="project-name" maxlength="120" value="' + esc(defaultName || '') + '" placeholder="例如：PtFeNC 催化剂"></label>'
+    + migrationOption, [
+    { label: '取消', onClick: closeModal },
+    { label: '创建项目', primary: true, onClick: async () => {
+      const name = ($('project-name').value || '').trim();
+      if (!name) { $('project-name').focus(); return; }
+      const migrateUnassigned = !!migrateLegacy && (!$('project-migrate-legacy') || $('project-migrate-legacy').checked);
+      const { data, error } = await client.rpc('research_create_project', {
+        p_name: name, p_migrate_unassigned: migrateUnassigned,
+      });
+      if (error) { setStatus('项目创建失败：' + friendly(error), 'error'); return; }
+      closeModal();
+      await loadProjects();
+      setStatus(migrateUnassigned ? '项目已创建，旧版本数据已归入「' + name + '」。' : '项目已创建。', 'ok');
+      route('project', Number(data));
+    } },
+  ]);
+  setTimeout(() => { if ($('project-name')) $('project-name').focus(); }, 30);
+}
+
+function renameProject(id, currentName) {
+  openModal('重命名项目', '<label>项目名称<input id="project-name" maxlength="120" value="' + esc(currentName || '') + '"></label>', [
+    { label: '取消', onClick: closeModal },
+    { label: '保存', primary: true, onClick: async () => {
+      const name = ($('project-name').value || '').trim();
+      if (!name) { $('project-name').focus(); return; }
+      const { error } = await client.from('research_projects').update({ name }).eq('id', id).eq('user_id', state.user.id);
+      if (error) { setStatus('项目重命名失败：' + friendly(error), 'error'); return; }
+      closeModal(); await loadProjects(); renderHome(currentRoute.name === 'project' ? currentRoute.param : undefined);
+      setStatus('项目名称已更新。', 'ok');
+    } },
+  ]);
+}
+
+function deleteProject(id, name) {
+  openModal('删除项目', '<p>确认删除项目「' + esc(name) + '」？</p><p class="hint small">项目删除后，方案、实验、科研记录和附件仍会保留，并回到“全部项目”。</p>', [
+    { label: '取消', onClick: closeModal },
+    { label: '确认删除', primary: true, onClick: async () => {
+      const { error } = await client.from('research_projects').delete().eq('id', id).eq('user_id', state.user.id);
+      if (error) { setStatus('项目删除失败：' + friendly(error), 'error'); return; }
+      closeModal(); await loadProjects(); setStatus('项目已删除，数据仍保留在全部项目。', 'ok'); route('home');
+    } },
+  ]);
 }
 
 async function submitRecord(event) {
@@ -688,7 +770,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.2.2';
+const APP_VERSION = '1.2.3';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -738,7 +820,7 @@ if ($('update-btn')) {
 checkVersion();
 setInterval(checkVersion, 5 * 60 * 1000);
 
-const ROUTES = ['home', 'plans', 'plan', 'draft', 'run', 'records', 'record', 'guide'];
+const ROUTES = ['home', 'project', 'plans', 'plan', 'draft', 'run', 'records', 'record', 'guide'];
 
 function fmtText(ts) {
   if (!ts) return '';
@@ -749,7 +831,7 @@ function fmtText(ts) {
 
 function showView(name) {
   if (window.Plans) window.Plans.closeMenu();
-  const viewName = name === 'draft' ? 'plan' : name === 'record' ? 'records' : name;
+  const viewName = name === 'draft' ? 'plan' : name === 'record' ? 'records' : name === 'project' ? 'home' : name;
   ROUTES.forEach((r) => {
     const node = $('view-' + r);
     if (node) node.hidden = r !== viewName;
@@ -759,7 +841,7 @@ function showView(name) {
   document.body.classList.toggle('guide-shell', name === 'guide');
 
   $('record-form').hidden = name !== 'record';
-  const navMap = { plan: 'plans', draft: 'plans', record: 'records', run: 'home' };
+  const navMap = { project: 'home', plan: 'plans', draft: 'plans', record: 'records', run: 'home' };
   const navTarget = navMap[name] || name;
   document.querySelectorAll('.nav-btn').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.route === navTarget);
@@ -774,10 +856,10 @@ let restoringHistory = false;
 let guideLoading = null;
 let guideController = null;
 function readRoute() {
-  const match = location.hash.match(/^#(home|plans|plan|draft|run|records|record|guide)(?:\/([a-zA-Z0-9-]+))?$/);
+  const match = location.hash.match(/^#(home|project|plans|plan|draft|run|records|record|guide)(?:\/([a-zA-Z0-9-]+))?$/);
   if (!match) return { name: 'home' };
   const name = match[1];
-  const param = ['plan', 'draft', 'run'].includes(name) || (name === 'record' && match[2] !== 'new') ? Number(match[2]) || undefined : match[2];
+  const param = ['project', 'plans', 'plan', 'draft', 'run'].includes(name) || (name === 'record' && match[2] !== 'new') ? Number(match[2]) || undefined : match[2];
   return { name, param };
 }
 function routeHash(target) {
@@ -811,9 +893,9 @@ async function renderGuide(anchor) {
   if (currentRoute.name === 'guide' && currentRoute.param === anchor && guideController) guideController.open(anchor);
 }
 async function route(name, param, options = {}) {
-  if (['plan', 'draft', 'run'].includes(name)) param = Number.isSafeInteger(Number(param)) && Number(param) > 0 ? Number(param) : undefined;
+  if (['project', 'plans', 'plan', 'draft', 'run'].includes(name)) param = Number.isSafeInteger(Number(param)) && Number(param) > 0 ? Number(param) : undefined;
   else if (name === 'record') param = param === 'new' ? param : Number(param) || undefined;
-  else if (name !== 'guide') param = undefined;
+  else if (!['guide', 'project', 'plans'].includes(name)) param = undefined;
   const sequence = ++navigationSequence;
   if (savingRecord && !options.skipGuard) { setStatus('正在保存，请稍候。', 'warn'); return false; }
   if (window.Run && !options.skipGuard) {
@@ -826,6 +908,7 @@ async function route(name, param, options = {}) {
   let target = ROUTES.includes(name) ? name : 'home';
   if (!state.user && target !== 'guide') { target = 'home'; param = undefined; }
   if (target === 'draft' && (!window.Plans || !window.Plans.hasDraft(param))) { target = param ? 'plan' : 'plans'; }
+  if (target === 'project' && !param) target = 'home';
   if (['plan', 'run'].includes(target) && !param) target = target === 'plan' ? 'plans' : 'home';
   if (target === 'record' && !param) target = 'records';
   const next = { name: target, param };
@@ -838,8 +921,9 @@ async function route(name, param, options = {}) {
 
   if (target === 'guide') await renderGuide(param);
   else if (!state.user) return true;
-  else if (target === 'home') renderHome();
-  else if (target === 'plans' && window.Plans) window.Plans.list();
+  else if (target === 'home') { state.planProjectId = undefined; renderHome(); }
+  else if (target === 'project') renderHome({ projectId: param });
+  else if (target === 'plans' && window.Plans) { state.planProjectId = param || undefined; window.Plans.list(param); }
   else if (target === 'plan' && param && window.Plans) window.Plans.editor(param, () => sequence === navigationSequence);
   else if (target === 'draft' && window.Plans) window.Plans.showDraft();
   else if (target === 'run' && param && window.Run) window.Run.render(param);
@@ -927,12 +1011,14 @@ let runStepsHasDuration = null;
 const healedPlansOnce = new Set();
 
 let homeRenderSequence = 0;
-async function renderHome() {
+async function renderHome(options = {}) {
   const sequence = ++homeRenderSequence;
   const userId = state.user && state.user.id;
   if (!userId) return;
+  const projectId = Number(options.projectId || (currentRoute.name === 'project' ? currentRoute.param : 0)) || undefined;
+  const project = projectId ? projectById(projectId) : null;
   const host = $('view-home');
-  host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
+  host.innerHTML = '<div class="section-title">' + esc(project ? project.name : '全部项目') + '</div><div class="empty">加载中…</div>';
 
   // A stalled network request must never leave the home page on the loading
   // placeholder forever. The request itself cannot always be cancelled, but
@@ -967,20 +1053,28 @@ async function renderHome() {
   const ICON_LINK = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 5"/><path d="M14 11a5 5 0 0 0-7 0L4.5 13.5a5 5 0 0 0 7 7L13 19"/></svg>';
 
   try {
-    if (window.Run) runs = await withTimeout(window.Run.running(), '进行中实验读取');
+    if (window.Run) runs = await withTimeout(window.Run.running(projectId), '进行中实验读取');
   } catch (error) {
     console.error('[SciHub] 读取进行中实验失败：', error);
   }
 
   try {
-    const result = await withTimeout(client.from('experiment_plans')
-      .select('id,title').order('created_at', { ascending: false }).limit(5), '实验方案读取');
+    let query = client.from('experiment_plans').select('id,title,project_id').order('created_at', { ascending: false }).limit(5);
+    if (projectId) query = query.eq('project_id', projectId);
+    let result = await withTimeout(query, '实验方案读取');
+    if (result.error && /project_id|column .* does not exist/i.test(String(result.error.message || ''))) {
+      result = await withTimeout(client.from('experiment_plans').select('id,title').order('created_at', { ascending: false }).limit(5), '实验方案读取');
+    }
     if (result.error) throw result.error;
     plans = result.data || [];
   } catch (error) { console.warn('[SciHub] 实验方案读取失败：', error); }
   try {
-    const result = await withTimeout(client.from(TABLE)
-      .select('id,title,category,occurred_on').order('created_at', { ascending: false }).limit(3), '科研记录读取');
+    let query = client.from(TABLE).select('id,title,category,occurred_on,project_id').order('created_at', { ascending: false }).limit(3);
+    if (projectId) query = query.eq('project_id', projectId);
+    let result = await withTimeout(query, '科研记录读取');
+    if (result.error && /project_id|column .* does not exist/i.test(String(result.error.message || ''))) {
+      result = await withTimeout(client.from(TABLE).select('id,title,category,occurred_on').order('created_at', { ascending: false }).limit(3), '科研记录读取');
+    }
     if (result.error) throw result.error;
     recent = result.data || [];
   } catch (error) { console.warn('[SciHub] 科研记录读取失败：', error); }
@@ -1002,12 +1096,18 @@ async function renderHome() {
   const monthEnd = new Date(y0, m0 + 1, 1);
 
   try {
-    const { data } = await withTimeout(client
+    let query = client
       .from('experiment_runs')
-      .select('id,title,started_at,finished_at,status,current_step')
+      .select('id,title,project_id,started_at,finished_at,status,current_step')
       .lt('started_at', monthEnd.toISOString())
       .or('finished_at.is.null,finished_at.gte.' + monthStart.toISOString())
-      .order('started_at', { ascending: true }), '实验日历读取');
+      .order('started_at', { ascending: true });
+    if (projectId) query = query.eq('project_id', projectId);
+    let calendarResult = await withTimeout(query, '实验日历读取');
+    if (calendarResult.error && /project_id|column .* does not exist/i.test(String(calendarResult.error.message || ''))) {
+      calendarResult = await withTimeout(client.from('experiment_runs').select('id,title,started_at,finished_at,status,current_step').lt('started_at', monthEnd.toISOString()).or('finished_at.is.null,finished_at.gte.' + monthStart.toISOString()).order('started_at', { ascending: true }), '实验日历读取');
+    }
+    const { data } = calendarResult;
     monthRuns = window.Merges ? window.Merges.decorate(data || []) : (data || []);
   } catch (error) {
     console.warn('[SciHub] 实验日历数据读取失败：', error);
@@ -1506,13 +1606,28 @@ async function renderHome() {
   catch (error) { console.warn('[SciHub] 读取已完成合并实验失败：', error); }
   if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
   homePhase = '主页渲染';
+  const projectPanel = project ? [
+    '<div class="project-context card">',
+    '  <button type="button" class="ghost" data-go="home">← 全部项目</button>',
+    '  <div class="project-context-main"><b>' + esc(project.name) + '</b><span>当前项目 · 热力图、待办和实验均已按项目筛选</span></div>',
+    '  <div class="project-context-actions"><button type="button" class="ghost" data-project-rename="' + project.id + '">重命名</button><button type="button" class="ghost danger" data-project-delete="' + project.id + '">删除项目</button></div>',
+    '</div>',
+  ].join('') : [
+    '<div class="project-panel">',
+    '  <div class="section-heading"><div><b>项目</b><span>按项目管理不同实验和科研记录</span></div><button type="button" class="primary" data-project-new>＋ 新建项目</button></div>',
+    state.projectsUnavailable ? '<div class="empty project-migration-hint">项目功能需要完成数据库升级后启用；现有数据仍可在全部项目中使用。</div>' : '',
+    state.projects.length ? '<div class="project-grid">' + state.projects.map((p) => '<button type="button" class="project-card" data-project-open="' + p.id + '"><b>' + esc(p.name) + '</b><span>打开项目</span></button>').join('') + '</div>' : (!state.projectsUnavailable ? '<div class="empty project-migration-hint">检测到这是旧版本的项目数据。创建“PtFeNC 催化剂”项目后，可将尚未归类的方案、实验和科研记录迁移到该项目。</div>' : ''),
+    '</div>',
+  ].join('');
   host.innerHTML = [
+    projectPanel,
     '<div class="home-top">' + calendar + todoCard + '</div>',
-    '<div class="section-title">进行中的实验</div>',
+    '<div class="section-heading home-section-heading"><div><b>进行中的实验</b><span>' + (project ? esc(project.name) : '全部项目') + '</span></div><button type="button" class="primary" data-new-experiment>＋ 开始新的实验</button></div>',
     groups.length
       ? groups.map((g) => {
            const r = g.runs[0];
            const multi = g.runs.length > 1;
+           const runProject = !project && projectById(r.project_id);
            const recordedPosition = SciHubSafety.progressPosition(stepMap[r.id] || []);
 
           // 合并点 = 组里最早提出关联的那一步（如 v5.1 第 7 步酸洗 → 合并点是第 7 步）
@@ -1544,7 +1659,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + (recordedPosition < 0 ? ' · 尚未记录' : ' · 已记录到第 ' + (window.Merges ? window.Merges.number(r, recordedPosition) : recordedPosition + 1) + ' 步')
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + (runProject ? ' · 项目：' + esc(runProject.name) : '') + (recordedPosition < 0 ? ' · 尚未记录' : ' · 已记录到第 ' + (window.Merges ? window.Merges.number(r, recordedPosition) : recordedPosition + 1) + ' 步')
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             window.Merges ? window.Merges.card(r) : '',
@@ -1604,13 +1719,13 @@ async function renderHome() {
       '<article class="home-card"><div class="hc-main"><b>' + esc(item.title) + '</b><div class="hc-meta">已完成 · 各支路与共同阶段均只读</div></div>'
       + '<div class="hc-actions"><button type="button" class="ghost" data-run="' + item.id + '">查看流程与完整记录</button>'
       + '<button type="button" class="ghost" data-run-export="' + item.id + '">导出 Word</button></div></article>').join('') : '',
-    '<div class="section-title">开始新的实验</div>',
+    '<div class="section-heading home-section-heading"><div><b>开始新的实验</b><span>选择方案后创建独立的实验快照</span></div><button type="button" class="ghost" data-manage-plans>实验管理</button></div>',
     (plans && plans.length)
       ? plans.map((p) => [
           '<article class="home-card clickable" data-open-plan="' + p.id + '" role="button" tabindex="0" title="查看方案详情">',
           '  <div class="hc-main">',
           '    <div class="hc-title">' + esc(p.title) + '</div>',
-          '    <div class="hc-meta">查看方案详情与操作</div>',
+            '    <div class="hc-meta">' + (!project && projectById(p.project_id) ? '项目：' + esc(projectById(p.project_id).name) + ' · ' : '') + '查看方案详情与操作</div>',
           '  </div>',
           '</article>',
         ].join('\n')).join('\n')
@@ -1629,7 +1744,7 @@ async function renderHome() {
           '<article class="home-card">',
           '  <div class="hc-main">',
           '    <div class="hc-title">' + esc(x.title) + '</div>',
-          '    <div class="hc-meta">' + esc(x.category || '') + ' · ' + esc(x.occurred_on || '') + '</div>',
+          '    <div class="hc-meta">' + (!project && projectById(x.project_id) ? '项目：' + esc(projectById(x.project_id).name) + ' · ' : '') + esc(x.category || '') + ' · ' + esc(x.occurred_on || '') + '</div>',
           '  </div>',
           '</article>',
         ].join('\n')).join('\n')
@@ -1653,6 +1768,42 @@ async function renderHome() {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
     });
   });
+
+  host.querySelectorAll('[data-project-open]').forEach((el) => {
+    el.addEventListener('click', () => route('project', Number(el.dataset.projectOpen)));
+  });
+  const projectNew = host.querySelector('[data-project-new]');
+  if (projectNew) projectNew.addEventListener('click', () => openProjectCreate(state.projects.length ? '' : 'PtFeNC 催化剂', !state.projects.length));
+  const projectRename = host.querySelector('[data-project-rename]');
+  if (projectRename) projectRename.addEventListener('click', () => {
+    const p = projectById(projectRename.dataset.projectRename); if (p) renameProject(p.id, p.name);
+  });
+  const projectDelete = host.querySelector('[data-project-delete]');
+  if (projectDelete) projectDelete.addEventListener('click', () => {
+    const p = projectById(projectDelete.dataset.projectDelete); if (p) deleteProject(p.id, p.name);
+  });
+
+  const newExperiment = host.querySelector('[data-new-experiment]');
+  if (newExperiment) newExperiment.addEventListener('click', () => {
+    if (projectId) state.planProjectId = projectId;
+    openModal('选择实验方案', '<div id="project-plan-chooser"><div class="empty">正在读取方案…</div></div>', [
+      { label: '实验管理', onClick: () => { closeModal(); route('plans', projectId); } },
+      { label: '取消', onClick: closeModal },
+    ]);
+    let q = client.from('experiment_plans').select('id,title,project_id').order('updated_at', { ascending: false });
+    if (projectId) q = q.eq('project_id', projectId);
+    q.then(({ data, error }) => {
+      const box = $('project-plan-chooser');
+      if (!box) return;
+      if (error) { box.innerHTML = '<div class="empty">方案暂时无法读取。</div>'; return; }
+      box.innerHTML = data && data.length ? data.map((p) => '<button type="button" class="chooser-row" data-start-plan="' + p.id + '"><b>' + esc(p.title) + '</b><span>开始一次新的实验</span></button>').join('') : '<div class="empty">当前项目还没有方案，请先打开实验管理导入方案。</div>';
+      box.querySelectorAll('[data-start-plan]').forEach((btn) => btn.addEventListener('click', () => {
+        closeModal(); if (window.Plans) window.Plans.start(Number(btn.dataset.startPlan));
+      }));
+    });
+  });
+  const managePlans = host.querySelector('[data-manage-plans]');
+  if (managePlans) managePlans.addEventListener('click', () => route('plans', projectId));
 
   // 实验日历：桌面悬停、手机点按都能看当天详情 —— 触摸设备不会触发 mouseenter，
   // 所以两种事件都绑上。浮层用自绘 HTML（原生 title 撑不下多行步骤）。

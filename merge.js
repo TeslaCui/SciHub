@@ -87,14 +87,17 @@
     if (rows.length < 2 || rows.length > 8) throw Error('请选择 2 至 8 个平行实验。');
     const first = stepsById[rows[0].id] || [];
     if (!Number.isInteger(after) || after < 0 || after >= first.length - 1) throw Error('合并前后都必须有步骤。');
-    const signatures = first.map(SciHubSafety.stepSignature);
     const warnings = [];
+    const wordingDifferences = [];
     for (const row of rows) {
       if (row.status !== 'running' || row._merge) throw Error('只能合并尚未合并的进行中实验。');
       const steps = stepsById[row.id] || [];
       if (steps.length !== first.length) throw Error('前置或后置步骤数量不一致。');
       for (const [index, step] of steps.entries()) {
-        if (step.position !== index || signatures[index] !== SciHubSafety.stepSignature(step)) throw Error('第 ' + (index + 1) + ' 步不一致，不能合并。请核对前置和后置的顺序、说明、条件、字段及单位。');
+        const reference = first[index];
+        const difference = SciHubSafety.mergeStepDifference(reference, step, { branch: index <= after });
+        if (step.position !== index || !difference.same) throw Error('第 ' + (index + 1) + ' 步不一致，不能合并。请核对前置和后置的顺序、说明、条件、字段及单位。');
+        if (index <= after && difference.textOnly) wordingDifferences.push({ position: index, title: step.title, run_id: row.id });
         if (step.link_run_id) throw Error('实验有旧关联，请先处理旧关系。');
       }
       const evidence = SciHubSafety.mergeEvidence(steps, after);
@@ -104,7 +107,7 @@
       if (blocker) throw Error('「' + row.title + '」的第 ' + (blocker.position + 1) + ' 步已有后续记录（' + blocker.reasons.filter(item => item !== '完成标记').join('、') + '），不能合并。');
       warnings.push(...[...evidence.prefixWarnings, ...evidence.suffixWarnings].map(item => ({ ...item, run_id: row.id, title: row.title })));
     }
-    return { after, firstShared: after + 2, parents: rows.length, warnings };
+    return { after, firstShared: after + 2, parents: rows.length, warnings, wordingDifferences };
   }
   let committing = false, modalSequence = 0;
   async function open(runId) {
@@ -162,9 +165,11 @@
             if (!result || result.allowed !== true) throw Error('审核未通过。');
             if (stamp !== sequence || modalId !== modalSequence || selectedKey !== key() || !state.user || state.user.id !== owner || $('modal').hidden) return;
             review = { ...result, ...localReview, key: selectedKey };
+            const wordingText = localReview.wordingDifferences && localReview.wordingDifferences.length
+              ? '<p class="merge-warning">前置步骤存在文字表述差异，但关键条件、字段和操作结构一致。请逐项核对后再确认合并。</p>' : '';
             const warningText = localReview.warnings.length
               ? '<p class="merge-warning">请核对：' + localReview.warnings.map((item) => esc(item.title) + ' 第 ' + (item.position + 1) + ' 步' + (item.reason.indexOf('后续') >= 0 ? '只有完成标记，没有有效填写。确认这不是实际的后续操作记录。' : '只有完成标记，没有有效填写。请确认实际操作已完成。')).join('；') + '</p>' : '';
-            $('merge-review').innerHTML = '<b>✓ 审核通过</b><p>' + ids.length + ' 路实验的全部步骤定义一致；各自第 1–' + (after + 1) + ' 步已确认，后续没有有效实验记录。合并后从第 ' + (after + 2) + ' 步共用记录。</p>' + warningText;
+            $('merge-review').innerHTML = '<b>✓ 审核通过</b><p>' + ids.length + ' 路实验的关键条件、字段和步骤结构一致；各自第 1–' + (after + 1) + ' 步已确认，后续没有有效实验记录。合并后从第 ' + (after + 2) + ' 步共用记录。</p>' + wordingText + warningText;
             $('merge-confirm').disabled = false;
             updateSubmit();
           } catch (err) { if (stamp === sequence && !$('modal').hidden) $('merge-review').textContent = '审核不通过：' + (err.message || err); }

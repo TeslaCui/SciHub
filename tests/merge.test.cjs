@@ -64,3 +64,28 @@ test('browsing a pending suffix with empty field keys and auto times permits rev
     assert.equal(api.reviewLocal(g.rows,g.steps,2).firstShared,4);
   }
 });
+test('parallel prefix wording and scale values may differ when controls stay equal', () => {
+  const f = fixture();
+  f.steps[1][0].instruction = '称取 3 g 粉末并加入烧杯';
+  f.steps[2][0].instruction = '称量 5 g 粉末，添加到烧杯';
+  assert.equal(api.reviewLocal(f.rows, f.steps, 2).wordingDifferences.length, 1);
+  const blocked = fixture();
+  blocked.steps[1][1].instruction = '反应 80 ℃ 12 h';
+  blocked.steps[2][1].instruction = '反应 90 ℃ 12 h';
+  assert.throws(() => api.reviewLocal(blocked.rows, blocked.steps, 2), /不一致/);
+});
+test('shared suffix controls remain a strict gate while synonyms are allowed', () => {
+  const f = fixture();
+  f.steps[1][4].instruction = '烘干 80 ℃ 12 h';
+  f.steps[2][4].instruction = '干燥 80 ℃ 12 h';
+  assert.equal(api.reviewLocal(f.rows, f.steps, 2).firstShared, 4);
+  const blocked = fixture();
+  blocked.steps[1][4].instruction = '干燥 80 ℃ 12 h';
+  blocked.steps[2][4].instruction = '干燥 80 ℃ 10 h';
+  assert.throws(() => api.reviewLocal(blocked.rows, blocked.steps, 2), /不一致/);
+});
+test('critical controls include common mass, volume and concentration units', () => {
+  assert.equal(safety.mergeCriticalText('加入 5 mL 盐酸，浓度 2 M，80 ℃ 12 h'), '2m|80℃|12h');
+  assert.equal(safety.mergeCriticalText('加入 5 mL 盐酸'), safety.mergeCriticalText('加入 6 mL 盐酸'));
+  assert.notEqual(safety.mergeCriticalText('浓度 2 M'), safety.mergeCriticalText('浓度 3 M'));
+});

@@ -104,6 +104,42 @@
     return fields;
   }
 
+  function loadPdfJs() {
+    if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      s.onload = () => {
+        if (!window.pdfjsLib) return reject(new Error('PDF 解析组件不可用，请检查网络。'));
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        resolve(window.pdfjsLib);
+      };
+      s.onerror = () => reject(new Error('PDF 解析组件加载失败，请检查网络。'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function readPdf(file) {
+    const pdfjs = await loadPdfJs();
+    const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    const paras = [];
+    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
+      const page = await pdf.getPage(pageNo);
+      const content = await page.getTextContent();
+      let line = '';
+      let lastY = null;
+      (content.items || []).forEach((item) => {
+        const y = item.transform && item.transform[5];
+        if (lastY != null && Math.abs(y - lastY) > 4 && line.trim()) { paras.push(line.trim()); line = ''; }
+        line += String(item.str || '') + ' ';
+        lastY = y;
+      });
+      if (line.trim()) paras.push(line.trim());
+    }
+    if (!paras.length) throw new Error('PDF 中没有可解析的文字。请使用文字型 PDF 或 DOCX。');
+    return { name: file.name, paras };
+  }
+
   function hasObservationCue(text) {
     return /记录|测量|测定|检测|称量|读取|测得|观察|现象|颜色|状态|沉淀|分层|澄清|气泡|形貌|晶体|产率|收率/.test(String(text || ''));
   }
@@ -589,12 +625,20 @@
     return '';
   }
 
-  async function listPlans() {
+  async function listPlans(projectId) {
     const host = $('view-plans');
     host.innerHTML = '<div class="section-title">实验方案</div><div class="empty">加载中…</div>';
     closePlanContextMenu();
 
-    const { data, error } = await client.from(PLAN).select('id,title,source,created_at,parse_version').order('created_at', { ascending: false });
+    const scopedProjectId = Number(projectId || state.planProjectId) || undefined;
+    state.planProjectId = scopedProjectId;
+    let planQuery = client.from(PLAN).select('id,title,source,created_at,parse_version,project_id').order('created_at', { ascending: false });
+    if (scopedProjectId) planQuery = planQuery.eq('project_id', scopedProjectId);
+    let planResult = await planQuery;
+    if (planResult.error && /project_id|column .* does not exist/i.test(String(planResult.error.message || ''))) {
+      planResult = await client.from(PLAN).select('id,title,source,created_at,parse_version').order('created_at', { ascending: false });
+    }
+    const { data, error } = planResult;
     if (error) {
       host.querySelector('.empty').textContent = '方案暂时无法加载，请稍后重试。';
       console.error('[SciHub] 方案读取失败：', error);
@@ -623,12 +667,12 @@
     host.innerHTML = [
       '<div class="section-title">实验方案</div>',
       '<div class="card" style="margin-bottom:14px">',
-      '  <label>导入 Word 方案',
-      '    <input type="file" id="docx-input" accept=".docx">',
+      '  <label>导入实验方案',
+      '    <input type="file" id="docx-input" accept=".docx,.pdf">',
       '  </label>',
-      '  <p class="hint small">支持 .docx 文件。导入后请对照原文核对步骤、用量、条件和记录项。</p>',
+      '  <p class="hint small">支持 DOCX 和文字型 PDF。导入后请对照原文核对步骤、用量、条件和记录项。</p>',
       '</div>',
-      cards || '<div class="empty">暂无实验方案。请选择 Word 文件导入。</div>',
+      cards || '<div class="empty">暂无实验方案。请选择 DOCX 或文字型 PDF 文件导入。</div>',
       cards ? '<p class="hint small">在方案卡片上右键或手机长按，可重命名或删除；键盘可使用 Shift+F10。</p>' : '',
     ].join('\n');
 
@@ -947,7 +991,7 @@
     const isCurrent = planNavigationGuard();
     setStatus('正在解析方案…');
     try {
-      const { name, paras } = await readDocx(file);
+      const { name, paras } = /\.pdf$/i.test(file.name || '') ? await readPdf(file) : await readDocx(file);
 
       // 优先用 AI 解析（能区分同名药品、能读表格）；不可用时回退规则解析
       let plan = await parsePlanSmart(paras.join('\n'));
@@ -961,6 +1005,7 @@
       }
 
       draft = plan;
+      draft.projectId = state.planProjectId || null;
       // Preserve the parser's process boundaries; similar titles do not prove two operations are the same.
       draft.importMethod = usedAI ? 'ai' : 'rule';
       draft.sourceText = paras.join('\n');
@@ -971,7 +1016,7 @@
       route('draft');
     } catch (err) {
       console.error('[SciHub] docx 解析失败：', err);
-      setStatus(err.message || '导入失败，请选择 .docx 文件。', 'error');
+      setStatus(err.message || '导入失败，请选择 DOCX 或文字型 PDF 文件。', 'error');
     }
   }
 
@@ -1416,6 +1461,13 @@
       });
       if (error) throw error;
       if (!planId) throw new Error('没有收到保存回执，请核对后重试');
+      const projectId = currentDraft.projectId || state.planProjectId || null;
+      if (projectId) {
+        const scoped = await client.from(PLAN).update({ project_id: projectId }).eq('id', planId).eq('user_id', state.user.id);
+        if (scoped.error && /project_id/i.test(String(scoped.error.message || ''))) {
+          console.warn('[SciHub] 当前数据库尚未启用项目字段，方案先按旧结构保存。');
+        } else if (scoped.error) throw scoped.error;
+      }
       if (draft === currentDraft) draft = null;
       const doneMsg = currentDraft.id ? '方案已更新。' : '方案已保存。';
       setStatus(doneMsg, 'ok');
@@ -1643,6 +1695,7 @@
 
     draft = {
       id: plan.id,
+      projectId: plan.project_id || null,
         updatedAt: plan.updated_at,
       title: plan.title,
       source: plan.source || '',
@@ -1782,7 +1835,7 @@
       '  <button type="button" class="ghost" id="plan-edit">编辑方案</button>',
       (steps || []).length ? '' : '  <button type="button" class="fresh-btn" id="plan-restore" title="恢复已有实验的步骤">从实验快照恢复步骤</button>',
       '  <button type="button" class="ghost" id="plan-upload-ver">上传新版本</button>',
-      '  <input type="file" id="ver-input" accept=".docx" hidden>',
+      '  <input type="file" id="ver-input" accept=".docx,.pdf" hidden>',
       canUpgrade ? '  <button type="button" class="fresh-btn" id="plan-upgrade">重新解析</button>' : '',
       '  <button type="button" class="ghost" id="plan-back">返回方案列表</button>',
       '</div>',
@@ -1819,7 +1872,7 @@
       if (!f) return;
       setStatus('正在解析新版本…');
       try {
-        const { name, paras } = await readDocx(f);
+        const { name, paras } = /\.pdf$/i.test(f.name || '') ? await readPdf(f) : await readDocx(f);
         const text = paras.join('\n');
         let parsed = await parsePlanSmart(text);
         const usedAI = !!parsed;
@@ -1832,6 +1885,7 @@
         if (!isCurrent()) return;
         draft = {
           id: plan.id,
+          projectId: plan.project_id || null,
           sourceText: text,
           importMethod: usedAI ? 'ai' : 'rule',
         updatedAt: plan.updated_at,
@@ -1896,20 +1950,27 @@
 
       // 同一个方案常常要做很多次：已有实验时给标题加序号，
       // 否则主页 / 待办里会出现一串同名实验，分不清是哪一次。
-      const { count } = await client
-        .from(RUN)
-        .select('id', { count: 'exact', head: true })
-        .eq('plan_id', plan.id);
+      const projectId = plan.project_id || state.planProjectId || null;
+      let runCountQuery = client.from(RUN).select('id', { count: 'exact', head: true }).eq('plan_id', plan.id);
+      if (projectId) runCountQuery = runCountQuery.eq('project_id', projectId);
+      const { count } = await runCountQuery;
       const nth = (count || 0) + 1;
       const runTitle = nth > 1 ? plan.title + '（第 ' + nth + ' 次）' : plan.title;
 
-      const { data: run, error } = await client.from(RUN).insert({
+      const runPayload = {
         user_id: state.user.id,
         plan_id: plan.id,
+        project_id: projectId,
         title: runTitle,
         status: 'aborted',
         current_step: 0,
-      }).select().single();
+      };
+      let runResult = await client.from(RUN).insert(runPayload).select().single();
+      if (runResult.error && /project_id/i.test(String(runResult.error.message || ''))) {
+        delete runPayload.project_id;
+        runResult = await client.from(RUN).insert(runPayload).select().single();
+      }
+      const { data: run, error } = runResult;
       if (error) throw error;
 
       const rows = steps.map((s) => ({
@@ -4066,15 +4127,16 @@
 
   /* ── 进行中的实验（主页用）────────────────────────────── */
 
-  async function runningRuns() {
+  async function runningRuns(projectId) {
     // Merge metadata is optional for the home list. A missing or temporarily
     // unavailable merge table must not hide the user's independent runs.
     if (window.Merges) {
       try { await window.Merges.refresh(); }
       catch (error) { console.warn('[SciHub] 合并关系读取失败，先显示独立实验：', error); }
     }
-    const { data, error } = await client.from(RUN).select('*')
-      .eq('status', 'running').order('updated_at', { ascending: false });
+    let query = client.from(RUN).select('*').eq('status', 'running').order('updated_at', { ascending: false });
+    if (projectId) query = query.eq('project_id', projectId);
+    const { data, error } = await query;
     if (error) throw error;
     const rows = window.Merges ? window.Merges.decorate(data || []) : (data || []);
     rows.forEach((row) => { row._mergeParents = rows.filter((parent) => parent._mergedInto === row.id); });

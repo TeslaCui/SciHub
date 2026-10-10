@@ -90,6 +90,36 @@ p('home', 'home', 'Use the home page', '使用主页和快捷入口', ['Log in.'
   ['The top navigation also opens "实验方案" and "科研记录".', '顶部导航也可打开“实验方案”和“科研记录”。'],
   ['If the page cannot load, select "重试" after you check the network connection.', '页面无法加载时，检查网络连接后选择“重试”。']
 ]);
+p('project-create', 'home', 'Create a project', '新建项目', ['Log in.', '先登录。'], [
+  ['Open the home page.', '打开主页。'],
+  ['Select "＋ 新建项目" (New project).', '选择“＋ 新建项目”。'],
+  ['Enter a project name.', '填写项目名称。'],
+  ['For legacy data, keep the suggested name “PtFeNC 催化剂”.', '迁移旧版本数据时，保留建议名称“PtFeNC 催化剂”。'],
+  ['Select the option to migrate unclassified legacy data.', '选择迁移旧版本未归类数据的选项。'],
+  ['Select "创建项目" (Create project).', '选择“创建项目”。'],
+  ['Read the migration message, then confirm the project.', '阅读迁移提示，然后确认创建项目。']
+], ['SciHub opens the project page with the migrated legacy data.', 'SciHub 打开项目页，并显示已迁移的旧版本数据。'], [
+  ['The migration assigns only rows without a project.', '迁移只补充没有项目归属的数据。'],
+  ['Experiment content, steps, values, attachments, and times stay unchanged.', '实验内容、步骤、实测值、附件和时间保持不变。'],
+  ['Existing project assignments do not change.', '已有项目归属不会改变。']
+]);
+p('project-use', 'home', 'Use a project workspace', '使用项目工作区', ['A project must exist.', '需要已有项目。'], [
+  ['Open the home page.', '打开主页。'],
+  ['Select a project card.', '选择项目卡片。'],
+  ['Read the project heatmap and task list.', '查看该项目的热力图和待办。'],
+  ['Select "← 全部项目" to return to all project data.', '选择“← 全部项目”返回全部项目数据。'],
+  ['Use "重命名" or "删除项目" when necessary.', '需要时使用“重命名”或“删除项目”。']
+], ['The project page shows only data assigned to that project.', '项目页只显示归属于该项目的数据。'], [
+  ['Deleting a project keeps its plans, experiments, records, and attachments. They return to all project data.', '删除项目会保留方案、实验、记录和附件，并回到全部项目。']
+]);
+p('project-start', 'home', 'Start an experiment from a project', '从项目开始实验', ['Open a project workspace.', '打开项目工作区。'], [
+  ['Select "＋ 开始新的实验" (Start new experiment).', '选择“＋ 开始新的实验”。'],
+  ['Select a saved plan.', '选择已保存的方案。'],
+  ['Check the plan and select the start button.', '核对方案并选择开始按钮。'],
+  ['Use "实验管理" to open the plan page when you need to import or edit a plan.', '需要导入或编辑方案时，选择“实验管理”。']
+], ['SciHub creates a separate experiment in the current project.', 'SciHub 在当前项目中创建一次独立实验。'], [
+  ['Repeated starts use numbered titles such as “第 2 次”.', '同一方案重复开始时使用“第 2 次”等编号区分。']
+]);
 p('calendar', 'home', 'Read the experiment calendar', '查看实验日历', ['Open the home page.', '打开主页。'], [
   ['Use "上一月" or "下一月" to select a month.', '使用“上一月”或“下一月”选择月份。'],
   ['Select "回到本月" to return to the current month.', '选择“回到本月”返回当前月份。'],
@@ -174,14 +204,15 @@ p('record-delete', 'records', 'Delete a research record', '删除科研记录', 
   ['Deletion is permanent; SciHub has no record recycle bin.', '删除无法撤销；SciHub 没有记录回收站。'],
   ['If you delete a generated log, its experiment remains.', '删除生成的日志后，对应实验仍然保留。']
 ]);
-p('plan-import', 'plans', 'Import a Word plan', '导入 Word 实验方案', ['Prepare a .docx file that contains the plan.', '准备包含方案的 .docx 文件。'], [
+ p('plan-import', 'plans', 'Import a Word or PDF plan', '导入 Word 或 PDF 实验方案', ['Prepare a text-based .docx or PDF file that contains the plan.', '准备包含方案的文字型 .docx 或 PDF 文件。'], [
   ['Select "实验方案" (Experiment plans).', '选择“实验方案”。'],
-  ['In "导入 Word 方案", select the file.', '在“导入 Word 方案”中选择文件。'],
+  ['In "导入实验方案", select the file.', '在“导入实验方案”中选择文件。'],
   ['Wait for the plan draft.', '等待方案草稿出现。'],
   ['Open "查看导入原文".', '展开“查看导入原文”。'],
   ['Compare all draft steps with the source document.', '将全部草稿步骤与原文件逐项核对。'],
   ['Correct the draft before you save it.', '保存前修正草稿。']
 ], ['SciHub opens "核对导入结果" (Check import results).', 'SciHub 打开“核对导入结果”。'], [
+  ['A scanned PDF without text cannot be parsed in the browser.', '没有文字层的扫描 PDF 无法在浏览器中解析。'],
   ['AI parsing can send plan text to the configured AI service.', 'AI 解析可能把方案文本发送到配置的 AI 服务。'],
   ['The imported procedure uses Chinese instructions.', '导入后的步骤使用中文。'],
   ['If you leave before import completes, select the file again when you return.', '导入完成前若切换页面，返回后需重新选择文件。'],
@@ -700,7 +731,7 @@ figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑�
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.2.2', updated: '2026-10-10',
+  version: '1.2.3', updated: '2026-10-10',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },
