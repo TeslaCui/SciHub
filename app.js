@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.8';
+const APP_VERSION = '1.1.9';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -941,6 +941,13 @@ async function renderHome() {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error(label + '超时')), ms)),
   ]);
+  // Keep the partial results outside the try block. The final recovery path
+  // must be able to render records that were loaded before a later section
+  // failed (for example calendar or reminder data).
+  let runs = [];
+  let plans = [];
+  let recent = [];
+  let monthRuns = [];
   try {
 
   // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
@@ -955,14 +962,12 @@ async function renderHome() {
   const ICON_DOC = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15l3 3 3-3"/></svg>';
   const ICON_LINK = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 5"/><path d="M14 11a5 5 0 0 0-7 0L4.5 13.5a5 5 0 0 0 7 7L13 19"/></svg>';
 
-  let runs = [];
   try {
     if (window.Run) runs = await withTimeout(window.Run.running(), '进行中实验读取');
   } catch (error) {
     console.error('[SciHub] 读取进行中实验失败：', error);
   }
 
-  let plans = [], recent = [];
   try {
     const result = await withTimeout(client.from('experiment_plans')
       .select('id,title').order('created_at', { ascending: false }).limit(5), '实验方案读取');
@@ -992,7 +997,6 @@ async function renderHome() {
   const monthStart = new Date(y0, m0, 1);
   const monthEnd = new Date(y0, m0 + 1, 1);
 
-  let monthRuns = [];
   try {
     const { data } = await withTimeout(client
       .from('experiment_runs')
@@ -1762,12 +1766,17 @@ async function renderHome() {
   } catch (error) {
     console.error('[SciHub] 主页加载失败：', error);
     if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
+    // Keep the records that were already read visible. A late failure in a
+    // calendar, reminder, or optional card must never replace the experiment
+    // list with an empty error page.
+    const safeRuns = Array.isArray(runs) && runs.length ? runs : (Array.isArray(monthRuns) ? monthRuns : []);
     host.innerHTML = '<div class="section-title">进行中的实验</div>'
-      + '<div class="empty home-load-error"><b>主页暂时无法加载</b><br><span>请检查网络连接后重试。已有数据不会被修改。</span><br>'
-      + '<button type="button" class="primary" data-home-retry>重试</button></div>';
-    setStatus('主页加载失败，请检查网络后重试。', 'error');
+      + (safeRuns.length ? '<div class="home-grid">' + safeRuns.map((item) => '<article class="home-card clickable" data-home-run="' + item.id + '"><div class="hc-main"><b>' + esc(item.title || '未命名实验') + '</b><div class="hc-meta">数据读取中断，点击继续查看</div></div></article>').join('') + '</div>' : '')
+      + '<div class="empty home-load-error"><b>主页部分内容暂时无法加载</b><br><span>请检查网络连接后重试。已有数据不会被修改。</span><br><button type="button" class="primary" data-home-retry>重试</button></div>';
+    setStatus('主页部分内容加载失败，请检查网络后重试。', 'error');
     const retry = host.querySelector('[data-home-retry]');
     if (retry) retry.addEventListener('click', () => renderHome());
+    host.querySelectorAll('[data-home-run]').forEach((node) => node.addEventListener('click', () => route('run', Number(node.dataset.homeRun))));
   }
 }
 
