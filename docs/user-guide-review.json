@@ -1,11 +1,11 @@
 {
-  "version": "1.1.7",
+  "version": "1.1.8",
   "reviewed": "2026-10-10",
-  "guideSourceHash": "1641c8e93ec642b47da2dcc5d1b552561bb8ed6725ebabe7de9bf0793778c725",
+  "guideSourceHash": "4b3323f4bbe9a874162985ad7a9eb6114ebe322f80264f39b46b1c31546004d2",
   "sourceHashes": {
-    "index.html": "3392658d18a551a2555c6fbfee95ba5cb2877c1d994929bd6309ed2647cc6297",
-    "app.js": "474e118a09888499c3b7d5bb53befd609fdbdbd7051ed3e26a2d81c1ef705a69",
-    "experiment.js": "9f06d65f142af44464f0d69207fba835c7a026e95a9dd2ec06016f4d1bba77f1",
+    "index.html": "a1036d117fa483770a419aa375344e510279c179b74c5ba067eb463465d42388",
+    "app.js": "b882d7a540093524e25ddb7708e4267f42af39748d69ec778095d4ea73b75ccc",
+    "experiment.js": "c7fe169fd59b9e883829d2e78d79c6381eca20eca7c63887d1567de6042cab96",
     "platinum.js": "2fa7c7c73e7b2086ce0bd33ad6d178e4b6d60f7966725b3b6fcc679c9642100b",
     "solution.js": "9746612a15da9548f7237590e4f4be05f9852811bc76dcb215ab541d96b2672a",
     "merge.js": "c63812a72b5c50eabca96b9de43f76b76a1e1e25ba1caeb15285368f8d7e07af",

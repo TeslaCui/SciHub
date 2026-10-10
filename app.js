@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.7';
+const APP_VERSION = '1.1.8';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1032,11 +1032,13 @@ async function renderHome() {
 
   const stepMap = {};
   if (monthRuns.length) {
-    const rs = await withTimeout(loadRunSteps(monthRuns.map((r) => r.id)), '实验步骤读取');
-    (rs || []).forEach((x) => {
-      if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
-      stepMap[x.run_id].push(x);
-    });
+    try {
+      const rs = await withTimeout(loadRunSteps(monthRuns.map((r) => r.id)), '实验步骤读取');
+      (rs || []).forEach((x) => {
+        if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
+        stepMap[x.run_id].push(x);
+      });
+    } catch (error) { console.warn('[SciHub] 实验步骤读取失败，保留主页和实验列表：', error); }
   }
 
   // ── 进度判定（必须先定义在这里：日历悬停要用它给每步打 ✓，而后面的待办/卡片也共用）──
@@ -1187,11 +1189,13 @@ async function renderHome() {
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
-    const more = await loadRunSteps(needSteps);
-    (more || []).forEach((x) => {
-      if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
-      stepMap[x.run_id].push(x);
-    });
+    try {
+      const more = await withTimeout(loadRunSteps(needSteps), '进行中实验步骤读取');
+      (more || []).forEach((x) => {
+        if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
+        stepMap[x.run_id].push(x);
+      });
+    } catch (error) { console.warn('[SciHub] 进行中实验步骤读取失败，仍显示实验卡片：', error); }
   }
 
   // 起跑时没把方案里的「时长提示」快照进实验步骤（老数据的时长全是空），
@@ -1199,16 +1203,21 @@ async function renderHome() {
   const planDur = {};        // plan_id -> { position: 时长文本 }
   const planIds = [...new Set((runs || []).map((r) => r.plan_id).filter(Boolean))];
   if (planIds.length) {
-    const { data: ps } = await client
-      .from('plan_steps')
-      .select('plan_id,position,duration_hint,instruction')
-      .in('plan_id', planIds);
-    (ps || []).forEach((x) => {
-      if (!planDur[x.plan_id]) planDur[x.plan_id] = {};
-      // 方案里填了「时长提示」就用它；没填就从这一步的说明里抓一段
-      const dur = String(x.duration_hint || '').trim() || pickDurationText(x.instruction);
-      if (dur) planDur[x.plan_id][x.position] = dur;
-    });
+    try {
+      let result = await withTimeout(client.from('plan_steps')
+        .select('plan_id,position,duration_hint,instruction').in('plan_id', planIds), '方案步骤读取');
+      // 老数据库可能还没有可选的时长字段。仍使用操作说明计算提醒。
+      if (result.error && /duration_hint/.test(String(result.error.message || ''))) {
+        result = await withTimeout(client.from('plan_steps')
+          .select('plan_id,position,instruction').in('plan_id', planIds), '方案步骤读取');
+      }
+      if (result.error) throw result.error;
+      (result.data || []).forEach((x) => {
+        if (!planDur[x.plan_id]) planDur[x.plan_id] = {};
+        const dur = String(x.duration_hint || '').trim() || pickDurationText(x.instruction);
+        if (dur) planDur[x.plan_id][x.position] = dur;
+      });
+    } catch (error) { console.warn('[SciHub] 方案步骤读取失败，跳过时长提醒：', error); }
   }
 
   // ── 把有关联的实验合并成一组 ──────────────────────────

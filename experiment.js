@@ -4067,7 +4067,12 @@
   /* ── 进行中的实验（主页用）────────────────────────────── */
 
   async function runningRuns() {
-    if (window.Merges) await window.Merges.refresh();
+    // Merge metadata is optional for the home list. A missing or temporarily
+    // unavailable merge table must not hide the user's independent runs.
+    if (window.Merges) {
+      try { await window.Merges.refresh(); }
+      catch (error) { console.warn('[SciHub] 合并关系读取失败，先显示独立实验：', error); }
+    }
     const { data, error } = await client.from(RUN).select('*')
       .eq('status', 'running').order('updated_at', { ascending: false });
     if (error) throw error;
