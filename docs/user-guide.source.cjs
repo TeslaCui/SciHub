@@ -732,7 +732,7 @@ figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑�
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.2.5', updated: '2026-10-10',
+  version: '1.2.6', updated: '2026-10-10',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },
