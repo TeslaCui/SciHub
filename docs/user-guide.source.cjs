@@ -87,7 +87,8 @@ p('home', 'home', 'Use the home page', '使用主页和快捷入口', ['Log in.'
   ['In "开始新的实验", select a plan card to read the plan.', '在“开始新的实验”中选择方案卡片查看方案。'],
   ['Use "快捷入口" to open plans, records, or a new record.', '使用“快捷入口”打开方案、记录或新建记录。']
 ], ['SciHub opens the task that you selected.', 'SciHub 打开所选任务。'], [
-  ['The top navigation also opens "实验方案" and "科研记录".', '顶部导航也可打开“实验方案”和“科研记录”。']
+  ['The top navigation also opens "实验方案" and "科研记录".', '顶部导航也可打开“实验方案”和“科研记录”。'],
+  ['If the page cannot load, select "重试" after you check the network connection.', '页面无法加载时，检查网络连接后选择“重试”。']
 ]);
 p('calendar', 'home', 'Read the experiment calendar', '查看实验日历', ['Open the home page.', '打开主页。'], [
   ['Use "上一月" or "下一月" to select a month.', '使用“上一月”或“下一月”选择月份。'],
@@ -699,7 +700,7 @@ figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑�
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.1.6', updated: '2026-10-10',
+  version: '1.1.7', updated: '2026-10-10',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

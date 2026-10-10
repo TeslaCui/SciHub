@@ -256,6 +256,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .status.error { color: var(--danger); border-color: #fecdca; background: #fef3f2; }
 .status.warn { color: var(--warn); border-color: #fedf89; background: #fffaeb; }
 .run-status .warn { color: var(--warn); }
+.home-load-error { line-height: 1.9; }
+.home-load-error .primary { margin-top: 10px; }
 
 .footer { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; padding: 18px; }
 .footer .ver { font-variant-numeric: tabular-nums; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; }

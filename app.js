@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.6';
+const APP_VERSION = '1.1.7';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -934,6 +934,15 @@ async function renderHome() {
   const host = $('view-home');
   host.innerHTML = '<div class="section-title">进行中的实验</div><div class="empty">加载中…</div>';
 
+  // A stalled network request must never leave the home page on the loading
+  // placeholder forever. The request itself cannot always be cancelled, but
+  // the view can recover and offer a safe retry.
+  const withTimeout = (promise, label, ms = 15000) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label + '超时')), ms)),
+  ]);
+  try {
+
   // app.js 与 experiment.js 是并行下载的：首次进首页时 window.Run 可能还没挂上，
   // 那样会静默拿到空列表（表现为「刷新后要切走再切回来才显示」）。这里等它就绪。
   for (let i = 0; i < 8 && !window.Run; i++) {
@@ -948,22 +957,24 @@ async function renderHome() {
 
   let runs = [];
   try {
-    if (window.Run) runs = await window.Run.running();
+    if (window.Run) runs = await withTimeout(window.Run.running(), '进行中实验读取');
   } catch (error) {
     console.error('[SciHub] 读取进行中实验失败：', error);
   }
 
-  const { data: plans } = await client
-    .from('experiment_plans')
-    .select('id,title')
-    .order('created_at', { ascending: false })
-    .limit(5);
-
-  const { data: recent } = await client
-    .from(TABLE)
-    .select('id,title,category,occurred_on')
-    .order('created_at', { ascending: false })
-    .limit(3);
+  let plans = [], recent = [];
+  try {
+    const result = await withTimeout(client.from('experiment_plans')
+      .select('id,title').order('created_at', { ascending: false }).limit(5), '实验方案读取');
+    if (result.error) throw result.error;
+    plans = result.data || [];
+  } catch (error) { console.warn('[SciHub] 实验方案读取失败：', error); }
+  try {
+    const result = await withTimeout(client.from(TABLE)
+      .select('id,title,category,occurred_on').order('created_at', { ascending: false }).limit(3), '科研记录读取');
+    if (result.error) throw result.error;
+    recent = result.data || [];
+  } catch (error) { console.warn('[SciHub] 科研记录读取失败：', error); }
 
   // ── 实验月历：把本月的实验按「开始那天」聚合，用于热力着色与悬停详情 ──
   const today = new Date();
@@ -983,12 +994,12 @@ async function renderHome() {
 
   let monthRuns = [];
   try {
-    const { data } = await client
+    const { data } = await withTimeout(client
       .from('experiment_runs')
       .select('id,title,started_at,finished_at,status,current_step')
       .lt('started_at', monthEnd.toISOString())
       .or('finished_at.is.null,finished_at.gte.' + monthStart.toISOString())
-      .order('started_at', { ascending: true });
+      .order('started_at', { ascending: true }), '实验日历读取');
     monthRuns = window.Merges ? window.Merges.decorate(data || []) : (data || []);
   } catch (error) {
     console.warn('[SciHub] 实验日历数据读取失败：', error);
@@ -1021,7 +1032,7 @@ async function renderHome() {
 
   const stepMap = {};
   if (monthRuns.length) {
-    const rs = await loadRunSteps(monthRuns.map((r) => r.id));
+    const rs = await withTimeout(loadRunSteps(monthRuns.map((r) => r.id)), '实验步骤读取');
     (rs || []).forEach((x) => {
       if (!stepMap[x.run_id]) stepMap[x.run_id] = [];
       stepMap[x.run_id].push(x);
@@ -1362,11 +1373,11 @@ async function renderHome() {
   // 手动待办（存在 research_todos 里）：与实验无关的事，比如「明天 10:00 取样品」
   let myTodos = [];
   if (client) {
-    const { data: manual, error: manualErr } = await client
+      const { data: manual, error: manualErr } = await withTimeout(client
       .from('research_todos')
       .select('*')
       .eq('done', false)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false }), '待办读取');
     if (manualErr) console.warn('[SciHub] 待办读取失败（表可能还没建）：', manualErr);
     else myTodos = manual || [];
   }
@@ -1738,6 +1749,16 @@ async function renderHome() {
       route('records');
       setTimeout(() => openForm(null), 0);
     });
+  }
+  } catch (error) {
+    console.error('[SciHub] 主页加载失败：', error);
+    if (!state.user || state.user.id !== userId || sequence !== homeRenderSequence || host.hidden) return;
+    host.innerHTML = '<div class="section-title">进行中的实验</div>'
+      + '<div class="empty home-load-error"><b>主页暂时无法加载</b><br><span>请检查网络连接后重试。已有数据不会被修改。</span><br>'
+      + '<button type="button" class="primary" data-home-retry>重试</button></div>';
+    setStatus('主页加载失败，请检查网络后重试。', 'error');
+    const retry = host.querySelector('[data-home-retry]');
+    if (retry) retry.addEventListener('click', () => renderHome());
   }
 }
 
