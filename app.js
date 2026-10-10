@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.2.1';
+const APP_VERSION = '1.2.2';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1511,8 +1511,9 @@ async function renderHome() {
     '<div class="section-title">进行中的实验</div>',
     groups.length
       ? groups.map((g) => {
-          const r = g.runs[0];
-          const multi = g.runs.length > 1;
+           const r = g.runs[0];
+           const multi = g.runs.length > 1;
+           const recordedPosition = SciHubSafety.progressPosition(stepMap[r.id] || []);
 
           // 合并点 = 组里最早提出关联的那一步（如 v5.1 第 7 步酸洗 → 合并点是第 7 步）
           const linkAt = g.links.length ? Math.min.apply(null, g.links.map((l) => l.position)) : null;
@@ -1543,7 +1544,7 @@ async function renderHome() {
             '    <div class="hc-title">' + (multi
               ? g.runs.map((x) => esc(x.title)).join('、') + ' <span class="link-tag">合并</span>'
               : esc(r.title)) + '</div>',
-            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + (runProgressPos(r) < 0 ? ' · 尚未记录' : ' · 已记录到第 ' + (window.Merges ? window.Merges.number(r, runProgressPos(r)) : runProgressPos(r) + 1) + ' 步')
+            '    <div class="hc-meta">开始于 ' + fmtText(r.started_at) + (recordedPosition < 0 ? ' · 尚未记录' : ' · 已记录到第 ' + (window.Merges ? window.Merges.number(r, recordedPosition) : recordedPosition + 1) + ' 步')
               + (multi ? ' · 共 ' + g.runs.length + ' 个实验一起做' : '') + '</div>',
 
             window.Merges ? window.Merges.card(r) : '',
