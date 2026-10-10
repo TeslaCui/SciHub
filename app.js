@@ -364,6 +364,32 @@ function openProjectCreate(defaultName, migrateLegacy) {
   setTimeout(() => { if ($('project-name')) $('project-name').focus(); }, 30);
 }
 
+function migrateLegacyProjects() {
+  if (state.projectsUnavailable) {
+    setStatus('项目功能需要先完成数据库升级。', 'warn');
+    return;
+  }
+  if (!state.projects.length) {
+    openProjectCreate('PtFeNC 催化剂', true);
+    return;
+  }
+  const options = state.projects.map((p) => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+  openModal('迁移旧版本数据', '<label>接收项目<select id="project-migrate-target">' + options + '</select></label>'
+    + '<p class="hint small">旧版本没有项目字段。迁移只补充项目归属，不改实验内容、步骤、实测值、附件或时间；已有项目归属不会改变。</p>', [
+    { label: '取消', onClick: closeModal },
+    { label: '开始迁移', primary: true, onClick: async () => {
+      const target = projectById($('project-migrate-target').value);
+      if (!target) return;
+      const { error } = await client.rpc('research_create_project', {
+        p_name: target.name, p_migrate_unassigned: true,
+      });
+      if (error) { setStatus('旧版本数据迁移失败：' + friendly(error), 'error'); return; }
+      closeModal(); await loadProjects(); renderHome(currentRoute.name === 'project' ? { projectId: currentRoute.param } : {});
+      setStatus('旧版本数据已归入「' + target.name + '」。', 'ok');
+    } },
+  ]);
+}
+
 function renameProject(id, currentName) {
   openModal('重命名项目', '<label>项目名称<input id="project-name" maxlength="120" value="' + esc(currentName || '') + '"></label>', [
     { label: '取消', onClick: closeModal },
@@ -770,7 +796,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.2.3';
+const APP_VERSION = '1.2.4';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1614,7 +1640,7 @@ async function renderHome(options = {}) {
     '</div>',
   ].join('') : [
     '<div class="project-panel">',
-    '  <div class="section-heading"><div><b>项目</b><span>按项目管理不同实验和科研记录</span></div><button type="button" class="primary" data-project-new>＋ 新建项目</button></div>',
+    '  <div class="section-heading"><div><b>项目</b><span>按项目管理不同实验和科研记录</span></div><div class="project-panel-actions"><button type="button" class="ghost" data-project-migrate>迁移旧版本数据</button><button type="button" class="primary" data-project-new>＋ 新建项目</button></div></div>',
     state.projectsUnavailable ? '<div class="empty project-migration-hint">项目功能需要完成数据库升级后启用；现有数据仍可在全部项目中使用。</div>' : '',
     state.projects.length ? '<div class="project-grid">' + state.projects.map((p) => '<button type="button" class="project-card" data-project-open="' + p.id + '"><b>' + esc(p.name) + '</b><span>打开项目</span></button>').join('') + '</div>' : (!state.projectsUnavailable ? '<div class="empty project-migration-hint">检测到这是旧版本的项目数据。创建“PtFeNC 催化剂”项目后，可将尚未归类的方案、实验和科研记录迁移到该项目。</div>' : ''),
     '</div>',
@@ -1774,6 +1800,8 @@ async function renderHome(options = {}) {
   });
   const projectNew = host.querySelector('[data-project-new]');
   if (projectNew) projectNew.addEventListener('click', () => openProjectCreate(state.projects.length ? '' : 'PtFeNC 催化剂', !state.projects.length));
+  const projectMigrate = host.querySelector('[data-project-migrate]');
+  if (projectMigrate) projectMigrate.addEventListener('click', migrateLegacyProjects);
   const projectRename = host.querySelector('[data-project-rename]');
   if (projectRename) projectRename.addEventListener('click', () => {
     const p = projectById(projectRename.dataset.projectRename); if (p) renameProject(p.id, p.name);

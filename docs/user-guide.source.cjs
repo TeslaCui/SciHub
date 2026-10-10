@@ -101,7 +101,8 @@ p('project-create', 'home', 'Create a project', '新建项目', ['Log in.', '先
 ], ['SciHub opens the project page with the migrated legacy data.', 'SciHub 打开项目页，并显示已迁移的旧版本数据。'], [
   ['The migration assigns only rows without a project.', '迁移只补充没有项目归属的数据。'],
   ['Experiment content, steps, values, attachments, and times stay unchanged.', '实验内容、步骤、实测值、附件和时间保持不变。'],
-  ['Existing project assignments do not change.', '已有项目归属不会改变。']
+  ['Existing project assignments do not change.', '已有项目归属不会改变。'],
+  ['If a project already exists, select "迁移旧版本数据" and choose the target project.', '如果已有项目，选择“迁移旧版本数据”并选择接收项目。']
 ]);
 p('project-use', 'home', 'Use a project workspace', '使用项目工作区', ['A project must exist.', '需要已有项目。'], [
   ['Open the home page.', '打开主页。'],
@@ -731,7 +732,7 @@ figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑�
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.2.3', updated: '2026-10-10',
+  version: '1.2.4', updated: '2026-10-10',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

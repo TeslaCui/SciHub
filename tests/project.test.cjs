@@ -31,6 +31,8 @@ test('project UI separates all data from a project workspace and keeps repeated 
 test('legacy project migration is explicit and preserves existing assignments', () => {
   assert.match(app, /创建项目并迁移旧版本数据/);
   assert.match(app, /project-migrate-legacy/);
+  assert.match(app, /迁移旧版本数据/);
+  assert.match(app, /data-project-migrate/);
   assert.match(app, /旧版本没有项目字段/);
   assert.match(app, /p_migrate_unassigned: migrateUnassigned/);
   assert.match(migration, /project_id is null/);

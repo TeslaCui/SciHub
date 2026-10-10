@@ -1,10 +1,10 @@
 {
-  "version": "1.2.3",
+  "version": "1.2.4",
   "reviewed": "2026-10-10",
-  "guideSourceHash": "d809c91a772c30391e8d9e6ee154175d861598930593b368f05afac023536a5a",
+  "guideSourceHash": "0e04b21b6980e5d2455fe2386ee080f9d80239acbc551d8a063450a0561fd17f",
   "sourceHashes": {
-    "index.html": "b10bac51f36a8ab9f0d47917223542a8ec53d91da5f8074c6fff8a8b696eb926",
-    "app.js": "02ef3227b636711f1b648468184f84e09b379558d3bf115c0810a37eef783ffe",
+    "index.html": "64988ac4bac439f8c57076c519ac03d0cbe232e75fcf983e7cc549a960781161",
+    "app.js": "914bec62f040d326eb34cdc58c0d3e60e01436f807b9293cc578cfcc56cc0cba",
     "experiment.js": "1d45345c0ab60c3a5e654cde1d71635e8db50bdd70d7670d78689ceea84f95b2",
     "platinum.js": "2fa7c7c73e7b2086ce0bd33ad6d178e4b6d60f7966725b3b6fcc679c9642100b",
     "solution.js": "9746612a15da9548f7237590e4f4be05f9852811bc76dcb215ab541d96b2672a",
@@ -13,7 +13,7 @@
     "supabase_schema.sql": "fbb207af780c008172eb2fef7dba9440536cbb068d5858f5cab7a6140cc178b7",
     "guide.js": "9dbca0a7d6ff005fdc9b4467c644d9c4371713e39e45ce3be45fe5a48a515409",
     "guide.css": "d0a32b35b0e4a3fe7d4efe115b390b4a889a6792a6297555908f0c8289b1eec6",
-    "style.css": "0db0adea51caef921b6a95a8b760a4c9c2ffc930ef7f48bb6c1292096def9508",
+    "style.css": "dfe77ab1ed3a60ff0a06f93415a8fa1e35e510d42624f691580a0c6ace366914",
     "supabase/functions/_shared/ai.ts": "a6d3a60a4f7a1901e2f9f683a419cf452bfd01fa884c11e6c2b1f40d26ec9993",
     "supabase/functions/parse-plan/index.ts": "5f0374d877306b7c64a8c258ff80df7b5150c32f62f2dba8c3d921875e7c83e1",
     "supabase/functions/match-params/index.ts": "8d86d5b977bd49eeca4b277147132740202763ba5993e9143e79ed6b66c6f4b9",
