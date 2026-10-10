@@ -21,20 +21,43 @@
   }
   function checksHaveRecord(checks) {
     const values = checks && typeof checks === 'object' && !Array.isArray(checks) ? Object.values(checks) : [checks];
-    return values.some(value => value !== false && value !== 'false' && meaningfulValue(value));
+    return values.some(value => value === true || value === 'true');
   }
   function stepHasInput(step) {
     if (!step) return false;
-    return meaningfulValue(step.values) || String(step.note || '').trim().length > 0
+    return valueHasRecordedInput(step.values) || String(step.note || '').trim().length > 0
       || (Array.isArray(step.images) && step.images.length > 0)
-      || Object.values(step.checks || {}).some(value => value === true || value === 'true');
+      || checksHaveRecord(step.checks);
+  }
+  function valueHasRecordedInput(value) {
+    if (value == null) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value === 'boolean') return value === true;
+    if (Array.isArray(value)) return value.some(valueHasRecordedInput);
+    if (typeof value === 'object') return Object.values(value).some(valueHasRecordedInput);
+    return false;
+  }
+  function stepEvidence(step) {
+    if (!step) return { input: false, completion: false, completionOnly: false, recorded: false, reasons: [] };
+    const input = valueHasRecordedInput(step.values) || String(step.note || '').trim().length > 0
+      || (Array.isArray(step.images) && step.images.length > 0)
+      || checksHaveRecord(step.checks);
+    const completion = step.status === 'done' || !!step.finished_at;
+    const reasons = [];
+    if (valueHasRecordedInput(step.values)) reasons.push('有效填写');
+    if (String(step.note || '').trim()) reasons.push('备注');
+    if (Array.isArray(step.images) && step.images.length) reasons.push('附件');
+    if (checksHaveRecord(step.checks)) reasons.push('勾选记录');
+    if (completion) reasons.push('完成标记');
+    return { input, completion, completionOnly: completion && !input, recorded: input || completion, reasons };
   }
   function stepRecordReasons(step) {
     if (!step) return [];
     const reasons = [];
     if (stepHasInput(step)) reasons.push('有效填写');
     if (checksHaveRecord(step.checks)) reasons.push('勾选记录');
-    if (meaningfulValue(step.images)) reasons.push('附件');
+    if (Array.isArray(step.images) && step.images.length) reasons.push('附件');
     if (step.status === 'done') reasons.push('已完成');
     if (step.finished_at) reasons.push('完成时间');
     return reasons;
@@ -97,6 +120,30 @@
       normalize(step.pyro_seq), normalize(step.duration_hint),
       (step.fields || []).map((field) => [normalize(field.label), normalize(field.unit), field.type || 'text']),
       step.checklist || []]);
+  }
+  function progressSummary(steps, currentStep = 0) {
+    const list = steps || [];
+    const inputPositions = [], completionOnly = [];
+    list.forEach((step, index) => {
+      const evidence = stepEvidence(step);
+      if (evidence.input) inputPositions.push(index);
+      else if (evidence.completionOnly) completionOnly.push(index);
+    });
+    const lastInput = inputPositions.length ? Math.max(...inputPositions) : -1;
+    const uncertain = completionOnly.filter(index => index > lastInput);
+    const cursor = Math.max(0, Math.min(Number.isFinite(Number(currentStep)) ? Math.trunc(Number(currentStep)) : 0, Math.max(0, list.length - 1)));
+    return { lastInput, inputPositions, completionOnly, uncertain, cursor, hasInput: lastInput >= 0 };
+  }
+  function mergeEvidence(steps, after) {
+    const prefixWarnings = [], suffixBlockers = [], suffixWarnings = [];
+    (steps || []).forEach((step, index) => {
+      const evidence = stepEvidence(step);
+      if (index <= after && !evidence.completion) prefixWarnings.push({ position: index, reason: '尚未确认完成' });
+      if (index <= after && evidence.completionOnly) prefixWarnings.push({ position: index, reason: '只有完成标记，没有有效填写' });
+      if (index > after && evidence.input) suffixBlockers.push({ position: index, reasons: evidence.reasons });
+      if (index > after && evidence.completionOnly) suffixWarnings.push({ position: index, reason: '只有完成标记和时间，可能是浏览产生的旧状态' });
+    });
+    return { allowed: !prefixWarnings.some(item => item.reason === '尚未确认完成') && suffixBlockers.length === 0, prefixWarnings, suffixBlockers, suffixWarnings };
   }
 
   function updateStepSchema(step = {}) {
@@ -211,5 +258,5 @@
     return { schedule, save, flushAll, isDirty, hasPending: () => [...entries.values()].some((e) => e.saved < e.revision || !!e.promise) };
   }
 
-  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, stepRecordReasons, stepHasRecord, progressPosition, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
+  return { localDate, meaningfulValue, checksHaveRecord, stepHasInput, valueHasRecordedInput, stepEvidence, stepRecordReasons, stepHasRecord, progressPosition, progressSummary, mergeEvidence, csvCell, validateFields, assertSafeStepSync, stepSignature, updateStepSchema, planUpdateChanges, reviewPlanUpdate, groupsOf, createSaveQueue };
 });

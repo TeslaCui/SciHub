@@ -479,7 +479,8 @@ p('merge-review', 'merge', 'Review and confirm a merge', '审核并确认混合�
   ['The home page merge icon opens the same review window.', '主页合并图标可打开同一审核窗口。'],
   ['If selected experiments or data change after review, repeat the review.', '审核后选择或数据发生变化时，需要重新审核。'],
   ['SciHub checks the merge again when you submit.', '提交时再次检查合并条件。'],
-  ['Later values, notes, attachments, checked items, or completion records prevent a merge.', '后续步骤已有值、备注、附件、已勾选条目或完成记录时，不能合并。'],
+  ['Later values, notes, attachments, or checked items prevent a merge.', '后续步骤已有值、备注、附件或已勾选条目时，不能合并。'],
+  ['A completion marker without input shows a warning; confirm that it is not a later operation record.', '只有完成标记而没有填写内容时显示警告；请确认它不是实际的后续操作记录。'],
   ['Keep unexpected stored records and check them before a merge.', '保留异常历史记录，核对清楚后再合并。']
 ], [
   ['A confirmed mix locks the original branches.', '确认混合后，原支路锁定。'],
@@ -698,7 +699,7 @@ figure('record-edit', 'record', 1265, 1343, ['Edit a research record', '编辑�
   ['Select "保存" and wait for the save confirmation.', '点击“保存”，等待保存成功提示。']
 ]);
 module.exports = {
-  version: '1.1.5', updated: '2026-10-09',
+  version: '1.1.6', updated: '2026-10-10',
   standard: { name: 'ASD-STE100', issue: 9, reference: 'https://www.asd-ste100.org/STE_faq.html',
     status: pair('English procedures follow STE writing principles; full dictionary compliance has not been independently verified.',
       '英文流程采用 STE 写作原则；尚未完成完整词典符合性及独立审核。') },

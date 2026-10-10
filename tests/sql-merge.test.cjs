@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const safety = require('../data-safety.js');
 test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !process.env.PGLITE_MODULE }, async () => {
   const { PGlite } = require(process.env.PGLITE_MODULE);
   const db = new PGlite();
@@ -50,11 +51,27 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
       await db.query('update run_steps set checks=$1::jsonb where run_id=$2 and position=3',[JSON.stringify(checks),a]);
       assert.equal((await review([a,b])).allowed,true);
     }
-    const safety = require('../data-safety.js');
+    const unifiedFile = path.join(__dirname, '../supabase/migrations/20261010120000_unified_experiment_evidence.sql');
+    await db.exec(`reset role;`); await db.exec(fs.readFileSync(unifiedFile, 'utf8')); await db.exec(fs.readFileSync(unifiedFile, 'utf8'));
+    await db.exec(`set role authenticated;`);
+    // A legacy status and finish time on an empty suffix is a warning only.
+    await db.query("update run_steps set status='done',finished_at=now(),values='{}',note='',images='[]',checks='{}' where run_id=$1 and position=3",[a]);
+    assert.equal((await review([a,b])).allowed,true);
+    assert.equal((await review([a,b])).warnings.length > 0,true);
+    for (const checks of [{check:0}, 'legacy-record', {check:false}, {check:'false'}, {}]) {
+      await db.query('update run_steps set status=\'pending\',finished_at=null,checks=$1::jsonb where run_id=$2 and position=3',[JSON.stringify(checks),a]);
+      assert.equal((await review([a,b])).allowed,true);
+    }
+    await db.query('update run_steps set checks=$1::jsonb where run_id=$2 and position=3',[JSON.stringify({ check: true }), a]);
+    await assert.rejects(review([a,b]), /已有有效实验记录/);
+    for (const value of [false, '', 0, {质量:false}, {质量:0}]) {
+      assert.equal((await db.query('select research_has_recorded_value($1::jsonb) as yes',[JSON.stringify(value)])).rows[0].yes,safety.valueHasRecordedInput(value));
+    }
     for (const value of [null,'',' \t\n','　','\u00a0','\ufeff',0,'0',false,true,{质量:''},[null,''],{质量:{值:0}}]) {
-      assert.equal((await db.query('select research_has_recorded_value($1::jsonb) as yes',[JSON.stringify(value)])).rows[0].yes,safety.meaningfulValue(value));
+      assert.equal((await db.query('select research_has_recorded_value($1::jsonb) as yes',[JSON.stringify(value)])).rows[0].yes,safety.valueHasRecordedInput(value));
     }
     await assert.rejects(review([a,a]), /不同/);
+    await db.query("update run_steps set checks='{}' where run_id=$1 and position=3",[a]);
     await assert.rejects(review([a,b],5), /保留一个共同步骤/);
     for (const position of [0,5]) {
       await db.exec('reset role;');
@@ -69,7 +86,7 @@ test('PostgreSQL merge gates, atomicity, ownership, freeze and retry', { skip: !
     await assert.rejects(review([a,b]), /完成合并前/);
     await db.query("update run_steps set status='done' where run_id=$1 and position=2", [b]);
     await db.query("update run_steps set values='{\"质量\":0}' where run_id=$1 and position=3", [b]);
-    await assert.rejects(review([a,b]), /已有记录/);
+    await assert.rejects(review([a,b]), /已有有效实验记录/);
     await db.query("update run_steps set values='{}' where run_id=$1 and position=3", [b]);
     const stale = await review([a,b]);
     await db.query("update run_steps set note='新增支路记录' where run_id=$1 and position=0", [b]);

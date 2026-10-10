@@ -2476,10 +2476,12 @@
     if (!s) { host.innerHTML = '<div class="empty">没有可执行的步骤。</div>'; return; }
 
     const readOnly = (run.data.status !== 'running' || !!run.data._mergedInto);
-    const done = run.steps.slice(0, total).filter((x) => x.status === 'done').length;
-
-    // Browsing and automatic timestamps do not count as recorded input.
-    const recorded = SciHubSafety.progressPosition(run.steps.slice(0, total));
+    // Browsing, automatic timestamps and legacy completion markers do not
+    // advance recorded progress. Show completion-only markers separately.
+    const progress = SciHubSafety.progressSummary(run.steps.slice(0, total), run.pos);
+    const recorded = progress.lastInput;
+    const done = progress.inputPositions.length;
+    const reviewOnly = progress.uncertain;
     const reached = Math.max(0, recorded);
 
     const reachedPct = recorded < 0 ? 0 : total > 1 ? Math.round((reached / (total - 1)) * 100) : 100;
@@ -2539,7 +2541,8 @@
       }).join(''),
       '</div>',
 
-      '<div class="hc-meta run-status" id="run-progress-status">' + (recorded < 0 ? '<b>尚未记录</b>' : '已进行到 <b>第 ' + stepNumber(reached) + ' 步</b>') + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + done + ' 步'
+      '<div class="hc-meta run-status" id="run-progress-status">' + (recorded < 0 ? '<b>尚未记录</b>' : '已记录到 <b>第 ' + stepNumber(reached) + ' 步</b>') + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已记录 ' + done + ' 步'
+        + (reviewOnly.length ? ' · <span class="warn">待核对第 ' + reviewOnly.map((i) => stepNumber(i)).join('、') + ' 步的完成标记</span>' : '')
         + (resumed ? ' · <b>上次停在这里</b>' : '')
         + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '') + '</div>',
 
@@ -3767,7 +3770,8 @@
     const cut = run.mergeCut;
     const total = cut == null ? run.steps.length : Math.max(1, Math.min(cut, run.steps.length));
     const visible = run.steps.slice(0, total);
-    const recorded = SciHubSafety.progressPosition(visible);
+    const progress = SciHubSafety.progressSummary(visible, run.pos);
+    const recorded = progress.lastInput;
     const reached = Math.max(0, recorded);
     const pct = total > 1 ? Math.round(reached / (total - 1) * 100) : (recorded < 0 ? 0 : 100);
     const bar = document.querySelector('#view-run .progress i');
@@ -3780,8 +3784,9 @@
       node.classList.toggle('reached', i === recorded);
     });
     const status = $('run-progress-status');
-    if (status) status.innerHTML = (recorded < 0 ? '<b>尚未记录</b>' : '已进行到 <b>第 ' + stepNumber(reached) + ' 步</b>')
-      + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已完成 ' + visible.filter(x => x.status === 'done').length + ' 步'
+    if (status) status.innerHTML = (recorded < 0 ? '<b>尚未记录</b>' : '已记录到 <b>第 ' + stepNumber(reached) + ' 步</b>')
+      + ' · 正在浏览 第 ' + stepNumber(run.pos) + ' 步 · 共 ' + total + ' 步 · 已记录 ' + progress.inputPositions.length + ' 步'
+      + (progress.uncertain.length ? ' · <span class="warn">待核对第 ' + progress.uncertain.map((i) => stepNumber(i)).join('、') + ' 步的完成标记</span>' : '')
       + (run.data.updated_at ? ' · 上次保存 ' + fmt(run.data.updated_at) : '');
   }
 

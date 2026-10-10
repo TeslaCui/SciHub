@@ -688,7 +688,7 @@ if ($('modal')) {
 
 /* 每次发版时，这个常量与 version.json、sw.js 的 CACHE 名一起更新。
    它是「烧」进 JS 的，所以能代表当前浏览器实际运行的版本。 */
-const APP_VERSION = '1.1.5';
+const APP_VERSION = '1.1.6';
 
 async function checkVersion() {
   const label = $('app-version');
@@ -1173,8 +1173,6 @@ async function renderHome() {
     return '';
   };
 
-  const runProgressPos = (run) => SciHubSafety.progressPosition(stepMap[run.id] || []);
-
   // 进行中的实验可能不是本月开始的，所以这里再补查一次它们的步骤
   const needSteps = (runs || []).map((r) => r.id).filter((id) => !stepMap[id]);
   if (needSteps.length) {
@@ -1284,16 +1282,20 @@ async function renderHome() {
     };
     const hoursOf = (x) => parseDurationHours(durOf(x));
 
-    // A completed step proposes the next task; browsing does not start it.
-    const lastFilled = SciHubSafety.progressPosition(steps);
+    // Recorded input drives progress. The saved browser cursor and automatic
+    // timestamps never advance the experiment or create a next-step task.
+    const summary = SciHubSafety.progressSummary(steps, r.current_step);
+    const lastFilled = summary.lastInput;
     const at = pos => steps[pos] || null;
     const lastDoneStep = at(lastFilled);
     const nextOfDone = at(lastFilled + 1);
-    const progressed = !!lastDoneStep && lastDoneStep.status === 'done';
-    const isNext = !lastDoneStep || (progressed && !!nextOfDone);
-    const cur = isNext ? (nextOfDone || steps[0]) : lastDoneStep;
+    const completionOnlyStep = summary.uncertain.length ? at(summary.uncertain[0]) : null;
+    const progressed = !!lastDoneStep && SciHubSafety.stepEvidence(lastDoneStep).completion;
+    const isReview = !!completionOnlyStep;
+    const isNext = !isReview && !!lastDoneStep && progressed && !!nextOfDone;
+    const cur = isReview ? completionOnlyStep : (isNext ? nextOfDone : (lastDoneStep || steps[0]));
     let hours = 0;
-    if (!isNext && cur && cur.status !== 'done') hours = hoursOf(cur);
+    if (!isNext && !isReview && cur && !SciHubSafety.stepEvidence(cur).completion) hours = hoursOf(cur);
 
     // 结束时间 =「这一步开始的时刻」+ 时长。开始时刻按可靠性取：
     //   ① 这一步里填过的「时间类字段」（如「反应开始时间」）—— 你亲手记的最准
@@ -1340,10 +1342,13 @@ async function renderHome() {
       hours: hours,
       dur: durOf(cur),
       isNext: isNext,
+      isReview: isReview,
       why: '',
       // 待办文案统一用本地格式：无时间要求时一律「已完成第 X 步…，等待进行第 Y 步…」；
       // AI（todo-plan）只保留作后台参考，不再覆盖这句文案，避免出现和 v5 不一致的写法。
-      aiTxt: (progressed && lastDoneStep && nextOfDone
+      aiTxt: (isReview
+        ? '请核对第 ' + (window.Merges ? window.Merges.number(r, completionOnlyStep.position) : completionOnlyStep.position + 1) + ' 步是否实际完成'
+        : progressed && lastDoneStep && nextOfDone
         ? '已完成第 ' + (window.Merges ? window.Merges.number(r, lastDoneStep.position) : lastDoneStep.position + 1) + ' 步' + (lastDoneStep.title || '')
           + '，等待进行第 ' + (window.Merges ? window.Merges.number(r, nextOfDone.position) : nextOfDone.position + 1) + ' 步' + (nextOfDone.title || '')
         : (lastFilled < 0 ? '等待开始：' : progressed ? '已完成：' : '正在进行：') + ((cur && cur.title) || '')),

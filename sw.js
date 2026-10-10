@@ -6,29 +6,29 @@
  *
  * 改版时同步更新下面 CACHE 的版本号、version.json，以及 index.html 里的 ?v= 参数。
  */
-const CACHE = 'scihub-research-v1.1.5';
+const CACHE = 'scihub-research-v1.1.6';
 const ASSETS = [
   './index.html',
-  './style.css?v=1.1.5',
-  './data-safety.js?v=1.1.5',
-  './app.js?v=1.1.5',
-  './experiment.js?v=1.1.5',
-  './solution.js?v=1.1.5',
-  './platinum.js?v=1.1.5',
-  './merge.js?v=1.1.5',
-  './manifest.json?v=1.1.5',
-  './guide.html?v=1.1.5',
-  './guide.css?v=1.1.5',
-  './guide.js?v=1.1.5',
-  './assets/guide/home.png?v=1.1.5',
-  './assets/guide/record.png?v=1.1.5',
-  './assets/guide/plan.png?v=1.1.5',
-  './assets/guide/run.png?v=1.1.5',
-  './assets/guide/run-progress.png?v=1.1.5',
-  './assets/guide/merge-review.png?v=1.1.5',
-  './assets/guide/tools.png?v=1.1.5',
-  './assets/guide/solution.png?v=1.1.5',
-  './assets/guide/solution-result.png?v=1.1.5',
+  './style.css?v=1.1.6',
+  './data-safety.js?v=1.1.6',
+  './app.js?v=1.1.6',
+  './experiment.js?v=1.1.6',
+  './solution.js?v=1.1.6',
+  './platinum.js?v=1.1.6',
+  './merge.js?v=1.1.6',
+  './manifest.json?v=1.1.6',
+  './guide.html?v=1.1.6',
+  './guide.css?v=1.1.6',
+  './guide.js?v=1.1.6',
+  './assets/guide/home.png?v=1.1.6',
+  './assets/guide/record.png?v=1.1.6',
+  './assets/guide/plan.png?v=1.1.6',
+  './assets/guide/run.png?v=1.1.6',
+  './assets/guide/run-progress.png?v=1.1.6',
+  './assets/guide/merge-review.png?v=1.1.6',
+  './assets/guide/tools.png?v=1.1.6',
+  './assets/guide/solution.png?v=1.1.6',
+  './assets/guide/solution-result.png?v=1.1.6',
 ];
 
 self.addEventListener('install', (event) => {
@@ -69,7 +69,7 @@ self.addEventListener('fetch', (event) => {
         const hit = await caches.match(request);
         if (hit) return hit;
         if (isDocument) {
-          const fallback = url.pathname.endsWith('/guide.html') ? './guide.html?v=1.1.5' : './index.html';
+          const fallback = url.pathname.endsWith('/guide.html') ? './guide.html?v=1.1.6' : './index.html';
           const page = await caches.match(fallback);
           if (page) return page;
         }

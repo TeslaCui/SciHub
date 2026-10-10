@@ -255,6 +255,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .status.ok { color: var(--ok); border-color: #abefc6; background: #ecfdf3; }
 .status.error { color: var(--danger); border-color: #fecdca; background: #fef3f2; }
 .status.warn { color: var(--warn); border-color: #fedf89; background: #fffaeb; }
+.run-status .warn { color: var(--warn); }
 
 .footer { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; padding: 18px; }
 .footer .ver { font-variant-numeric: tabular-nums; padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; }
@@ -1099,6 +1100,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .merge-choices label,.merge-confirm { display: flex; align-items: flex-start; gap: 8px; }
 .merge-choices input,.merge-confirm input { width: auto; margin: 3px 0; }
 .merge-review { padding: 12px; margin: 12px 0; border-radius: 8px; background: #eef4f1; line-height: 1.6; }
+.merge-warning { color: #92400e; background: #fffaeb; border: 1px solid #fedf89; border-radius: 8px; padding: 8px 10px; }
 @media (max-width: 600px) {
   .merge-flow { padding: 12px; min-width: 0; }
   .merge-flow-track { min-width: 650px; }
